@@ -1,0 +1,50 @@
+version = 1
+
+[[sync]]
+source = "scripts/gh-issue"
+destination = "scripts/gh-issue"
+
+[[sync]]
+source = "scripts/memlog"
+destination = "scripts/memlog"
+
+[[sync]]
+source = "scripts/review-branch"
+destination = "scripts/review-branch"
+
+[[sync]]
+source = "scripts/review-code"
+destination = "scripts/review-code"
+
+[providers]
+
+[providers.claude]
+sync = [
+  { source = ".rules", destination = "CLAUDE.md" },
+  { source = "scripts", destination = ".claude/commands" },
+  { source = "claude/settings.json", destination = ".claude/settings.json" },
+  { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".claude/hooks/block-dangerous-git" }
+]
+
+[providers.copilot]
+sync = [
+  { source = ".rules", destination = ".github/copilot-instructions.md" },
+  { source = "copilot/review.prompt.md", destination = ".github/prompts/dotagents-review.prompt.md" },
+  { source = "copilot/agents/reviewer.agent.md", destination = ".github/agents/dotagents-reviewer.agent.md" },
+  { source = "copilot/hooks/git-guardrails.json", destination = ".github/hooks/git-guardrails.json" },
+  { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".github/hooks/block-dangerous-git" }
+]
+
+[providers.gemini]
+sync = [
+  { source = ".rules", destination = "GEMINI.md" },
+  { source = "gemini/settings.json", destination = ".gemini/settings.json" }
+]
+
+[providers.codex]
+sync = [
+  { source = ".rules", destination = "AGENTS.md" },
+  { source = ".rules", destination = "CODEX.md" },
+  { source = "codex/config.toml", destination = ".codex/config.toml" },
+  { source = "codex/agents/reviewer.toml", destination = ".codex/agents/reviewer.toml" }
+]
