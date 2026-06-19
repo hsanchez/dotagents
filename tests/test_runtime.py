@@ -1,9 +1,11 @@
 from pathlib import Path
 
 import pytest
+from helpers import make_lock_stale
 
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
+from dotagents.lockfile import read_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import init_runtime, runtime_destination, sync_existing, update_existing
 
@@ -84,6 +86,15 @@ def test_sync_repairs_missing_provider_link(
   assert (tmp_path / ".claude" / "settings.json").is_symlink()
 
 
+def test_sync_rejects_version_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_lock_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    sync_existing(Path.cwd())
+
+
 def test_update_refreshes_changed_managed_asset(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -96,6 +107,31 @@ def test_update_refreshes_changed_managed_asset(
   update_existing(Path.cwd())
 
   assert managed_script.read_text(encoding="utf-8") == original
+
+
+def test_update_reports_matching_version_refresh(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  operation_log = update_existing(Path.cwd())
+  runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+
+  assert f"runtime at {runtime_lock.version}; refreshed managed files" in operation_log.lines
+
+
+def test_update_reports_version_transition_and_rewrites_lock(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_lock_stale(tmp_path)
+
+  operation_log = update_existing(Path.cwd())
+
+  runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert f"updated runtime: 0.0.0 -> {runtime_lock.version}" in operation_log.lines
 
 
 def test_init_all_providers_creates_expected_provider_outputs(

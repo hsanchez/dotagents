@@ -59,4 +59,3 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-asyncio_mode = "auto"

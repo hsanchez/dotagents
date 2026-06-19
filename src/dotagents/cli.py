@@ -1,7 +1,7 @@
 """dotagents CLI."""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
@@ -28,7 +28,11 @@ def init(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
 ) -> None:
   """Initialize the managed .agents runtime."""
-  _run_log(init_runtime(Path.cwd(), tuple(providers or ()), dry_run=dry_run))
+  try:
+    operation_log = init_runtime(Path.cwd(), tuple(providers or ()), dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _run_log(operation_log)
   console.print(
     "[green]Initialized dotagents runtime.[/green]"
     if not dry_run
@@ -51,7 +55,11 @@ def sync(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
 ) -> None:
   """Repair generated runtime state from current configuration."""
-  _run_log(sync_existing(Path.cwd(), dry_run=dry_run))
+  try:
+    operation_log = sync_existing(Path.cwd(), dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _run_log(operation_log)
   console.print(
     "[green]Synced dotagents runtime.[/green]"
     if not dry_run
@@ -64,7 +72,11 @@ def update(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
 ) -> None:
   """Refresh runtime assets after a dotagents dependency update."""
-  _run_log(update_existing(Path.cwd(), dry_run=dry_run))
+  try:
+    operation_log = update_existing(Path.cwd(), dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _run_log(operation_log)
   console.print(
     "[green]Updated dotagents runtime.[/green]"
     if not dry_run
@@ -107,6 +119,11 @@ def list_items(kind: str = typer.Argument("providers", help="providers or skills
 def _run_log(operation_log: OperationLog) -> None:
   for line in operation_log.lines:
     console.print(line)
+
+
+def _exit_with_error(error: DotagentsError) -> NoReturn:
+  console.print(f"[red]ERROR[/red] {error}")
+  raise typer.Exit(code=1) from None
 
 
 def main() -> None:

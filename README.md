@@ -79,16 +79,16 @@ It also renders `.rules` and creates provider-facing files such as `CLAUDE.md`,
 `AGENTS.md`, `.claude/settings.json`, and `.github/copilot-instructions.md`.
 
 `doctor` validates the current repo without writing files. It checks the
-installed runtime, lockfile hashes, generated links, provider selection, and
-rules file.
+installed runtime, lockfile package version, lockfile hashes, generated links,
+provider selection, and rules file.
 
-`sync` re-applies the currently installed `dotagents` package assets. Use it
-when generated files or symlinks need to be repaired without changing the
-installed package version.
+`sync` repairs managed files from the currently installed `dotagents` package;
+it requires the package version to match the lockfile.
 
 `update` also materializes assets from the currently installed package. Use it
-after the `dotagents` dependency changes; the dependency manager controls which
-package version is installed.
+after the `dotagents` dependency changes; it refreshes stale managed runtime
+state and reports the package version transition. The dependency manager
+controls which package version is installed.
 
 Upgrade to the latest Git dependency:
 

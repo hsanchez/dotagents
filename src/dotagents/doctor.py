@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import read_lock, sha256_file
-from dotagents.runtime import build_context, expected_links, relative
+from dotagents.runtime import build_context, expected_links, relative, version_drift
 from dotagents.version import package_version
 
 
@@ -43,7 +43,14 @@ def doctor(repo_root: Path) -> DoctorResult:
   except DotagentsError as exc:
     return DoctorResult(False, tuple([*lines, f"lockfile: error: {exc}"]))
 
-  lines.append("lockfile: ok")
+  drift = version_drift(lock)
+  if drift:
+    lines.append(
+      f"lockfile: version drift: runtime {drift.runtime_version}, package {drift.package_version}"
+    )
+    passed = False
+  else:
+    lines.append("lockfile: ok")
   lines.append(f"providers: {', '.join(lock.providers)}")
 
   for asset in lock.assets:

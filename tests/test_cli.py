@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from helpers import make_lock_stale
 from typer.testing import CliRunner
 
 from dotagents.cli import app
@@ -75,6 +76,19 @@ def test_sync_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
   assert "Synced dotagents runtime." in result.output
 
 
+def test_sync_command_rejects_version_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_lock_stale(tmp_path)
+
+  result = CliRunner().invoke(app, ["sync"])
+
+  assert result.exit_code == 1
+  assert "Run: uv run dotagents update" in result.output
+
+
 def test_update_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.chdir(tmp_path)
   init_runtime(Path.cwd(), ("claude",))
@@ -82,4 +96,19 @@ def test_update_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
   result = CliRunner().invoke(app, ["update"])
 
   assert result.exit_code == 0
+  assert "runtime at" in result.output
+  assert "refreshed managed files" in result.output
   assert "Updated dotagents runtime." in result.output
+
+
+def test_update_command_reports_version_transition(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_lock_stale(tmp_path)
+
+  result = CliRunner().invoke(app, ["update"])
+
+  assert result.exit_code == 0
+  assert "updated runtime: 0.0.0 ->" in result.output
