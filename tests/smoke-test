@@ -1,0 +1,48 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+smoke_dir="$(mktemp -d)"
+trap 'rm -rf "$smoke_dir"' EXIT INT TERM
+
+cd "$smoke_dir"
+cat >pyproject.toml <<EOF
+[project]
+name = "dotagents-smoke"
+version = "0.0.0"
+requires-python = ">=3.14"
+
+[dependency-groups]
+dev = [
+  "dotagents @ file://$repo_root",
+]
+EOF
+
+uv sync --reinstall-package dotagents
+uv run dotagents init --for claude --for copilot
+uv run dotagents doctor
+uv run dotagents sync
+uv run dotagents update
+
+test -f .rules
+test -f .agents/dotagents.lock
+test -f .agents/agents.toml
+test -f .agents/skills/git-guardrails/scripts/block-dangerous-git
+test -f .agents/scripts/review-code
+test ! -f .agents/scripts/smoke-test
+test -L CLAUDE.md
+test -L .github/copilot-instructions.md
+test -L .github/hooks/block-dangerous-git
+test ! -f .agents/agent
+test ! -d .agents/claude
+test ! -d .agents/copilot
+
+printf '%s' '{"tool_input":{"command":"git reset --hard"}}' \
+  | uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git >"$smoke_dir/claude-hook.out" 2>&1 \
+  && exit 1 || test "$?" -eq 2
+
+printf '%s' '{"toolInput":{"command":"git clean -fd"}}' \
+  | uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot \
+  | grep -q '"permissionDecision": "deny"'
+
+echo "dotagents smoke test passed"
