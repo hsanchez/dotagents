@@ -4,7 +4,8 @@ import pytest
 
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
-from dotagents.runtime import init_runtime, sync_existing, update_existing
+from dotagents.manifest import SyncEntry
+from dotagents.runtime import init_runtime, runtime_destination, sync_existing, update_existing
 
 
 def test_init_dry_run_does_not_write_runtime(
@@ -110,3 +111,24 @@ def test_init_all_providers_creates_expected_provider_outputs(
   assert (tmp_path / "GEMINI.md").is_symlink()
   assert (tmp_path / ".codex" / "config.toml").is_symlink()
   assert (tmp_path / ".gemini" / "settings.json").is_symlink()
+
+
+def test_runtime_destination_rejects_unknown_source_root(tmp_path: Path) -> None:
+  entry = SyncEntry(source="misc/file.txt", destination="misc/file.txt")
+
+  with pytest.raises(DotagentsError, match="unsupported manifest source root"):
+    runtime_destination(tmp_path / ".agents", entry)
+
+
+def test_operation_logs_are_relative_to_repo_root_when_cwd_differs(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  work_dir = tmp_path / "work"
+  repo_root = tmp_path / "repo"
+  work_dir.mkdir()
+  repo_root.mkdir()
+  monkeypatch.chdir(work_dir)
+
+  operation_log = init_runtime(repo_root, ("claude",), dry_run=True)
+
+  assert "would create .agents" in operation_log.lines

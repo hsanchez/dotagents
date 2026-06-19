@@ -21,6 +21,8 @@ EOF
 uv sync --reinstall-package dotagents
 uv run dotagents init --for claude --for copilot
 uv run dotagents doctor
+uv run dotagents list providers
+uv run dotagents status
 uv run dotagents sync
 uv run dotagents update
 

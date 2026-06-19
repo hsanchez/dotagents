@@ -92,7 +92,11 @@ def list_items(kind: str = typer.Argument("providers", help="providers or skills
       console.print(provider)
     return
   if kind == "skills":
-    for skill in sorted((assets / "skills").iterdir()):
+    skills_dir = assets / "skills"
+    if not skills_dir.is_dir():
+      console.print("[red]ERROR[/red] bundled skills directory is missing")
+      raise typer.Exit(code=1)
+    for skill in sorted(skills_dir.iterdir()):
       if skill.is_dir():
         console.print(skill.name)
     return

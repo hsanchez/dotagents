@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import tomli_w
+
 from dotagents.errors import DotagentsError
 from dotagents.version import package_version
 
@@ -33,24 +35,21 @@ def sha256_file(path: Path) -> str:
 
 
 def write_lock(path: Path, providers: tuple[str, ...], assets: list[LockedAsset]) -> None:
-  lines = [
-    f'version = "{package_version()}"',
-    'package = "dotagents"',
-    f"providers = [{', '.join(_quote(provider) for provider in providers)}]",
-    f'generated_at = "{datetime.now(UTC).isoformat()}"',
-    "",
-  ]
-  for asset in assets:
-    lines.extend(
-      [
-        "[[assets]]",
-        f'source = "{asset.source}"',
-        f'destination = "{asset.destination}"',
-        f'sha256 = "{asset.sha256}"',
-        "",
-      ]
-    )
-  path.write_text("\n".join(lines), encoding="utf-8")
+  payload = {
+    "version": package_version(),
+    "package": "dotagents",
+    "providers": list(providers),
+    "generated_at": datetime.now(UTC).isoformat(),
+    "assets": [
+      {
+        "source": asset.source,
+        "destination": asset.destination,
+        "sha256": asset.sha256,
+      }
+      for asset in assets
+    ],
+  }
+  path.write_text(tomli_w.dumps(payload), encoding="utf-8")
 
 
 def read_lock(path: Path) -> RuntimeLock:
@@ -88,7 +87,3 @@ def read_lock(path: Path) -> RuntimeLock:
     raise DotagentsError("lockfile version must be a non-empty string")
 
   return RuntimeLock(version=version, providers=tuple(providers), assets=tuple(assets))
-
-
-def _quote(value: str) -> str:
-  return '"' + value.replace('"', '\\"') + '"'

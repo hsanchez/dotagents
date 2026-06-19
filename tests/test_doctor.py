@@ -39,3 +39,16 @@ def test_doctor_reports_wrong_symlink_target(
 
   assert not result.passed
   assert any(line.startswith("wrong link: CLAUDE.md") for line in result.lines)
+
+
+def test_doctor_fails_when_uv_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  monkeypatch.setattr(
+    "dotagents.doctor.shutil.which", lambda command: None if command == "uv" else "/bin/tool"
+  )
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert "uv: missing" in result.lines

@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from dotagents.cli import app
+from dotagents.runtime import init_runtime
 
 
 def test_list_providers_command_outputs_supported_providers() -> None:
@@ -42,3 +43,43 @@ def test_doctor_command_fails_without_runtime(
 
   assert result.exit_code == 1
   assert "missing .agents/dotagents.lock" in result.output
+
+
+def test_status_command_reports_runtime_state(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["status"])
+
+  assert result.exit_code == 0
+  assert "runtime: present" in result.output
+  assert "lockfile: present" in result.output
+
+
+def test_list_command_rejects_invalid_kind() -> None:
+  result = CliRunner().invoke(app, ["list", "unknown"])
+
+  assert result.exit_code == 1
+  assert "kind must be providers or skills" in result.output
+
+
+def test_sync_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["sync"])
+
+  assert result.exit_code == 0
+  assert "Synced dotagents runtime." in result.output
+
+
+def test_update_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["update"])
+
+  assert result.exit_code == 0
+  assert "Updated dotagents runtime." in result.output

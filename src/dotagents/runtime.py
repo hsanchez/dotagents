@@ -65,19 +65,26 @@ def init_runtime(
 
 
 def sync_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
-  return sync_runtime(build_context(repo_root), dry_run=dry_run)
+  runtime_context = build_context(repo_root)
+  operation_log = sync_runtime(runtime_context, dry_run=dry_run)
+  operation_log.lines.append("sync used current dotagents package assets")
+  return operation_log
 
 
 def update_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
-  return sync_runtime(build_context(repo_root), dry_run=dry_run)
+  runtime_context = build_context(repo_root)
+  operation_log = sync_runtime(runtime_context, dry_run=dry_run)
+  operation_log.lines.append("update refreshed runtime from installed dotagents package")
+  return operation_log
 
 
 def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
   locked_assets: list[LockedAsset] = []
 
-  ensure_dir(runtime_context.runtime_dir, operation_log)
+  ensure_dir(runtime_context.repo_root, runtime_context.runtime_dir, operation_log)
   copy_file(
+    runtime_context.repo_root,
     runtime_context.asset_root / "agents.toml",
     runtime_context.runtime_dir / "agents.toml",
     operation_log,
@@ -88,7 +95,7 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
       continue
     source = runtime_context.asset_root / entry.source
     destination = runtime_destination(runtime_context.runtime_dir, entry)
-    copy_path(source, destination, operation_log)
+    copy_path(runtime_context.repo_root, source, destination, operation_log)
     locked_assets.extend(lock_entries(runtime_context.repo_root, source, destination, entry.source))
 
   render_rules(runtime_context, operation_log)
@@ -99,7 +106,12 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
       if entry.source == ".rules"
       else runtime_destination(runtime_context.runtime_dir, entry)
     )
-    link_path(source, runtime_context.repo_root / entry.destination, operation_log)
+    link_path(
+      runtime_context.repo_root,
+      source,
+      runtime_context.repo_root / entry.destination,
+      operation_log,
+    )
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
@@ -122,7 +134,7 @@ def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
   if entry.provider and first == entry.provider:
     suffix = Path(*source.parts[1:]) if len(source.parts) > 1 else Path()
     return runtime_dir / "providers" / entry.provider / suffix
-  return runtime_dir / source
+  raise DotagentsError(f"unsupported manifest source root: {entry.source}")
 
 
 def expected_links(runtime_context: RuntimeContext) -> dict[Path, Path]:
@@ -138,7 +150,11 @@ def expected_links(runtime_context: RuntimeContext) -> dict[Path, Path]:
 
 
 def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> None:
-  shared = (runtime_context.asset_root / "rules" / "rules.md").read_text(encoding="utf-8").rstrip()
+  shared_rules = runtime_context.asset_root / "rules" / "rules.md"
+  try:
+    shared = shared_rules.read_text(encoding="utf-8").rstrip()
+  except OSError as exc:
+    raise DotagentsError(f"cannot read bundled rules file: {shared_rules}") from exc
   chunks = ["<!-- Shared agent rules from dotagents package rules/rules.md -->", "", shared]
   local = runtime_context.repo_root / ".rules.local"
   if local.exists():
@@ -151,7 +167,12 @@ def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -
         local.read_text(encoding="utf-8").rstrip(),
       ]
     )
-  write_text(runtime_context.repo_root / ".rules", "\n".join(chunks) + "\n", operation_log)
+  write_text(
+    runtime_context.repo_root,
+    runtime_context.repo_root / ".rules",
+    "\n".join(chunks) + "\n",
+    operation_log,
+  )
 
 
 def lock_entries(
@@ -174,86 +195,94 @@ def lock_entries(
   return entries
 
 
-def copy_path(source: Path, destination: Path, operation_log: OperationLog) -> None:
+def copy_path(
+  repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
+) -> None:
   if source.is_dir():
     for path in sorted(source.rglob("*")):
       if path.is_file():
-        copy_file(path, destination / path.relative_to(source), operation_log)
+        copy_file(repo_root, path, destination / path.relative_to(source), operation_log)
     return
-  copy_file(source, destination, operation_log)
+  copy_file(repo_root, source, destination, operation_log)
 
 
-def copy_file(source: Path, destination: Path, operation_log: OperationLog) -> None:
+def copy_file(
+  repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
+) -> None:
   if (
     destination.exists()
     and destination.is_file()
     and filecmp.cmp(source, destination, shallow=False)
   ):
-    operation_log.add(f"ok {relative(Path.cwd(), destination)}")
+    operation_log.add(f"ok {relative(repo_root, destination)}")
     return
   if destination.exists() and destination.is_symlink():
     raise DotagentsError(
-      f"refusing to replace symlink with managed file: {relative(Path.cwd(), destination)}"
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
     )
   if operation_log.dry_run:
-    operation_log.add(f"would copy {relative(Path.cwd(), destination)}")
+    operation_log.add(f"would copy {relative(repo_root, destination)}")
     return
   destination.parent.mkdir(parents=True, exist_ok=True)
   shutil.copy2(source, destination)
-  operation_log.add(f"copied {relative(Path.cwd(), destination)}")
+  operation_log.add(f"copied {relative(repo_root, destination)}")
 
 
-def write_text(destination: Path, content: str, operation_log: OperationLog) -> None:
+def write_text(
+  repo_root: Path, destination: Path, content: str, operation_log: OperationLog
+) -> None:
   if (
     destination.exists()
     and destination.is_file()
     and destination.read_text(encoding="utf-8") == content
   ):
-    operation_log.add(f"ok {relative(Path.cwd(), destination)}")
+    operation_log.add(f"ok {relative(repo_root, destination)}")
     return
   if destination.exists() and destination.is_symlink():
     raise DotagentsError(
-      f"refusing to replace symlink with managed file: {relative(Path.cwd(), destination)}"
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
     )
   if operation_log.dry_run:
-    operation_log.add(f"would write {relative(Path.cwd(), destination)}")
+    operation_log.add(f"would write {relative(repo_root, destination)}")
     return
   destination.write_text(content, encoding="utf-8")
-  operation_log.add(f"wrote {relative(Path.cwd(), destination)}")
+  operation_log.add(f"wrote {relative(repo_root, destination)}")
 
 
-def link_path(source: Path, destination: Path, operation_log: OperationLog) -> None:
+def link_path(
+  repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
+) -> None:
   if destination.exists() and not destination.is_symlink():
     raise DotagentsError(
-      f"refusing to replace existing non-symlink: {relative(Path.cwd(), destination)}"
+      f"refusing to replace existing non-symlink: {relative(repo_root, destination)}"
     )
 
   target = os.path.relpath(source, destination.parent)
   if destination.is_symlink() and os.readlink(destination) == target:
-    operation_log.add(f"ok {relative(Path.cwd(), destination)}")
+    operation_log.add(f"ok {relative(repo_root, destination)}")
     return
 
   if operation_log.dry_run:
-    operation_log.add(f"would link {relative(Path.cwd(), destination)} -> {target}")
+    operation_log.add(f"would link {relative(repo_root, destination)} -> {target}")
     return
 
   destination.parent.mkdir(parents=True, exist_ok=True)
   if destination.exists() or destination.is_symlink():
     destination.unlink()
   destination.symlink_to(target)
-  operation_log.add(f"linked {relative(Path.cwd(), destination)} -> {target}")
+  operation_log.add(f"linked {relative(repo_root, destination)} -> {target}")
 
 
-def ensure_dir(path: Path, operation_log: OperationLog) -> None:
+def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None:
   if path.exists():
     if not path.is_dir():
-      raise DotagentsError(f"expected directory: {relative(Path.cwd(), path)}")
+      raise DotagentsError(f"expected directory: {relative(repo_root, path)}")
     return
   if operation_log.dry_run:
-    operation_log.add(f"would create {relative(Path.cwd(), path)}")
+    operation_log.add(f"would create {relative(repo_root, path)}")
     return
   path.mkdir(parents=True)
-  operation_log.add(f"created {relative(Path.cwd(), path)}")
+  operation_log.add(f"created {relative(repo_root, path)}")
 
 
 def relative(base: Path, path: Path) -> str:

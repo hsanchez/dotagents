@@ -26,8 +26,7 @@ def doctor(repo_root: Path) -> DoctorResult:
       lines.append(f"{command}: ok")
     else:
       lines.append(f"{command}: missing")
-      if command == "git":
-        passed = False
+      passed = False
 
   try:
     runtime_context = build_context(repo_root)

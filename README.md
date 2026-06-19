@@ -82,11 +82,13 @@ It also renders `.rules` and creates provider-facing files such as `CLAUDE.md`,
 installed runtime, lockfile hashes, generated links, provider selection, and
 rules file.
 
-`sync` repairs generated state from the current `.agents/agents.toml` and
-installed package assets.
+`sync` re-applies the currently installed `dotagents` package assets. Use it
+when generated files or symlinks need to be repaired without changing the
+installed package version.
 
-`update` refreshes the managed runtime after the `dotagents` dependency changes.
-The dependency manager controls which package version is installed.
+`update` also materializes assets from the currently installed package. Use it
+after the `dotagents` dependency changes; the dependency manager controls which
+package version is installed.
 
 Upgrade to the latest Git dependency:
 
