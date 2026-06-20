@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from helpers import make_lock_stale
+from helpers import make_lock_stale, make_manifest_stale
 
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
@@ -103,6 +103,15 @@ def test_sync_rejects_version_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     sync_existing(Path.cwd())
 
 
+def test_sync_rejects_manifest_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_manifest_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    sync_existing(Path.cwd())
+
+
 def test_update_refreshes_changed_managed_asset(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -115,6 +124,17 @@ def test_update_refreshes_changed_managed_asset(
   update_existing(Path.cwd())
 
   assert managed_script.read_text(encoding="utf-8") == original
+
+
+def test_update_refreshes_manifest_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_manifest_stale(tmp_path)
+
+  update_existing(Path.cwd())
+
+  runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert runtime_lock.manifest_sha256 != "0" * 64
 
 
 def test_update_reports_matching_version_refresh(
@@ -442,12 +462,34 @@ def test_add_provider_rejects_version_drift(
     add_provider(Path.cwd(), "copilot")
 
 
+def test_add_provider_rejects_manifest_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_manifest_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    add_provider(Path.cwd(), "copilot")
+
+
 def test_remove_provider_rejects_version_drift(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   monkeypatch.chdir(tmp_path)
   init_runtime(Path.cwd(), ("claude", "copilot"))
   make_lock_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    remove_provider(Path.cwd(), "copilot")
+
+
+def test_remove_provider_rejects_manifest_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+  make_manifest_stale(tmp_path)
 
   with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
     remove_provider(Path.cwd(), "copilot")

@@ -50,6 +50,15 @@ class RuntimeVersionDrift:
     )
 
 
+@dataclass(frozen=True)
+class RuntimeManifestDrift:
+  runtime_manifest_sha256: str
+  package_manifest_sha256: str
+
+  def update_guidance(self) -> str:
+    return "agents.toml manifest changed. Run: uv run dotagents update"
+
+
 def version_drift(runtime_lock: RuntimeLock) -> RuntimeVersionDrift | None:
   installed_version = package_version()
   if runtime_lock.version == installed_version:
@@ -57,6 +66,22 @@ def version_drift(runtime_lock: RuntimeLock) -> RuntimeVersionDrift | None:
   return RuntimeVersionDrift(
     runtime_version=runtime_lock.version,
     package_version=installed_version,
+  )
+
+
+def manifest_sha256(runtime_context: RuntimeContext) -> str:
+  return sha256_file(runtime_context.asset_root / "agents.toml")
+
+
+def manifest_drift(
+  runtime_context: RuntimeContext, runtime_lock: RuntimeLock
+) -> RuntimeManifestDrift | None:
+  package_manifest_sha256 = manifest_sha256(runtime_context)
+  if runtime_lock.manifest_sha256 == package_manifest_sha256:
+    return None
+  return RuntimeManifestDrift(
+    runtime_manifest_sha256=runtime_lock.manifest_sha256,
+    package_manifest_sha256=package_manifest_sha256,
   )
 
 
@@ -92,9 +117,13 @@ def sync_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
   runtime_context = build_context(repo_root)
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
   if lock_path.exists():
-    drift = version_drift(read_lock(lock_path))
+    runtime_lock = read_lock(lock_path)
+    drift = version_drift(runtime_lock)
     if drift:
       raise DotagentsError(drift.update_guidance())
+    manifest = manifest_drift(runtime_context, runtime_lock)
+    if manifest:
+      raise DotagentsError(manifest.update_guidance())
   operation_log = sync_runtime(runtime_context, dry_run=dry_run)
   operation_log.lines.append("sync used current dotagents package assets")
   return operation_log
@@ -162,6 +191,10 @@ def add_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Opera
   drift = version_drift(current_lock)
   if drift:
     raise DotagentsError(drift.update_guidance())
+  runtime_context = build_context(root, current_lock.providers)
+  manifest = manifest_drift(runtime_context, current_lock)
+  if manifest:
+    raise DotagentsError(manifest.update_guidance())
   if provider in current_lock.providers:
     operation_log = OperationLog(dry_run=dry_run)
     operation_log.add(f"provider already configured: {provider}")
@@ -181,6 +214,10 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   drift = version_drift(current_lock)
   if drift:
     raise DotagentsError(drift.update_guidance())
+  runtime_context = build_context(root, current_lock.providers)
+  manifest = manifest_drift(runtime_context, current_lock)
+  if manifest:
+    raise DotagentsError(manifest.update_guidance())
   if provider not in current_lock.providers:
     raise DotagentsError(f"provider not configured: {provider}")
 
@@ -230,7 +267,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
     remaining_assets = [
       a for a in current_lock.assets if not a.destination.startswith(provider_prefix)
     ] + skipped_assets
-    write_lock(lock_path, remaining_providers, remaining_assets)
+    write_lock(lock_path, manifest_sha256(runtime_context), remaining_providers, remaining_assets)
     operation_log.add(f"removed provider: {provider}")
   else:
     operation_log.add(f"would remove provider: {provider}")
@@ -285,6 +322,7 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
   else:
     write_lock(
       runtime_context.runtime_dir / "dotagents.lock",
+      manifest_sha256(runtime_context),
       runtime_context.providers,
       unique_locked_assets(locked_assets),
     )

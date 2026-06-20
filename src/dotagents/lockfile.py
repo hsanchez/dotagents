@@ -22,6 +22,7 @@ class LockedAsset:
 @dataclass(frozen=True)
 class RuntimeLock:
   version: str
+  manifest_sha256: str
   providers: tuple[str, ...]
   assets: tuple[LockedAsset, ...]
 
@@ -34,10 +35,13 @@ def sha256_file(path: Path) -> str:
   return digest.hexdigest()
 
 
-def write_lock(path: Path, providers: tuple[str, ...], assets: list[LockedAsset]) -> None:
+def write_lock(
+  path: Path, manifest_sha256: str, providers: tuple[str, ...], assets: list[LockedAsset]
+) -> None:
   payload = {
     "version": package_version(),
     "package": "dotagents",
+    "manifest_sha256": manifest_sha256,
     "providers": list(providers),
     "generated_at": datetime.now(UTC).isoformat(),
     "assets": [
@@ -86,4 +90,13 @@ def read_lock(path: Path) -> RuntimeLock:
   if not isinstance(version, str) or not version:
     raise DotagentsError("lockfile version must be a non-empty string")
 
-  return RuntimeLock(version=version, providers=tuple(providers), assets=tuple(assets))
+  manifest_sha256 = data.get("manifest_sha256")
+  if not isinstance(manifest_sha256, str) or not manifest_sha256:
+    raise DotagentsError("lockfile manifest_sha256 must be a non-empty string")
+
+  return RuntimeLock(
+    version=version,
+    manifest_sha256=manifest_sha256,
+    providers=tuple(providers),
+    assets=tuple(assets),
+  )

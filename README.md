@@ -87,15 +87,15 @@ It also renders `.rules` and creates provider-facing files such as `CLAUDE.md`,
 
 `doctor` validates the current repo without writing files. It checks the
 installed runtime, lockfile package version, lockfile hashes, generated links,
-provider selection, and rules file.
+provider selection, packaged manifest hash, and rules file.
 
 `sync` repairs managed files from the currently installed `dotagents` package;
 it requires the package version to match the lockfile.
 
 `update` also materializes assets from the currently installed package. Use it
 after the `dotagents` dependency changes; it refreshes stale managed runtime
-state and reports the package version transition. The dependency manager
-controls which package version is installed.
+state, package metadata, and manifest metadata. The dependency manager controls
+which package version is installed.
 
 `uninstall` removes generated dotagents repo output. It does not edit
 `pyproject.toml` or `uv.lock`.

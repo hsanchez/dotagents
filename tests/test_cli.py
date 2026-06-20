@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from helpers import make_lock_stale
+from helpers import make_lock_stale, make_manifest_stale
 from typer.testing import CliRunner
 
 from dotagents.cli import app
@@ -82,6 +82,19 @@ def test_sync_command_rejects_version_drift(
   monkeypatch.chdir(tmp_path)
   init_runtime(Path.cwd(), ("claude",))
   make_lock_stale(tmp_path)
+
+  result = CliRunner().invoke(app, ["sync"])
+
+  assert result.exit_code == 1
+  assert "Run: uv run dotagents update" in result.output
+
+
+def test_sync_command_rejects_manifest_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_manifest_stale(tmp_path)
 
   result = CliRunner().invoke(app, ["sync"])
 
