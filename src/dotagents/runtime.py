@@ -151,6 +151,93 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
   return operation_log
 
 
+def add_provider(repo_root: Path, provider: str, dry_run: bool = False) -> OperationLog:
+  root = repo_root.resolve()
+  lock_path = root / ".agents" / "dotagents.lock"
+  if not lock_path.exists():
+    raise DotagentsError(
+      "cannot add provider: missing .agents/dotagents.lock. Run: uv run dotagents init"
+    )
+  current_lock = read_lock(lock_path)
+  drift = version_drift(current_lock)
+  if drift:
+    raise DotagentsError(drift.update_guidance())
+  if provider in current_lock.providers:
+    operation_log = OperationLog(dry_run=dry_run)
+    operation_log.add(f"provider already configured: {provider}")
+    return operation_log
+  new_providers = (*current_lock.providers, provider)
+  return sync_runtime(build_context(root, new_providers), dry_run=dry_run)
+
+
+def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> OperationLog:
+  root = repo_root.resolve()
+  runtime_dir = root / ".agents"
+  lock_path = runtime_dir / "dotagents.lock"
+  if not lock_path.exists():
+    raise DotagentsError("cannot remove provider: missing .agents/dotagents.lock")
+
+  current_lock = read_lock(lock_path)
+  drift = version_drift(current_lock)
+  if drift:
+    raise DotagentsError(drift.update_guidance())
+  if provider not in current_lock.providers:
+    raise DotagentsError(f"provider not configured: {provider}")
+
+  try:
+    assets = asset_root()
+    manifest = load_manifest(assets)
+  except DotagentsError:
+    manifest = None
+
+  remaining_providers = tuple(p for p in current_lock.providers if p != provider)
+  operation_log = OperationLog(dry_run=dry_run)
+  prune_candidates: set[Path] = set()
+
+  if manifest is None:
+    operation_log.add(
+      "warning: cannot load manifest; expected symlinks not removed — remove manually"
+    )
+  elif provider not in manifest.provider_sync:
+    operation_log.add(
+      f"warning: provider {provider!r} not in current manifest; symlinks not removed — remove manually"
+    )
+  else:
+    for entry in manifest.provider_sync[provider]:
+      source = (
+        root / ".rules" if entry.source == ".rules" else runtime_destination(runtime_dir, entry)
+      )
+      destination = root / entry.destination
+      remove_expected_link(root, destination, source, operation_log)
+      collect_parents(root, destination, prune_candidates)
+
+  provider_prefix = f".agents/providers/{provider}/"
+  skipped_assets: list[LockedAsset] = []
+  for asset in sorted(
+    (a for a in current_lock.assets if a.destination.startswith(provider_prefix)),
+    key=lambda a: a.destination,
+    reverse=True,
+  ):
+    path = root / asset.destination
+    removed = remove_locked_asset(root, path, asset.sha256, operation_log)
+    if not removed:
+      skipped_assets.append(asset)
+    collect_parents(root, path, prune_candidates)
+
+  prune_empty_dirs(root, prune_candidates, operation_log)
+
+  if not dry_run:
+    remaining_assets = [
+      a for a in current_lock.assets if not a.destination.startswith(provider_prefix)
+    ] + skipped_assets
+    write_lock(lock_path, remaining_providers, remaining_assets)
+    operation_log.add(f"removed provider: {provider}")
+  else:
+    operation_log.add(f"would remove provider: {provider}")
+
+  return operation_log
+
+
 def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
   locked_assets: list[LockedAsset] = []
@@ -424,24 +511,26 @@ def remove_expected_link(
 
 def remove_locked_asset(
   repo_root: Path, path: Path, expected_sha256: str, operation_log: OperationLog
-) -> None:
+) -> bool:
+  """Return True if the asset was removed (or would be in dry-run), False if skipped."""
   display = relative(repo_root, path)
   if not path.exists() and not path.is_symlink():
     operation_log.add(f"missing {display}")
-    return
+    return True
   if path.is_symlink() or not path.is_file():
     operation_log.add(f"skip unexpected {display}; remove manually after verifying")
-    return
+    return False
   if sha256_file(path) != expected_sha256:
     operation_log.add(f"skip changed {display}; remove manually after verifying")
-    return
+    return False
 
   if operation_log.dry_run:
     operation_log.add(f"would remove {display}")
     operation_log.pending_removals.add(path)
-    return
+    return True
   path.unlink()
   operation_log.add(f"removed {display}")
+  return True
 
 
 def remove_generated_rules(repo_root: Path, operation_log: OperationLog) -> None:

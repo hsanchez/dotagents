@@ -12,7 +12,9 @@ from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
 from dotagents.runtime import (
   OperationLog,
+  add_provider,
   init_runtime,
+  remove_provider,
   sync_existing,
   uninstall_existing,
   update_existing,
@@ -20,6 +22,8 @@ from dotagents.runtime import (
 from dotagents.version import package_version
 
 app = typer.Typer(no_args_is_help=True)
+providers_app = typer.Typer(no_args_is_help=True)
+app.add_typer(providers_app, name="providers", help="Add or remove configured providers.")
 console = Console()
 
 ProviderOption = Annotated[
@@ -137,6 +141,42 @@ def list_items(kind: str = typer.Argument("providers", help="providers or skills
     return
   console.print("[red]ERROR[/red] kind must be providers or skills")
   raise typer.Exit(code=1)
+
+
+@providers_app.command("add")
+def providers_add(
+  provider: str = typer.Argument(..., help="Provider name to add."),
+  dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
+) -> None:
+  """Add a provider to the configured runtime."""
+  try:
+    operation_log = add_provider(Path.cwd(), provider, dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _run_log(operation_log)
+  console.print(
+    f"[green]Added provider: {provider}.[/green]"
+    if not dry_run
+    else "[yellow]Dry run complete.[/yellow]"
+  )
+
+
+@providers_app.command("remove")
+def providers_remove(
+  provider: str = typer.Argument(..., help="Provider name to remove."),
+  dry_run: bool = typer.Option(False, "--dry-run", help="Show planned removals without writing."),
+) -> None:
+  """Remove a provider from the configured runtime."""
+  try:
+    operation_log = remove_provider(Path.cwd(), provider, dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _run_log(operation_log)
+  console.print(
+    f"[green]Removed provider: {provider}.[/green]"
+    if not dry_run
+    else "[yellow]Dry run complete.[/yellow]"
+  )
 
 
 def _run_log(operation_log: OperationLog) -> None:

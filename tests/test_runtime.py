@@ -8,7 +8,9 @@ from dotagents.errors import DotagentsError
 from dotagents.lockfile import read_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
+  add_provider,
   init_runtime,
+  remove_provider,
   runtime_destination,
   sync_existing,
   uninstall_existing,
@@ -288,3 +290,180 @@ def test_uninstall_requires_lockfile(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
   with pytest.raises(DotagentsError, match="cannot uninstall: missing"):
     uninstall_existing(Path.cwd())
+
+
+def test_add_provider_requires_lockfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  with pytest.raises(DotagentsError, match="cannot add provider: missing"):
+    add_provider(Path.cwd(), "claude")
+
+
+def test_add_provider_rejects_unknown_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  with pytest.raises(DotagentsError, match="provider not approved"):
+    add_provider(Path.cwd(), "cursor")
+
+
+def test_add_provider_no_op_when_already_configured(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  operation_log = add_provider(Path.cwd(), "claude")
+
+  assert "provider already configured: claude" in operation_log.lines
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ("claude",)
+
+
+def test_add_provider_extends_configured_set(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  add_provider(Path.cwd(), "copilot")
+
+  assert (tmp_path / ".agents" / "providers" / "copilot").is_dir()
+  assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert "claude" in lock.providers
+  assert "copilot" in lock.providers
+
+
+def test_add_provider_dry_run_does_not_write(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  operation_log = add_provider(Path.cwd(), "copilot", dry_run=True)
+
+  assert not (tmp_path / ".agents" / "providers" / "copilot").exists()
+  assert any("would" in line for line in operation_log.lines)
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ("claude",)
+
+
+def test_remove_provider_requires_lockfile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  with pytest.raises(DotagentsError, match="cannot remove provider: missing"):
+    remove_provider(Path.cwd(), "claude")
+
+
+def test_remove_provider_rejects_unconfigured_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  with pytest.raises(DotagentsError, match="provider not configured: copilot"):
+    remove_provider(Path.cwd(), "copilot")
+
+
+def test_remove_provider_removes_outputs_leaves_others(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+
+  remove_provider(Path.cwd(), "copilot")
+
+  assert not (tmp_path / ".github" / "copilot-instructions.md").exists()
+  assert not (tmp_path / ".agents" / "providers" / "copilot").exists()
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+  assert (tmp_path / ".agents" / "providers" / "claude").is_dir()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ("claude",)
+  assert "copilot" not in lock.providers
+
+
+def test_remove_provider_dry_run_does_not_remove(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+
+  operation_log = remove_provider(Path.cwd(), "copilot", dry_run=True)
+
+  assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
+  assert (tmp_path / ".agents" / "providers" / "copilot").is_dir()
+  assert "would remove provider: copilot" in operation_log.lines
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert "copilot" in lock.providers
+
+
+def test_remove_provider_skips_user_owned_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+  instructions = tmp_path / ".github" / "copilot-instructions.md"
+  instructions.unlink()
+  instructions.write_text("human-owned\n", encoding="utf-8")
+
+  operation_log = remove_provider(Path.cwd(), "copilot")
+
+  assert instructions.read_text(encoding="utf-8") == "human-owned\n"
+  assert any("skip user-owned" in line for line in operation_log.lines)
+
+
+def test_remove_last_provider_leaves_shared_outputs(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  remove_provider(Path.cwd(), "claude")
+
+  assert (tmp_path / ".rules").exists()
+  assert (tmp_path / ".agents" / "scripts").is_dir()
+  assert (tmp_path / ".agents" / "skills").is_dir()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ()
+
+
+def test_add_provider_rejects_version_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  make_lock_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    add_provider(Path.cwd(), "copilot")
+
+
+def test_remove_provider_rejects_version_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+  make_lock_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    remove_provider(Path.cwd(), "copilot")
+
+
+def test_remove_provider_retains_skipped_changed_asset_in_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+  changed = tmp_path / ".agents" / "providers" / "copilot" / "review.prompt.md"
+  changed.write_text("user-modified\n", encoding="utf-8")
+
+  remove_provider(Path.cwd(), "copilot")
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  destinations = {a.destination for a in lock.assets}
+  assert ".agents/providers/copilot/review.prompt.md" in destinations
+  assert changed.exists()

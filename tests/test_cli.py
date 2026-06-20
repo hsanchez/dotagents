@@ -149,3 +149,75 @@ def test_uninstall_command_requires_lockfile(
 
   assert result.exit_code == 1
   assert "cannot uninstall: missing .agents/dotagents.lock" in result.output
+
+
+def test_providers_add_command_adds_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "add", "copilot"])
+
+  assert result.exit_code == 0
+  assert "Added provider: copilot." in result.output
+  assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
+
+
+def test_providers_add_command_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "add", "--dry-run", "copilot"])
+
+  assert result.exit_code == 0
+  assert "Dry run complete." in result.output
+  assert not (tmp_path / ".agents" / "providers" / "copilot").exists()
+
+
+def test_providers_add_command_requires_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["providers", "add", "claude"])
+
+  assert result.exit_code == 1
+  assert "cannot add provider" in result.output
+
+
+def test_providers_remove_command_removes_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+
+  result = CliRunner().invoke(app, ["providers", "remove", "copilot"])
+
+  assert result.exit_code == 0
+  assert "Removed provider: copilot." in result.output
+  assert not (tmp_path / ".github" / "copilot-instructions.md").exists()
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+
+
+def test_providers_remove_command_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+
+  result = CliRunner().invoke(app, ["providers", "remove", "--dry-run", "copilot"])
+
+  assert result.exit_code == 0
+  assert "Dry run complete." in result.output
+  assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
+
+
+def test_providers_remove_command_rejects_unconfigured(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "remove", "copilot"])
+
+  assert result.exit_code == 1
+  assert "provider not configured: copilot" in result.output

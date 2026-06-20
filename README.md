@@ -66,6 +66,9 @@ uv run dotagents uninstall
 uv run dotagents status
 uv run dotagents list providers
 uv run dotagents list skills
+uv run dotagents providers add copilot
+uv run dotagents providers remove copilot
+uv run dotagents providers add --dry-run gemini
 ```
 
 `init` creates the managed runtime:
@@ -96,6 +99,13 @@ controls which package version is installed.
 
 `uninstall` removes generated dotagents repo output. It does not edit
 `pyproject.toml` or `uv.lock`.
+
+`providers add <name>` materializes a new provider into an existing runtime
+without touching the shared outputs. Use this to add a provider after the
+initial `init`. `providers remove <name>` reverses the operation, removing
+only the named provider's outputs while leaving shared and other-provider
+outputs untouched. Neither command replaces `init` or `uninstall` for full
+lifecycle management.
 
 Upgrade to the latest Git dependency:
 
