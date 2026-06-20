@@ -23,6 +23,7 @@ from dotagents.version import package_version
 class OperationLog:
   dry_run: bool = False
   lines: list[str] = field(default_factory=list)
+  pending_removals: set[Path] = field(default_factory=set)
 
   def add(self, message: str) -> None:
     self.lines.append(message)
@@ -114,6 +115,42 @@ def update_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
   return operation_log
 
 
+def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
+  root = repo_root.resolve()
+  runtime_dir = root / ".agents"
+  lock_path = runtime_dir / "dotagents.lock"
+  if not lock_path.exists():
+    raise DotagentsError("cannot uninstall: missing .agents/dotagents.lock")
+
+  runtime_lock = read_lock(lock_path)
+  operation_log = OperationLog(dry_run=dry_run)
+  prune_candidates: set[Path] = set()
+
+  for destination, source in uninstall_links(
+    root, runtime_dir, runtime_lock, operation_log
+  ).items():
+    remove_expected_link(root, destination, source, operation_log)
+    collect_parents(root, destination, prune_candidates)
+
+  remove_generated_rules(root, operation_log)
+  collect_parents(root, root / ".rules", prune_candidates)
+
+  for asset in sorted(runtime_lock.assets, key=lambda item: item.destination, reverse=True):
+    path = root / asset.destination
+    remove_locked_asset(root, path, asset.sha256, operation_log)
+    collect_parents(root, path, prune_candidates)
+
+  remove_lockfile(root, lock_path, operation_log)
+  collect_parents(root, lock_path, prune_candidates)
+  prune_empty_dirs(root, prune_candidates, operation_log)
+  operation_log.add(
+    "would uninstall dotagents runtime"
+    if operation_log.dry_run
+    else "uninstalled dotagents runtime"
+  )
+  return operation_log
+
+
 def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
   locked_assets: list[LockedAsset] = []
@@ -124,6 +161,13 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
     runtime_context.asset_root / "agents.toml",
     runtime_context.runtime_dir / "agents.toml",
     operation_log,
+  )
+  locked_assets.append(
+    LockedAsset(
+      "agents.toml",
+      relative(runtime_context.repo_root, runtime_context.runtime_dir / "agents.toml"),
+      sha256_file(runtime_context.asset_root / "agents.toml"),
+    )
   )
 
   for entry in selected_entries(runtime_context.manifest, runtime_context.providers):
@@ -155,7 +199,7 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
     write_lock(
       runtime_context.runtime_dir / "dotagents.lock",
       runtime_context.providers,
-      locked_assets,
+      unique_locked_assets(locked_assets),
     )
     operation_log.add("wrote .agents/dotagents.lock")
 
@@ -183,6 +227,31 @@ def expected_links(runtime_context: RuntimeContext) -> dict[Path, Path]:
     )
     links[runtime_context.repo_root / entry.destination] = source
   return links
+
+
+def uninstall_links(
+  repo_root: Path, runtime_dir: Path, runtime_lock: RuntimeLock, operation_log: OperationLog
+) -> dict[Path, Path]:
+  try:
+    assets = asset_root()
+    manifest = load_manifest(assets)
+  except DotagentsError:
+    operation_log.add(
+      "warning: cannot load manifest; expected symlinks not removed — remove manually"
+    )
+    return {}
+
+  available_providers = tuple(
+    provider for provider in runtime_lock.providers if provider in manifest.providers
+  )
+  runtime_context = RuntimeContext(
+    repo_root=repo_root,
+    runtime_dir=runtime_dir,
+    asset_root=assets,
+    manifest=manifest,
+    providers=available_providers,
+  )
+  return expected_links(runtime_context)
 
 
 def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> None:
@@ -229,6 +298,13 @@ def lock_entries(
         )
       )
   return entries
+
+
+def unique_locked_assets(locked_assets: list[LockedAsset]) -> list[LockedAsset]:
+  unique: dict[tuple[str, str], LockedAsset] = {}
+  for asset in locked_assets:
+    unique[(asset.source, asset.destination)] = asset
+  return list(unique.values())
 
 
 def copy_path(
@@ -319,6 +395,121 @@ def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None
     return
   path.mkdir(parents=True)
   operation_log.add(f"created {relative(repo_root, path)}")
+
+
+def remove_expected_link(
+  repo_root: Path, destination: Path, expected_source: Path, operation_log: OperationLog
+) -> None:
+  display = relative(repo_root, destination)
+  if not destination.exists() and not destination.is_symlink():
+    operation_log.add(f"missing {display}")
+    return
+  if not destination.is_symlink():
+    operation_log.add(f"skip user-owned {display}; remove manually after verifying")
+    return
+
+  expected_target = os.path.relpath(expected_source, destination.parent)
+  actual_target = os.readlink(destination)
+  if actual_target != expected_target:
+    operation_log.add(f"skip unexpected symlink {display}; remove manually after verifying")
+    return
+
+  if operation_log.dry_run:
+    operation_log.add(f"would remove {display}")
+    operation_log.pending_removals.add(destination)
+    return
+  destination.unlink()
+  operation_log.add(f"removed {display}")
+
+
+def remove_locked_asset(
+  repo_root: Path, path: Path, expected_sha256: str, operation_log: OperationLog
+) -> None:
+  display = relative(repo_root, path)
+  if not path.exists() and not path.is_symlink():
+    operation_log.add(f"missing {display}")
+    return
+  if path.is_symlink() or not path.is_file():
+    operation_log.add(f"skip unexpected {display}; remove manually after verifying")
+    return
+  if sha256_file(path) != expected_sha256:
+    operation_log.add(f"skip changed {display}; remove manually after verifying")
+    return
+
+  if operation_log.dry_run:
+    operation_log.add(f"would remove {display}")
+    operation_log.pending_removals.add(path)
+    return
+  path.unlink()
+  operation_log.add(f"removed {display}")
+
+
+def remove_generated_rules(repo_root: Path, operation_log: OperationLog) -> None:
+  rules = repo_root / ".rules"
+  display = relative(repo_root, rules)
+  if not rules.exists() and not rules.is_symlink():
+    operation_log.add(f"missing {display}")
+    return
+  if rules.is_symlink() or not rules.is_file():
+    operation_log.add(f"skip unexpected {display}; remove manually after verifying")
+    return
+  try:
+    content = rules.read_text(encoding="utf-8")
+  except OSError:
+    operation_log.add(f"skip unreadable {display}; remove manually after verifying")
+    return
+  if "<!-- Shared agent rules from dotagents package rules/rules.md -->" not in content:
+    operation_log.add(f"skip user-owned {display}; remove manually after verifying")
+    return
+
+  if operation_log.dry_run:
+    operation_log.add(f"would remove {display}")
+    operation_log.pending_removals.add(rules)
+    return
+  rules.unlink()
+  operation_log.add(f"removed {display}")
+
+
+def remove_lockfile(repo_root: Path, lock_path: Path, operation_log: OperationLog) -> None:
+  display = relative(repo_root, lock_path)
+  if not lock_path.exists():
+    operation_log.add(f"missing {display}")
+    return
+  if not lock_path.is_file():
+    operation_log.add(f"skip unexpected {display}; remove manually after verifying")
+    return
+
+  if operation_log.dry_run:
+    operation_log.add(f"would remove {display}")
+    operation_log.pending_removals.add(lock_path)
+    return
+  lock_path.unlink()
+  operation_log.add(f"removed {display}")
+
+
+def collect_parents(repo_root: Path, path: Path, candidates: set[Path]) -> None:
+  current = path.parent
+  while current != repo_root and repo_root in current.parents:
+    candidates.add(current)
+    current = current.parent
+
+
+def prune_empty_dirs(repo_root: Path, candidates: set[Path], operation_log: OperationLog) -> None:
+  for path in sorted(candidates, key=lambda item: len(item.parts), reverse=True):
+    if path == repo_root or not path.exists() or not path.is_dir():
+      continue
+    display = relative(repo_root, path)
+    if operation_log.dry_run:
+      remaining = [child for child in path.iterdir() if child not in operation_log.pending_removals]
+      if not remaining:
+        operation_log.add(f"would remove empty {display}")
+        operation_log.pending_removals.add(path)
+    else:
+      try:
+        next(path.iterdir())
+      except StopIteration:
+        path.rmdir()
+        operation_log.add(f"removed empty {display}")
 
 
 def relative(base: Path, path: Path) -> str:

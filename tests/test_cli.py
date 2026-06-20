@@ -112,3 +112,40 @@ def test_update_command_reports_version_transition(
 
   assert result.exit_code == 0
   assert "updated runtime: 0.0.0 ->" in result.output
+
+
+def test_uninstall_command_dry_run_does_not_remove_runtime(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["uninstall", "--dry-run"])
+
+  assert result.exit_code == 0
+  assert "would remove CLAUDE.md" in result.output
+  assert "Dry run complete." in result.output
+  assert (tmp_path / ".agents").exists()
+
+
+def test_uninstall_command_removes_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["uninstall"])
+
+  assert result.exit_code == 0
+  assert "Uninstalled dotagents runtime." in result.output
+  assert not (tmp_path / ".agents").exists()
+  assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_uninstall_command_requires_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["uninstall"])
+
+  assert result.exit_code == 1
+  assert "cannot uninstall: missing .agents/dotagents.lock" in result.output

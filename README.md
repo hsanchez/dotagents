@@ -1,13 +1,13 @@
-# dotagents
+# This is my DotAgents Harness
 
-`dotagents` is a package-driven configuration harness for repo-local AI coding
+Yes, `dotagents` is a package-driven configuration harness for repo-local AI coding
 environments.
 
 The `dotagents` package owns the reusable harness. A consuming repo gets a
 managed `.agents/` runtime containing only the configured output for that repo.
 
 ```text
-dotagents package/CLI      reusable harness, skills, scripts, provider adapters
+dotagents package/CLI     reusable harness, skills, scripts, provider adapters
 repo/.agents/             managed runtime output
 repo/.rules               generated shared rules
 provider files            generated provider-facing config and symlinks
@@ -27,7 +27,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Install In A Repo
 
-Add `dotagents` as a dev dependency in the repo that should use the harness:
+Add `dotagents` as a _dev_ dependency in the repo that should use the harness:
 
 ```bash
 uv add --dev "dotagents @ git+https://github.com/hsanchez/dotagents.git"
@@ -50,6 +50,8 @@ uv run dotagents init --for claude --for copilot
 uv run dotagents doctor
 ```
 
+In this example, `dotagents init` will initialize the harness for `Claude` and `Copilot`, creating the `.agents/` runtime directory.
+
 ## Commands
 
 ```bash
@@ -59,6 +61,8 @@ uv run dotagents init --dry-run --for claude
 uv run dotagents doctor
 uv run dotagents sync
 uv run dotagents update
+uv run dotagents uninstall --dry-run
+uv run dotagents uninstall
 uv run dotagents status
 uv run dotagents list providers
 uv run dotagents list skills
@@ -90,6 +94,9 @@ after the `dotagents` dependency changes; it refreshes stale managed runtime
 state and reports the package version transition. The dependency manager
 controls which package version is installed.
 
+`uninstall` removes generated dotagents repo output. It does not edit
+`pyproject.toml` or `uv.lock`.
+
 Upgrade to the latest Git dependency:
 
 ```bash
@@ -112,6 +119,30 @@ uv sync
 uv run dotagents update
 uv run dotagents doctor
 ```
+
+## Uninstall
+
+Preview managed output removal:
+
+```bash
+uv run dotagents uninstall --dry-run
+```
+
+Remove managed output:
+
+```bash
+uv run dotagents uninstall
+```
+
+Remove the package dependency separately:
+
+```bash
+uv remove --dev dotagents
+```
+
+`uninstall` removes only dotagents-owned generated output. It preserves
+`.rules.local`, skips changed managed files, skips user-owned files, and prunes
+directories only when they are empty.
 
 ## Managed Output
 

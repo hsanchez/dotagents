@@ -10,7 +10,13 @@ from dotagents.assets import asset_root
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
-from dotagents.runtime import OperationLog, init_runtime, sync_existing, update_existing
+from dotagents.runtime import (
+  OperationLog,
+  init_runtime,
+  sync_existing,
+  uninstall_existing,
+  update_existing,
+)
 from dotagents.version import package_version
 
 app = typer.Typer(no_args_is_help=True)
@@ -79,6 +85,23 @@ def update(
   _run_log(operation_log)
   console.print(
     "[green]Updated dotagents runtime.[/green]"
+    if not dry_run
+    else "[yellow]Dry run complete.[/yellow]"
+  )
+
+
+@app.command()
+def uninstall(
+  dry_run: bool = typer.Option(False, "--dry-run", help="Show planned removals without writing."),
+) -> None:
+  """Remove managed dotagents runtime output."""
+  try:
+    operation_log = uninstall_existing(Path.cwd(), dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _run_log(operation_log)
+  console.print(
+    "[green]Uninstalled dotagents runtime.[/green]"
     if not dry_run
     else "[yellow]Dry run complete.[/yellow]"
   )
