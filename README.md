@@ -86,8 +86,8 @@ It also renders `.rules` and creates provider-facing files such as `CLAUDE.md`,
 `AGENTS.md`, `.claude/settings.json`, and `.github/copilot-instructions.md`.
 
 `doctor` validates the current repo without writing files. It checks the
-installed runtime, lockfile package version, lockfile hashes, generated links,
-provider selection, packaged manifest hash, and rules file.
+installed runtime, lockfile package version, lockfile asset hashes, lockfile
+managed links, provider selection, packaged manifest hash, and rules file.
 
 `sync` repairs managed files from the currently installed `dotagents` package;
 it requires the package version to match the lockfile.
@@ -150,9 +150,9 @@ Remove the package dependency separately:
 uv remove --dev dotagents
 ```
 
-`uninstall` removes only dotagents-owned generated output. It preserves
-`.rules.local`, skips changed managed files, skips user-owned files, and prunes
-directories only when they are empty.
+`uninstall` removes only dotagents-owned generated output recorded in the
+lockfile. It preserves `.rules.local`, skips changed managed files, skips
+user-owned files, and prunes directories only when they are empty.
 
 ## Managed Output
 
@@ -195,7 +195,7 @@ dotagents package        tool and source assets
 .agents/skills/         managed shared skills
 .agents/scripts/        managed shared scripts
 .agents/providers/      managed provider adapters/config
-.agents/dotagents.lock  managed lockfile
+.agents/dotagents.lock  managed lockfile for assets and links
 .rules                  generated rules
 .rules.local            repo-local rule extension
 provider files          generated provider-facing files/symlinks
@@ -203,6 +203,8 @@ provider files          generated provider-facing files/symlinks
 
 Do not edit managed `.agents/*` files directly. Change shared behavior in the
 `dotagents` package repo, then update consuming repos with `dotagents update`.
+Commands that remove managed output use `.agents/dotagents.lock` as the
+ownership source.
 
 Use `.rules.local` for repo-specific guidance:
 

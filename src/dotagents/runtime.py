@@ -8,7 +8,14 @@ from pathlib import Path
 
 from dotagents.assets import asset_root
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import LockedAsset, RuntimeLock, read_lock, sha256_file, write_lock
+from dotagents.lockfile import (
+  LockedAsset,
+  LockedLink,
+  RuntimeLock,
+  read_lock,
+  sha256_file,
+  write_lock,
+)
 from dotagents.manifest import (
   Manifest,
   SyncEntry,
@@ -155,10 +162,9 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
   prune_candidates: set[Path] = set()
 
-  for destination, source in uninstall_links(
-    root, runtime_dir, runtime_lock, operation_log
-  ).items():
-    remove_expected_link(root, destination, source, operation_log)
+  for link in runtime_lock.links:
+    destination = root / link.destination
+    remove_locked_link(root, destination, link.target, operation_log)
     collect_parents(root, destination, prune_candidates)
 
   remove_generated_rules(root, operation_log)
@@ -221,32 +227,17 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   if provider not in current_lock.providers:
     raise DotagentsError(f"provider not configured: {provider}")
 
-  try:
-    assets = asset_root()
-    manifest = load_manifest(assets)
-  except DotagentsError:
-    manifest = None
-
   remaining_providers = tuple(p for p in current_lock.providers if p != provider)
   operation_log = OperationLog(dry_run=dry_run)
   prune_candidates: set[Path] = set()
 
-  if manifest is None:
-    operation_log.add(
-      "warning: cannot load manifest; expected symlinks not removed — remove manually"
-    )
-  elif provider not in manifest.provider_sync:
-    operation_log.add(
-      f"warning: provider {provider!r} not in current manifest; symlinks not removed — remove manually"
-    )
-  else:
-    for entry in manifest.provider_sync[provider]:
-      source = (
-        root / ".rules" if entry.source == ".rules" else runtime_destination(runtime_dir, entry)
-      )
-      destination = root / entry.destination
-      remove_expected_link(root, destination, source, operation_log)
-      collect_parents(root, destination, prune_candidates)
+  skipped_links: list[LockedLink] = []
+  for link in (link for link in current_lock.links if link.provider == provider):
+    destination = root / link.destination
+    removed = remove_locked_link(root, destination, link.target, operation_log)
+    if not removed:
+      skipped_links.append(link)
+    collect_parents(root, destination, prune_candidates)
 
   provider_prefix = f".agents/providers/{provider}/"
   skipped_assets: list[LockedAsset] = []
@@ -267,8 +258,15 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
     remaining_assets = [
       a for a in current_lock.assets if not a.destination.startswith(provider_prefix)
     ] + skipped_assets
+    remaining_links = [
+      link for link in current_lock.links if link.provider != provider
+    ] + skipped_links
     write_lock(
-      lock_path, compute_manifest_sha256(runtime_context), remaining_providers, remaining_assets
+      lock_path,
+      compute_manifest_sha256(runtime_context),
+      remaining_providers,
+      remaining_assets,
+      remaining_links,
     )
     operation_log.add(f"removed provider: {provider}")
   else:
@@ -280,6 +278,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
 def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
   locked_assets: list[LockedAsset] = []
+  locked_links: list[LockedLink] = []
 
   ensure_dir(runtime_context.repo_root, runtime_context.runtime_dir, operation_log)
   copy_file(
@@ -318,6 +317,13 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
       runtime_context.repo_root / entry.destination,
       operation_log,
     )
+    locked_links.append(
+      LockedLink(
+        destination=entry.destination,
+        target=os.path.relpath(source, (runtime_context.repo_root / entry.destination).parent),
+        provider=entry.provider,
+      )
+    )
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
@@ -327,6 +333,7 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
       compute_manifest_sha256(runtime_context),
       runtime_context.providers,
       unique_locked_assets(locked_assets),
+      unique_locked_links(locked_links),
     )
     operation_log.add("wrote .agents/dotagents.lock")
 
@@ -342,43 +349,6 @@ def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
     suffix = Path(*source.parts[1:]) if len(source.parts) > 1 else Path()
     return runtime_dir / "providers" / entry.provider / suffix
   raise DotagentsError(f"unsupported manifest source root: {entry.source}")
-
-
-def expected_links(runtime_context: RuntimeContext) -> dict[Path, Path]:
-  links: dict[Path, Path] = {}
-  for entry in selected_entries(runtime_context.manifest, runtime_context.providers):
-    source = (
-      runtime_context.repo_root / ".rules"
-      if entry.source == ".rules"
-      else runtime_destination(runtime_context.runtime_dir, entry)
-    )
-    links[runtime_context.repo_root / entry.destination] = source
-  return links
-
-
-def uninstall_links(
-  repo_root: Path, runtime_dir: Path, runtime_lock: RuntimeLock, operation_log: OperationLog
-) -> dict[Path, Path]:
-  try:
-    assets = asset_root()
-    manifest = load_manifest(assets)
-  except DotagentsError:
-    operation_log.add(
-      "warning: cannot load manifest; expected symlinks not removed — remove manually"
-    )
-    return {}
-
-  available_providers = tuple(
-    provider for provider in runtime_lock.providers if provider in manifest.providers
-  )
-  runtime_context = RuntimeContext(
-    repo_root=repo_root,
-    runtime_dir=runtime_dir,
-    asset_root=assets,
-    manifest=manifest,
-    providers=available_providers,
-  )
-  return expected_links(runtime_context)
 
 
 def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> None:
@@ -431,6 +401,13 @@ def unique_locked_assets(locked_assets: list[LockedAsset]) -> list[LockedAsset]:
   unique: dict[tuple[str, str], LockedAsset] = {}
   for asset in locked_assets:
     unique[(asset.source, asset.destination)] = asset
+  return list(unique.values())
+
+
+def unique_locked_links(locked_links: list[LockedLink]) -> list[LockedLink]:
+  unique: dict[str, LockedLink] = {}
+  for link in locked_links:
+    unique[link.destination] = link
   return list(unique.values())
 
 
@@ -524,29 +501,29 @@ def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None
   operation_log.add(f"created {relative(repo_root, path)}")
 
 
-def remove_expected_link(
-  repo_root: Path, destination: Path, expected_source: Path, operation_log: OperationLog
-) -> None:
+def remove_locked_link(
+  repo_root: Path, destination: Path, expected_target: str, operation_log: OperationLog
+) -> bool:
   display = relative(repo_root, destination)
   if not destination.exists() and not destination.is_symlink():
     operation_log.add(f"missing {display}")
-    return
+    return True
   if not destination.is_symlink():
     operation_log.add(f"skip user-owned {display}; remove manually after verifying")
-    return
+    return False
 
-  expected_target = os.path.relpath(expected_source, destination.parent)
   actual_target = os.readlink(destination)
   if actual_target != expected_target:
     operation_log.add(f"skip unexpected symlink {display}; remove manually after verifying")
-    return
+    return False
 
   if operation_log.dry_run:
     operation_log.add(f"would remove {display}")
     operation_log.pending_removals.add(destination)
-    return
+    return True
   destination.unlink()
   operation_log.add(f"removed {display}")
+  return True
 
 
 def remove_locked_asset(

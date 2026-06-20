@@ -64,6 +64,19 @@ def test_doctor_reports_wrong_symlink_target(
   assert any(line.startswith("wrong link: CLAUDE.md") for line in result.lines)
 
 
+def test_doctor_reports_missing_lockfile_link_target(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  (tmp_path / "CLAUDE.md").unlink()
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert "missing link: CLAUDE.md" in result.lines
+
+
 def test_doctor_fails_when_uv_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.chdir(tmp_path)
   init_runtime(Path.cwd(), ("claude",))

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import read_lock, sha256_file
-from dotagents.runtime import build_context, expected_links, manifest_drift, relative, version_drift
+from dotagents.runtime import build_context, manifest_drift, relative, version_drift
 from dotagents.version import package_version
 
 
@@ -69,16 +69,16 @@ def doctor(repo_root: Path) -> DoctorResult:
       lines.append(f"changed: {asset.destination}")
       passed = False
 
-  for destination, source in expected_links(runtime_context).items():
+  for link in lock.links:
+    destination = repo_root / link.destination
     if not destination.is_symlink():
       lines.append(f"missing link: {relative(repo_root, destination)}")
       passed = False
       continue
     actual = os.readlink(destination)
-    expected = os.path.relpath(source, destination.parent)
-    if actual != expected:
+    if actual != link.target:
       lines.append(
-        f"wrong link: {relative(repo_root, destination)} -> {actual}, expected {expected}"
+        f"wrong link: {relative(repo_root, destination)} -> {actual}, expected {link.target}"
       )
       passed = False
 

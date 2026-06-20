@@ -42,6 +42,10 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert not (tmp_path / ".agents" / "agent").exists()
   assert not (tmp_path / ".agents" / "README.md").exists()
   assert (tmp_path / ".github" / "hooks" / "block-dangerous-git").is_symlink()
+  runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  link_destinations = {link.destination for link in runtime_lock.links}
+  assert "CLAUDE.md" in link_destinations
+  assert ".github/copilot-instructions.md" in link_destinations
 
 
 def test_doctor_reports_changed_managed_asset(
@@ -225,6 +229,21 @@ def test_uninstall_removes_claude_outputs(tmp_path: Path, monkeypatch: pytest.Mo
   assert not (tmp_path / "scripts").exists()
 
 
+def test_uninstall_uses_lockfile_links_without_current_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  broken_assets = tmp_path / "broken-assets"
+  broken_assets.mkdir()
+  monkeypatch.setattr("dotagents.runtime.asset_root", lambda: broken_assets)
+
+  uninstall_existing(Path.cwd())
+
+  assert not (tmp_path / "CLAUDE.md").exists()
+  assert not (tmp_path / ".claude").exists()
+
+
 def test_uninstall_removes_multiple_provider_outputs(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -404,6 +423,20 @@ def test_remove_provider_removes_outputs_leaves_others(
   lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   assert lock.providers == ("claude",)
   assert "copilot" not in lock.providers
+  assert all(link.provider != "copilot" for link in lock.links)
+
+
+def test_remove_provider_rejects_current_manifest_change_before_cleanup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+  make_manifest_stale(tmp_path)
+
+  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+    remove_provider(Path.cwd(), "copilot")
+
+  assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
 
 
 def test_remove_provider_dry_run_does_not_remove(
@@ -434,6 +467,8 @@ def test_remove_provider_skips_user_owned_file(
 
   assert instructions.read_text(encoding="utf-8") == "human-owned\n"
   assert any("skip user-owned" in line for line in operation_log.lines)
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert ".github/copilot-instructions.md" in {link.destination for link in lock.links}
 
 
 def test_remove_last_provider_leaves_shared_outputs(
