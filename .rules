@@ -1,6 +1,6 @@
 # Readiness and Synchronization Check
 
-If the user says "are you on?", always:
+If the user says "are you on?" or **before any other task**, always:
 1. Re-read this `.rules` file.
 2. Read `MEMORY.md`.
 3. If `MEMORY.md` has no substantive content beyond headings or whitespace, read `MEMORY_LOG.md`.
