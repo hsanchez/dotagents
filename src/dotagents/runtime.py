@@ -69,14 +69,14 @@ def version_drift(runtime_lock: RuntimeLock) -> RuntimeVersionDrift | None:
   )
 
 
-def manifest_sha256(runtime_context: RuntimeContext) -> str:
+def compute_manifest_sha256(runtime_context: RuntimeContext) -> str:
   return sha256_file(runtime_context.asset_root / "agents.toml")
 
 
 def manifest_drift(
   runtime_context: RuntimeContext, runtime_lock: RuntimeLock
 ) -> RuntimeManifestDrift | None:
-  package_manifest_sha256 = manifest_sha256(runtime_context)
+  package_manifest_sha256 = compute_manifest_sha256(runtime_context)
   if runtime_lock.manifest_sha256 == package_manifest_sha256:
     return None
   return RuntimeManifestDrift(
@@ -267,7 +267,9 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
     remaining_assets = [
       a for a in current_lock.assets if not a.destination.startswith(provider_prefix)
     ] + skipped_assets
-    write_lock(lock_path, manifest_sha256(runtime_context), remaining_providers, remaining_assets)
+    write_lock(
+      lock_path, compute_manifest_sha256(runtime_context), remaining_providers, remaining_assets
+    )
     operation_log.add(f"removed provider: {provider}")
   else:
     operation_log.add(f"would remove provider: {provider}")
@@ -322,7 +324,7 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
   else:
     write_lock(
       runtime_context.runtime_dir / "dotagents.lock",
-      manifest_sha256(runtime_context),
+      compute_manifest_sha256(runtime_context),
       runtime_context.providers,
       unique_locked_assets(locked_assets),
     )
