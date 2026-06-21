@@ -1,13 +1,3 @@
-# Readiness and Synchronization Check
-
-If the user says "are you on?":
-1. Load and use the `manus` skill.
-2. Follow the readiness sync protocol in that skill.
-
-# Project Skills
-
-Use `manus` for memory logging, GitHub issue diagnosis, uncommitted code review, and branch review workflows. Keep detailed operational procedures in the skill, not in `.rules`.
-
 # Python coding guidelines
 
 * Prioritize code correctness, clarity, and maintainability. Speed and cleverness are secondary unless explicitly required.
@@ -106,27 +96,7 @@ Override:
 
 # Documentation
 
-## User-Facing Docs (`docs/`)
-
-Update for any user-facing change: new features, configuration options, CLI changes, template syntax.
-
-When updating:
-- Read related docs first to understand structure and voice
-- Place content where users would naturally look for it
-- Update related sections that reference affected functionality
-- Remove or update content that becomes incorrect
-- Do not append — integrate holistically; restructure if needed
-- Every word must serve the user; pro forma documentation is unacceptable
-
-## `dev-docs/ARCHITECTURE.md`
-
-Live architectural overview. Update whenever the system design changes.
-
-## `dev-docs/core/`
-
-Frozen reference documentation — generated or otherwise locked. **Read only; never edit or add files here.**
-
-## `dev-docs/decisions/`
+## `docs/decisions/`
 
 Architecture Decision Records (ADRs). Records *why* core decisions were made.
 Format: `NNN-short-name.md` (e.g., `001-mvp-scope.md`)
@@ -137,7 +107,24 @@ Create a new ADR when:
 - Selecting technologies
 - Establishing patterns that affect multiple components
 
-Not every small choice — only significant architectural decisions.
+Only create one if all three are true:
+- Hard to reverse — the cost of changing your mind later is meaningful
+- Surprising without context — a future reader will wonder "why did they do it this way?"
+- Real trade-off — there were genuine alternatives and you picked one for specific reasons
+
+Basic ADR format:
+
+```md
+# {Short title of the decision}
+
+{1-3 sentences: what's the context, what did we decide, and why.}
+```
+
+Only include these when they add genuine value. Most ADRs won't need them.
+
+- **Status** frontmatter (`proposed | accepted | deprecated | superseded by ADR-NNNN`) — useful when decisions are revisited
+- **Considered Options** — only when the rejected alternatives are worth remembering
+- **Consequences** — only when non-obvious downstream effects need to be called out
 
 # Required Development Workflow
 
@@ -171,10 +158,29 @@ All must pass — enforced by CI.
 
 # Memory Discipline
 
-- Read `MEMORY.md` at the start of each task.
-- Use `manus` for memory logging, compression, and recovery procedures.
-- Never read or write `MEMORY.local.md` or `MEMORY_LOG.local.md` — those are private human scratch files.
+- `MEMORY.md` at the repo root holds the current compressed project state — rewritten to stay concise, never append-only.
+- `MEMORY_LOG.md` at the repo root holds raw timestamped entries.
+- `MEMORY_LOG.md` is never committed to the repo — It is a personal artifact.
+
+Rules:
+- Never store secrets, credentials, or speculation in either file.
+- Never store information from local `.scratch` directory unless explicitly told to do so; treat it as a temporary scratchpad for the current task.
+- Log entry format: `YYYY-MM-DD HH:MM — <1-3 line factual update>`
+- Never write timestamps manually — use the `memlog` command to append entries, which provides the current local time automatically.
+- Read `MEMORY.md` at the start of each task. Consult `MEMORY_LOG.md` only when debugging or recovering context or recovering from errors.
 - **Never write to** `~/.claude/projects/*/memory/MEMORY.md` when a memory discipline is specified in this file.
+
+Operations:
+- When asked to "update memory", append entries to `MEMORY_LOG.md` only.
+- When asked to "compress memory", rewrite `MEMORY.md` to reflect current project state and remove the compressed entries from `MEMORY_LOG.md`. Compress when `MEMORY_LOG.md` exceeds ~100 entries, or when explicitly asked.
+
+Never used:
+- `MEMORY.local.md`
+- `MEMORY_LOG.local.md`
+
+Bootstrapping (if files are absent):
+- `MEMORY.md`: create with content `# PROJECT MEMORY\n\n- Initialized memory files.`
+- `MEMORY_LOG.md`: create with content `# MEMORY LOG\n\n## Entries\n`
 
 # Pull request hygiene
 
@@ -236,4 +242,13 @@ Use terse responses by default when technical accuracy would remain intact.
 - Keep code, commands, paths, URLs, version numbers, and other literals unchanged
 - Do not drift back toward verbose prose over time
 - If brevity would hide uncertainty, risk, safety constraints, or important tradeoffs, keep the extra words
-- Prefer `bash` tool for running `uv` commands over explaining them 
+- Prefer `bash` tool for running `uv` commands over explaining them
+
+# Available Tools
+
+Project tools live in `scripts/`. Run them directly.
+
+- `memlog <message>` — append a timestamped entry to `MEMORY_LOG.md`
+- `review-branch [issue]` — review committed changes on the current branch
+- `review-code` — review uncommitted working-tree changes
+- `gh-issue <issue>` — diagnose a GitHub issue and produce a resolution plan (issue number or URL)
