@@ -16,6 +16,10 @@ destination = "scripts/review-branch"
 source = "scripts/review-code"
 destination = "scripts/review-code"
 
+[[sync]]
+source = "skills"
+destination = "skills"
+
 [providers]
 
 [providers.claude]

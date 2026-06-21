@@ -163,6 +163,7 @@ For `--for claude --for copilot`, the generated repo state includes:
 .agents/dotagents.lock
 .agents/skills/git-guardrails/
 .agents/skills/handoff/
+.agents/skills/resume-handoff/
 .agents/skills/manus/
 .agents/scripts/gh-issue
 .agents/scripts/memlog

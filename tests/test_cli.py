@@ -21,6 +21,9 @@ def test_list_skills_command_outputs_bundled_skills() -> None:
 
   assert result.exit_code == 0
   assert "git-guardrails" in result.output
+  assert "handoff" in result.output
+  assert "resume-handoff" in result.output
+  assert "manus" in result.output
 
 
 def test_init_dry_run_command_does_not_write_runtime(
