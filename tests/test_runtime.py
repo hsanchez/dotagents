@@ -5,7 +5,7 @@ from helpers import make_lock_stale, make_manifest_stale
 
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import read_lock
+from dotagents.lockfile import LockedLink, read_lock, write_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
   add_provider,
@@ -45,10 +45,18 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".agents" / "providers" / "copilot" / "review.prompt.md").exists()
   assert not (tmp_path / ".agents" / "agent").exists()
   assert not (tmp_path / ".agents" / "README.md").exists()
+  assert not (tmp_path / "skills").exists()
+  assert (tmp_path / "scripts" / "review-code").is_symlink()
+  assert (tmp_path / ".claude" / "commands").is_symlink()
+  assert (tmp_path / ".claude" / "commands").readlink() == Path("../.agents/scripts")
+  assert (tmp_path / ".claude" / "skills").is_symlink()
+  assert (tmp_path / ".claude" / "skills").readlink() == Path("../.agents/skills")
   assert (tmp_path / ".github" / "hooks" / "block-dangerous-git").is_symlink()
   runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   link_destinations = {link.destination for link in runtime_lock.links}
   assert "CLAUDE.md" in link_destinations
+  assert ".claude/skills" in link_destinations
+  assert "skills" not in link_destinations
   assert ".github/copilot-instructions.md" in link_destinations
 
 
@@ -143,6 +151,28 @@ def test_update_refreshes_manifest_drift(tmp_path: Path, monkeypatch: pytest.Mon
 
   runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   assert runtime_lock.manifest_sha256 != "0" * 64
+
+
+def test_update_removes_stale_managed_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  stale_link = tmp_path / "skills"
+  stale_link.symlink_to(".agents/skills")
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  runtime_lock = read_lock(lock_path)
+  write_lock(
+    lock_path,
+    runtime_lock.manifest_sha256,
+    runtime_lock.providers,
+    list(runtime_lock.assets),
+    [*runtime_lock.links, LockedLink("skills", ".agents/skills")],
+  )
+
+  update_existing(Path.cwd())
+
+  assert not stale_link.exists()
+  runtime_lock = read_lock(lock_path)
+  assert "skills" not in {link.destination for link in runtime_lock.links}
 
 
 def test_update_reports_matching_version_refresh(

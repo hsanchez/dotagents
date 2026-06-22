@@ -279,6 +279,8 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
   operation_log = OperationLog(dry_run=dry_run)
   locked_assets: list[LockedAsset] = []
   locked_links: list[LockedLink] = []
+  lock_path = runtime_context.runtime_dir / "dotagents.lock"
+  previous_lock = read_lock(lock_path) if lock_path.exists() else None
 
   ensure_dir(runtime_context.repo_root, runtime_context.runtime_dir, operation_log)
   copy_file(
@@ -306,6 +308,8 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
   render_rules(runtime_context, operation_log)
 
   for entry in selected_entries(runtime_context.manifest, runtime_context.providers):
+    if not entry.link:
+      continue
     source = (
       runtime_context.repo_root / ".rules"
       if entry.source == ".rules"
@@ -325,11 +329,16 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
       )
     )
 
+  skipped_stale_links = remove_stale_links(
+    runtime_context.repo_root, previous_lock, locked_links, operation_log
+  )
+  locked_links.extend(skipped_stale_links)
+
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
   else:
     write_lock(
-      runtime_context.runtime_dir / "dotagents.lock",
+      lock_path,
       compute_manifest_sha256(runtime_context),
       runtime_context.providers,
       unique_locked_assets(locked_assets),
@@ -338,6 +347,31 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
     operation_log.add("wrote .agents/dotagents.lock")
 
   return operation_log
+
+
+def remove_stale_links(
+  repo_root: Path,
+  previous_lock: RuntimeLock | None,
+  locked_links: list[LockedLink],
+  operation_log: OperationLog,
+) -> list[LockedLink]:
+  if previous_lock is None:
+    return []
+
+  current_destinations = {link.destination for link in locked_links}
+  skipped_links: list[LockedLink] = []
+  prune_candidates: set[Path] = set()
+  for link in previous_lock.links:
+    if link.destination in current_destinations:
+      continue
+    destination = repo_root / link.destination
+    removed = remove_locked_link(repo_root, destination, link.target, operation_log)
+    if not removed:
+      skipped_links.append(link)
+    collect_parents(repo_root, destination, prune_candidates)
+
+  prune_empty_dirs(repo_root, prune_candidates, operation_log)
+  return skipped_links
 
 
 def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:

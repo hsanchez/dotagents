@@ -33,6 +33,10 @@ test -f .agents/skills/git-guardrails/scripts/block-dangerous-git
 test -f .agents/scripts/review-code
 test ! -f .agents/scripts/smoke-test
 test -L CLAUDE.md
+test -L scripts/review-code
+test ! -e skills
+test -L .claude/commands
+test -L .claude/skills
 test -L .github/copilot-instructions.md
 test -L .github/hooks/block-dangerous-git
 test ! -f .agents/agent

@@ -176,6 +176,8 @@ For `--for claude --for copilot`, the generated repo state includes:
 .agents/providers/copilot/hooks/git-guardrails.json
 .rules
 CLAUDE.md -> .rules
+.claude/commands -> ../.agents/scripts
+.claude/skills -> ../.agents/skills
 .claude/settings.json -> ../.agents/providers/claude/settings.json
 .claude/hooks/block-dangerous-git -> ../../.agents/skills/git-guardrails/scripts/block-dangerous-git
 .github/copilot-instructions.md -> ../.rules
@@ -188,6 +190,10 @@ scripts/review-code -> ../.agents/scripts/review-code
 
 The consuming repo does not receive the full harness source tree. It receives
 only the managed runtime output required by selected providers.
+Shared skills are canonical under `.agents/skills`. Claude receives them through
+`.claude/skills`; dotagents does not create a repo-root `skills` link.
+Repo-root `scripts/*` links are intentional convenience commands backed by
+`.agents/scripts`.
 
 ## Ownership
 
@@ -222,10 +228,17 @@ uv run dotagents doctor
 relative to the consuming repo root.
 `source = ".rules"` is a special token that refers to the generated `.rules`
 file at the consuming repo root, not a package asset.
+Set `link = false` for runtime-only assets that should be copied into
+`.agents/` without creating a repo-facing symlink.
 
 Example:
 
 ```toml
+[[sync]]
+source = "skills"
+destination = "skills"
+link = false
+
 [providers.codex]
 sync = [
   { source = ".rules", destination = "AGENTS.md" },

@@ -12,6 +12,7 @@ from dotagents.errors import DotagentsError
 class SyncEntry:
   source: str
   destination: str
+  link: bool = True
   provider: str | None = None
 
 
@@ -97,7 +98,10 @@ def _parse_entries(scope: str, entries: object, provider: str | None) -> list[Sy
       raise DotagentsError(f"agents.toml: {scope}.source must be a non-empty string")
     if not isinstance(destination, str) or not destination:
       raise DotagentsError(f"agents.toml: {scope}.destination must be a non-empty string")
-    parsed.append(SyncEntry(source=source, destination=destination, provider=provider))
+    link = entry.get("link", True)
+    if not isinstance(link, bool):
+      raise DotagentsError(f"agents.toml: {scope}.link must be a boolean")
+    parsed.append(SyncEntry(source=source, destination=destination, link=link, provider=provider))
   return parsed
 
 

@@ -38,11 +38,33 @@ sync = [
 
   assert manifest.providers == ("claude",)
   assert selected_providers(manifest, ()) == ("claude",)
+  assert manifest.global_sync[0].link
   assert [entry.destination for entry in selected_entries(manifest, ("claude",))] == [
     "scripts/review",
     "CLAUDE.md",
     ".claude/settings.json",
   ]
+
+
+def test_load_manifest_reads_runtime_only_entry(tmp_path: Path) -> None:
+  (tmp_path / "skills").mkdir()
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "skills"
+destination = "skills"
+link = false
+
+[providers]
+""",
+  )
+
+  manifest = load_manifest(tmp_path)
+
+  assert not manifest.global_sync[0].link
 
 
 @pytest.mark.parametrize(
@@ -116,6 +138,26 @@ destination = "scripts/missing"
   )
 
   with pytest.raises(DotagentsError, match="source does not exist: scripts/missing"):
+    load_manifest(tmp_path)
+
+
+def test_load_manifest_rejects_non_boolean_link(tmp_path: Path) -> None:
+  (tmp_path / "skills").mkdir()
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "skills"
+destination = "skills"
+link = "false"
+
+[providers]
+""",
+  )
+
+  with pytest.raises(DotagentsError, match="sync.link must be a boolean"):
     load_manifest(tmp_path)
 
 

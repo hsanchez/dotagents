@@ -19,6 +19,7 @@ destination = "scripts/review-code"
 [[sync]]
 source = "skills"
 destination = "skills"
+link = false
 
 [providers]
 
@@ -26,6 +27,7 @@ destination = "skills"
 sync = [
   { source = ".rules", destination = "CLAUDE.md" },
   { source = "scripts", destination = ".claude/commands" },
+  { source = "skills", destination = ".claude/skills" },
   { source = "claude/settings.json", destination = ".claude/settings.json" },
   { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".claude/hooks/block-dangerous-git" }
 ]
