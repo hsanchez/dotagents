@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Huascar Sanchez
+#
+# This file contains citation metadata for Promptory.
+# For more information visit: https://citation-file-format.github.io/
+
+cff-version: 1.2.0
+title: "DotAgents"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Huascar
+    family-names: Sanchez
+    email: huascar@jellyfish.mozmail.com
+repository-code: "https://github.com/hsanchez/dotagents"
+url: "https://github.com/hsanchez/dotagents"
+abstract: "@hsanchez does dotagents"
+keywords:
+  - ai-agents
+  - git
+  - dotfiles
+  - language-models
+  - agentic-coding-environment
+  - python
+version: 0.1.0

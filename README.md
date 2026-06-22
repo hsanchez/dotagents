@@ -274,3 +274,16 @@ sh tests/smoke-test
 The smoke test creates a temporary consuming repo, installs this checkout as a
 dev dependency, initializes selected providers, runs `doctor`, and verifies the
 shared dangerous-git guardrail.
+
+## Contributing
+
+Open an issue before sending a pull request for non-trivial changes. All
+contributions must pass `uv run prek run --all-files` and `uv run pytest`.
+
+## License
+
+Apache 2.0. See [LICENSE](./LICENSE).
+
+## Citation
+
+Please cite Promptory following the [CITATION.cff](./CITATION.cff) file.
