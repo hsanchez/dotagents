@@ -1,4 +1,4 @@
-# This is my DotAgents Harness
+# hsanchez does dotagents
 
 Yes, `dotagents` is a package-driven configuration harness for repo-local AI coding
 environments.
