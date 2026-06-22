@@ -165,7 +165,6 @@ For `--for claude --for copilot`, the generated repo state includes:
 .agents/skills/handoff/
 .agents/skills/resume-handoff/
 .agents/skills/startup/
-.agents/skills/manus/
 .agents/scripts/gh-issue
 .agents/scripts/memlog
 .agents/scripts/review-branch
