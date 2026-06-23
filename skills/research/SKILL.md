@@ -1,7 +1,7 @@
 ---
 name: research
 description: Delegate noisy investigation to one or more subagents so the orchestrator's context stays clean, then work from the distilled answer. Also triggers when the user explicitly asks "can you research X." Use when answering a question — "how does X work", "where is Y used", "what's the root cause of Z", "summarize this PR/log" — would require reading many files, long logs, large diffs, or wide codebase surveys. Reach for it liberally before reading a pile of files inline.
-argument-hint: "<question or topic to investigate> [--parallel]"
+argument-hint: "<question or topic to investigate>"
 ---
 
 # Research
