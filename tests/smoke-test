@@ -30,6 +30,7 @@ test -f .rules
 test -f .agents/dotagents.lock
 test -f .agents/agents.toml
 test -f .agents/skills/git-guardrails/scripts/block-dangerous-git
+test -f .agents/skills/research/SKILL.md
 test -f .agents/scripts/review-code
 test ! -f .agents/scripts/smoke-test
 test -L CLAUDE.md

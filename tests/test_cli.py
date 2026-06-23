@@ -23,6 +23,7 @@ def test_list_skills_command_outputs_bundled_skills() -> None:
   assert "clarify" in result.output
   assert "git-guardrails" in result.output
   assert "handoff" in result.output
+  assert "research" in result.output
   assert "resume-handoff" in result.output
   assert "startup" in result.output
 
