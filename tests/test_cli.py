@@ -20,6 +20,7 @@ def test_list_skills_command_outputs_bundled_skills() -> None:
   result = CliRunner().invoke(app, ["list", "skills"])
 
   assert result.exit_code == 0
+  assert "audit-diff" in result.output
   assert "clarify" in result.output
   assert "git-guardrails" in result.output
   assert "handoff" in result.output

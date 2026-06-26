@@ -37,6 +37,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   init_runtime(Path.cwd(), ("claude", "copilot"))
 
   assert (tmp_path / ".agents" / "dotagents.lock").exists()
+  assert (tmp_path / ".agents" / "skills" / "audit-diff").is_dir()
   assert (tmp_path / ".agents" / "skills" / "clarify").is_dir()
   assert (tmp_path / ".agents" / "skills" / "git-guardrails").is_dir()
   assert (tmp_path / ".agents" / "skills" / "handoff").is_dir()

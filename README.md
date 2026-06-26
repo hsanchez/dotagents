@@ -161,6 +161,7 @@ For `--for claude --for copilot`, the generated repo state includes:
 ```text
 .agents/agents.toml
 .agents/dotagents.lock
+.agents/skills/audit-diff/
 .agents/skills/clarify/
 .agents/skills/git-guardrails/
 .agents/skills/handoff/
