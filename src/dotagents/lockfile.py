@@ -34,6 +34,9 @@ class RuntimeLock:
   version: str
   manifest_sha256: str
   providers: tuple[str, ...]
+  skills: tuple[str, ...] | None
+  skillfile_sha256: str | None
+  generated_at: str
   assets: tuple[LockedAsset, ...]
   links: tuple[LockedLink, ...]
 
@@ -52,6 +55,9 @@ def write_lock(
   providers: tuple[str, ...],
   assets: list[LockedAsset],
   links: list[LockedLink],
+  skills: tuple[str, ...] | None = None,
+  skillfile_sha256: str | None = None,
+  generated_at: str | None = None,
 ) -> None:
   payload = {
     "lockfile_version": SUPPORTED_LOCKFILE_VERSION,
@@ -59,7 +65,9 @@ def write_lock(
     "package": "dotagents",
     "manifest_sha256": manifest_sha256,
     "providers": list(providers),
-    "generated_at": datetime.now(UTC).isoformat(),
+    **({"skills": list(skills)} if skills is not None else {}),
+    **({"skillfile_sha256": skillfile_sha256} if skillfile_sha256 is not None else {}),
+    "generated_at": generated_at or datetime.now(UTC).isoformat(),
     "assets": [
       {
         "source": asset.source,
@@ -94,6 +102,18 @@ def read_lock(path: Path) -> RuntimeLock:
     isinstance(provider, str) for provider in providers
   ):
     raise DotagentsError("lockfile providers must be a string array")
+
+  raw_skills = data.get("skills")
+  if raw_skills is not None and (
+    not isinstance(raw_skills, list) or not all(isinstance(skill, str) for skill in raw_skills)
+  ):
+    raise DotagentsError("lockfile skills must be a string array")
+
+  skillfile_sha256 = data.get("skillfile_sha256")
+  if skillfile_sha256 is not None and (
+    not isinstance(skillfile_sha256, str) or not skillfile_sha256
+  ):
+    raise DotagentsError("lockfile skillfile_sha256 must be a non-empty string")
 
   lockfile_version = data.get("lockfile_version")
   if not isinstance(lockfile_version, int):
@@ -144,11 +164,18 @@ def read_lock(path: Path) -> RuntimeLock:
   if not isinstance(manifest_sha256, str) or not manifest_sha256:
     raise DotagentsError("lockfile manifest_sha256 must be a non-empty string")
 
+  generated_at = data.get("generated_at")
+  if not isinstance(generated_at, str) or not generated_at:
+    raise DotagentsError("lockfile generated_at must be a non-empty string")
+
   return RuntimeLock(
     lockfile_version=lockfile_version,
     version=version,
     manifest_sha256=manifest_sha256,
     providers=tuple(providers),
+    skills=tuple(raw_skills) if raw_skills is not None else None,
+    skillfile_sha256=skillfile_sha256,
+    generated_at=generated_at,
     assets=tuple(assets),
     links=tuple(links),
   )

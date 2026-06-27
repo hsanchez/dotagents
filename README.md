@@ -50,16 +50,20 @@ uv run dotagents init --for claude --for copilot
 uv run dotagents doctor
 ```
 
-In this example, `dotagents init` will initialize the harness for `Claude` and `Copilot`, creating the `.agents/` runtime directory.
+`dotagents init` initializes the harness for the specified providers, writes a `Skillfile` with the default skill preset, and creates the `.agents/` runtime directory.
 
 ## Commands
 
 ```bash
 uv run dotagents init --for claude --for copilot
 uv run dotagents init --for all  # configure all approved providers
+uv run dotagents init --for claude --with
+uv run dotagents init --for claude --with review
+uv run dotagents init --for claude --locked
 uv run dotagents init --dry-run --for claude
 uv run dotagents doctor
 uv run dotagents sync
+uv run dotagents sync --locked
 uv run dotagents update
 uv run dotagents uninstall --dry-run
 uv run dotagents uninstall
@@ -84,6 +88,90 @@ uv run dotagents providers add --dry-run gemini
 
 It also renders `.rules` and creates provider-facing files such as `CLAUDE.md`,
 `AGENTS.md`, `.claude/settings.json`, and `.github/copilot-instructions.md`.
+
+## Skills
+
+`Skillfile` at the repository root selects the skills installed under
+`.agents/skills`. Commit it with the repository; `.agents/` is generated output.
+On first `init`, dotagents creates `Skillfile` with the packaged `default`
+preset:
+
+```text
+use default
+```
+
+The `default` preset contains the current maintainer-supported skill set. Use
+`init --with` to choose a custom selection interactively.
+
+For noninteractive bootstrap with one packaged preset, pass the preset name:
+
+```bash
+uv run dotagents init --for claude --with review
+```
+
+That writes `Skillfile` with:
+
+```text
+use review
+```
+
+`--with <name>` accepts preset names only. To select multiple presets or
+individual skills, commit `Skillfile` at the consuming repo root:
+
+```text
+use review
+use safety
+skill clarify
+```
+
+After committing `Skillfile`, automation can run plain `init` without opening
+an editor. If `Skillfile` does not exist, plain `init` creates it with
+`use default`:
+
+```bash
+uv run dotagents init --for claude
+```
+
+`sync` and `update` reuse the saved selection. Deselecting a skill removes its
+unchanged managed files. Provider hooks that belong to a skill are installed
+only when that skill is selected and the provider that owns the hook is
+configured. For example, `use safety` installs `git-guardrails` under
+`.agents/skills`; Claude and Copilot hook links are installed only when those
+providers are configured.
+
+You may edit `Skillfile` directly. After adding or removing a selection, run:
+
+```bash
+uv run dotagents sync
+```
+
+`doctor` reports a Skillfile selection that differs from the installed
+lockfile, including comment-only edits that change the locked Skillfile hash.
+dotagents never ignores a valid manual Skillfile edit. It rejects malformed
+entries and unknown names before changing the managed runtime.
+
+Use `--locked` in CI when the runtime must match the committed `Skillfile` and
+existing `.agents/dotagents.lock`:
+
+```bash
+uv run dotagents init --for claude --locked
+uv run dotagents sync --locked
+```
+
+Locked mode does not open an editor. It fails when `Skillfile` is missing, the
+lockfile is missing, the resolved skills differ, the Skillfile hash differs,
+or the package/manifest metadata differs.
+
+### Authoring skills and presets
+
+Harness maintainers add a skill under `skills/<name>/`, with its `SKILL.md`,
+then can add a packaged preset at `presets/<name>`. A preset contains one
+`skill <name>` line per included skill. Add any provider-specific asset to
+`agents.toml` with `skill = "<name>"` so it is materialized only with that
+skill. Add tests for the skill, its preset, and any conditional provider output.
+
+Skillfile validation rejects unknown skills and presets. After an invalid edit,
+dotagents reports the line and available names, then reopens the same file.
 
 `doctor` validates the current repo without writing files. It checks the
 installed runtime, lockfile package version, lockfile asset hashes, lockfile
@@ -235,21 +323,17 @@ Set `link = false` for runtime-only assets that should be copied into
 Example:
 
 ```toml
-[[sync]]
-source = "skills"
-destination = "skills"
-link = false
-
-[providers.codex]
+[providers.claude]
 sync = [
-  { source = ".rules", destination = "AGENTS.md" },
-  { source = ".rules", destination = "CODEX.md" },
-  { source = "codex/config.toml", destination = ".codex/config.toml" },
-  { source = "codex/agents/reviewer.toml", destination = ".codex/agents/reviewer.toml" }
+  { source = ".rules", destination = "CLAUDE.md" },
+  { source = "skills", destination = ".claude/skills" },
+  { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".claude/hooks/block-dangerous-git", skill = "git-guardrails" }
 ]
 ```
 
-Provider directories are adapters. Shared policy belongs in `skills/`.
+Use `skill = "<name>"` for provider assets that should be materialized only
+when that skill is selected. Provider directories are adapters. Shared policy
+belongs in `skills/`.
 
 ## Current Providers
 

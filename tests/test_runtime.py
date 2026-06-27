@@ -61,6 +61,85 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert ".github/copilot-instructions.md" in link_destinations
 
 
+def test_init_materializes_only_skillfile_selection(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  (tmp_path / "Skillfile").write_text("skill research\n", encoding="utf-8")
+
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+
+  assert (tmp_path / ".agents" / "skills" / "research").is_dir()
+  assert not (tmp_path / ".agents" / "skills" / "git-guardrails").exists()
+  assert not (tmp_path / ".github" / "hooks" / "block-dangerous-git").exists()
+  assert not (tmp_path / ".claude" / "hooks" / "block-dangerous-git").exists()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.skills == ("research",)
+  assert lock.skillfile_sha256 is not None
+
+
+def test_sync_reconciles_manual_skillfile_edit(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  skillfile = tmp_path / "Skillfile"
+  skillfile.write_text("skill research\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+
+  skillfile.write_text("use safety\n", encoding="utf-8")
+
+  before_sync = doctor(Path.cwd())
+  assert not before_sync.passed
+  assert (
+    "Skillfile: selection differs from lockfile; run: uv run dotagents sync" in before_sync.lines
+  )
+
+  sync_existing(Path.cwd())
+
+  assert not (tmp_path / ".agents" / "skills" / "research").exists()
+  assert (tmp_path / ".agents" / "skills" / "git-guardrails").is_dir()
+  assert doctor(Path.cwd()).passed
+
+
+def test_doctor_reports_skillfile_hash_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  skillfile = tmp_path / "Skillfile"
+  skillfile.write_text("skill research\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+
+  skillfile.write_text("# comment changed\nskill research\n", encoding="utf-8")
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert "Skillfile: changed since lockfile; run: uv run dotagents sync" in result.lines
+
+
+def test_init_locked_rejects_skillfile_hash_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  skillfile = tmp_path / "Skillfile"
+  skillfile.write_text("skill research\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  skillfile.write_text("# comment changed\nskill research\n", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="Skillfile changed since lockfile"):
+    init_runtime(Path.cwd(), ("claude",), locked=True)
+
+
+def test_sync_locked_rejects_missing_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  (tmp_path / "Skillfile").write_text("use safety\n", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="cannot sync --locked"):
+    sync_existing(Path.cwd(), locked=True)
+
+
 def test_doctor_reports_changed_managed_asset(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

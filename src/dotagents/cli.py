@@ -19,12 +19,14 @@ from dotagents.runtime import (
   uninstall_existing,
   update_existing,
 )
+from dotagents.skillfile import edit_skillfile, skillfile_path, write_preset_skillfile
 from dotagents.version import package_version
 
 app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
 app.add_typer(providers_app, name="providers", help="Add or remove configured providers.")
 console = Console()
+DEFAULT_PRESET = "default"
 
 ProviderOption = Annotated[
   list[str] | None,
@@ -35,11 +37,36 @@ ProviderOption = Annotated[
 @app.command()
 def init(
   providers: ProviderOption = None,
+  with_preset: str | None = typer.Argument(
+    None, help="Preset name used with --with for noninteractive skill selection."
+  ),
+  with_skills: bool = typer.Option(
+    False, "--with", help="Choose skills. With no value, opens the Skillfile editor."
+  ),
+  locked: bool = typer.Option(False, "--locked", help="Require Skillfile and lockfile to match."),
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
 ) -> None:
   """Initialize the managed .agents runtime."""
   try:
-    operation_log = init_runtime(Path.cwd(), tuple(providers or ()), dry_run=dry_run)
+    if with_preset and not with_skills:
+      raise DotagentsError("preset selection requires --with")
+    if locked and with_skills:
+      raise DotagentsError("cannot combine --locked and --with")
+    missing_skillfile = not skillfile_path(Path.cwd()).exists()
+    should_select = with_skills or (not locked and not dry_run and missing_skillfile)
+    if should_select and with_preset:
+      if dry_run:
+        raise DotagentsError("cannot select skills during a dry run")
+      write_preset_skillfile(Path.cwd(), asset_root(), with_preset)
+    elif with_skills:
+      if dry_run:
+        raise DotagentsError("cannot select skills during a dry run")
+      edit_skillfile(Path.cwd(), asset_root())
+    elif should_select and missing_skillfile:
+      if dry_run:
+        raise DotagentsError("cannot select skills during a dry run")
+      write_preset_skillfile(Path.cwd(), asset_root(), DEFAULT_PRESET)
+    operation_log = init_runtime(Path.cwd(), tuple(providers or ()), dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)
@@ -62,11 +89,12 @@ def doctor() -> None:
 
 @app.command()
 def sync(
+  locked: bool = typer.Option(False, "--locked", help="Require Skillfile and lockfile to match."),
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
 ) -> None:
   """Repair generated runtime state from current configuration."""
   try:
-    operation_log = sync_existing(Path.cwd(), dry_run=dry_run)
+    operation_log = sync_existing(Path.cwd(), dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)
