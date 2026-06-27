@@ -17,7 +17,7 @@ def test_skillfile_resolves_presets_and_explicit_skills(tmp_path: Path) -> None:
 
   selected = resolve_skillfile(tmp_path, asset_root())
 
-  assert selected == ("git-guardrails", "research")
+  assert selected == ("startup", "git-guardrails", "research")
 
 
 def test_skillfile_rejects_unknown_skill(tmp_path: Path) -> None:
