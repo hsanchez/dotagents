@@ -19,6 +19,10 @@ dev = [
 EOF
 
 uv sync --reinstall-package dotagents
+cat >Skillfile <<EOF
+use safety
+skill research
+EOF
 uv run dotagents init --for claude --for copilot
 uv run dotagents doctor
 uv run dotagents list providers

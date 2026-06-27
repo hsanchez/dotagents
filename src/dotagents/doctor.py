@@ -7,7 +7,13 @@ from pathlib import Path
 
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import read_lock, sha256_file
-from dotagents.runtime import build_context, manifest_drift, relative, version_drift
+from dotagents.runtime import (
+  build_context,
+  compute_skillfile_sha256,
+  manifest_drift,
+  relative,
+  version_drift,
+)
 from dotagents.version import package_version
 
 
@@ -59,6 +65,14 @@ def doctor(repo_root: Path) -> DoctorResult:
   else:
     lines.append("lockfile: ok")
   lines.append(f"providers: {', '.join(lock.providers)}")
+  if lock.skills is not None:
+    lines.append(f"skills: {', '.join(lock.skills) or 'none'}")
+    if lock.skills != runtime_context.skills:
+      lines.append("Skillfile: selection differs from lockfile; run: uv run dotagents sync")
+      passed = False
+    elif lock.skillfile_sha256 != compute_skillfile_sha256(repo_root):
+      lines.append("Skillfile: changed since lockfile; run: uv run dotagents sync")
+      passed = False
 
   for asset in lock.assets:
     path = repo_root / asset.destination

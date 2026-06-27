@@ -23,6 +23,7 @@ from dotagents.manifest import (
   selected_entries,
   selected_providers,
 )
+from dotagents.skillfile import available_skills, resolve_skillfile, skillfile_path
 from dotagents.version import package_version
 
 
@@ -43,6 +44,7 @@ class RuntimeContext:
   asset_root: Path
   manifest: Manifest
   providers: tuple[str, ...]
+  skills: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,11 @@ def compute_manifest_sha256(runtime_context: RuntimeContext) -> str:
   return sha256_file(runtime_context.asset_root / "agents.toml")
 
 
+def compute_skillfile_sha256(repo_root: Path) -> str | None:
+  path = skillfile_path(repo_root)
+  return sha256_file(path) if path.exists() else None
+
+
 def manifest_drift(
   runtime_context: RuntimeContext, runtime_lock: RuntimeLock
 ) -> RuntimeManifestDrift | None:
@@ -98,12 +105,16 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
   manifest = load_manifest(assets)
   configured = requested_providers or configured_providers(root, manifest)
   providers = selected_providers(manifest, configured)
+  skills = (
+    resolve_skillfile(root, assets) if (root / "Skillfile").exists() else available_skills(assets)
+  )
   return RuntimeContext(
     repo_root=root,
     runtime_dir=root / ".agents",
     asset_root=assets,
     manifest=manifest,
     providers=providers,
+    skills=skills,
   )
 
 
@@ -115,12 +126,15 @@ def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]
 
 
 def init_runtime(
-  repo_root: Path, providers: tuple[str, ...], dry_run: bool = False
+  repo_root: Path, providers: tuple[str, ...], dry_run: bool = False, locked: bool = False
 ) -> OperationLog:
-  return sync_runtime(build_context(repo_root, providers), dry_run=dry_run)
+  runtime_context = build_context(repo_root, providers)
+  if locked:
+    validate_locked_runtime(runtime_context)
+  return sync_runtime(runtime_context, dry_run=dry_run, locked=locked)
 
 
-def sync_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
+def sync_existing(repo_root: Path, dry_run: bool = False, locked: bool = False) -> OperationLog:
   runtime_context = build_context(repo_root)
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
   if lock_path.exists():
@@ -131,9 +145,34 @@ def sync_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
     manifest = manifest_drift(runtime_context, runtime_lock)
     if manifest:
       raise DotagentsError(manifest.update_guidance())
-  operation_log = sync_runtime(runtime_context, dry_run=dry_run)
+  elif locked:
+    raise DotagentsError("cannot sync --locked: missing .agents/dotagents.lock")
+  if locked:
+    validate_locked_runtime(runtime_context)
+  operation_log = sync_runtime(runtime_context, dry_run=dry_run, locked=locked)
   operation_log.lines.append("sync used current dotagents package assets")
   return operation_log
+
+
+def validate_locked_runtime(runtime_context: RuntimeContext) -> RuntimeLock:
+  lock_path = runtime_context.runtime_dir / "dotagents.lock"
+  if not lock_path.exists():
+    raise DotagentsError("cannot use --locked: missing .agents/dotagents.lock")
+  if not skillfile_path(runtime_context.repo_root).exists():
+    raise DotagentsError("cannot use --locked: missing Skillfile")
+  runtime_lock = read_lock(lock_path)
+  drift = version_drift(runtime_lock)
+  if drift:
+    raise DotagentsError(drift.update_guidance())
+  manifest = manifest_drift(runtime_context, runtime_lock)
+  if manifest:
+    raise DotagentsError(manifest.update_guidance())
+  if runtime_lock.skills != runtime_context.skills:
+    raise DotagentsError("Skillfile selection differs from lockfile; run: uv run dotagents sync")
+  current_skillfile_sha256 = compute_skillfile_sha256(runtime_context.repo_root)
+  if runtime_lock.skillfile_sha256 != current_skillfile_sha256:
+    raise DotagentsError("Skillfile changed since lockfile; run: uv run dotagents sync")
+  return runtime_lock
 
 
 def update_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
@@ -267,6 +306,8 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       remaining_providers,
       remaining_assets,
       remaining_links,
+      skills=current_lock.skills,
+      skillfile_sha256=current_lock.skillfile_sha256,
     )
     operation_log.add(f"removed provider: {provider}")
   else:
@@ -275,7 +316,9 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   return operation_log
 
 
-def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> OperationLog:
+def sync_runtime(
+  runtime_context: RuntimeContext, dry_run: bool = False, locked: bool = False
+) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
   locked_assets: list[LockedAsset] = []
   locked_links: list[LockedLink] = []
@@ -297,17 +340,29 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
     )
   )
 
-  for entry in selected_entries(runtime_context.manifest, runtime_context.providers):
-    if entry.source == ".rules":
+  for entry in selected_entries(
+    runtime_context.manifest, runtime_context.providers, runtime_context.skills
+  ):
+    if entry.source in {".rules", "skills"}:
       continue
     source = runtime_context.asset_root / entry.source
     destination = runtime_destination(runtime_context.runtime_dir, entry)
     copy_path(runtime_context.repo_root, source, destination, operation_log)
     locked_assets.extend(lock_entries(runtime_context.repo_root, source, destination, entry.source))
 
+  for skill in runtime_context.skills:
+    source = runtime_context.asset_root / "skills" / skill
+    destination = runtime_context.runtime_dir / "skills" / skill
+    copy_path(runtime_context.repo_root, source, destination, operation_log)
+    locked_assets.extend(
+      lock_entries(runtime_context.repo_root, source, destination, f"skills/{skill}")
+    )
+
   render_rules(runtime_context, operation_log)
 
-  for entry in selected_entries(runtime_context.manifest, runtime_context.providers):
+  for entry in selected_entries(
+    runtime_context.manifest, runtime_context.providers, runtime_context.skills
+  ):
     if not entry.link:
       continue
     source = (
@@ -333,16 +388,24 @@ def sync_runtime(runtime_context: RuntimeContext, dry_run: bool = False) -> Oper
     runtime_context.repo_root, previous_lock, locked_links, operation_log
   )
   locked_links.extend(skipped_stale_links)
+  skipped_stale_assets = remove_stale_assets(
+    runtime_context.repo_root, previous_lock, locked_assets, operation_log
+  )
+  locked_assets.extend(skipped_stale_assets)
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
   else:
+    generated_at = previous_lock.generated_at if locked and previous_lock else None
     write_lock(
       lock_path,
       compute_manifest_sha256(runtime_context),
       runtime_context.providers,
       unique_locked_assets(locked_assets),
       unique_locked_links(locked_links),
+      skills=runtime_context.skills,
+      skillfile_sha256=compute_skillfile_sha256(runtime_context.repo_root),
+      generated_at=generated_at,
     )
     operation_log.add("wrote .agents/dotagents.lock")
 
@@ -374,7 +437,32 @@ def remove_stale_links(
   return skipped_links
 
 
+def remove_stale_assets(
+  repo_root: Path,
+  previous_lock: RuntimeLock | None,
+  locked_assets: list[LockedAsset],
+  operation_log: OperationLog,
+) -> list[LockedAsset]:
+  if previous_lock is None:
+    return []
+
+  current_destinations = {asset.destination for asset in locked_assets}
+  skipped_assets: list[LockedAsset] = []
+  prune_candidates: set[Path] = set()
+  for asset in previous_lock.assets:
+    if asset.destination in current_destinations:
+      continue
+    destination = repo_root / asset.destination
+    if not remove_locked_asset(repo_root, destination, asset.sha256, operation_log):
+      skipped_assets.append(asset)
+    collect_parents(repo_root, destination, prune_candidates)
+  prune_empty_dirs(repo_root, prune_candidates, operation_log)
+  return skipped_assets
+
+
 def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
+  if entry.source == "skills":
+    return runtime_dir / "skills"
   source = Path(entry.source)
   first = source.parts[0]
   if first in {"scripts", "skills"}:

@@ -14,6 +14,7 @@ class SyncEntry:
   destination: str
   link: bool = True
   provider: str | None = None
+  skill: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,11 +78,13 @@ def selected_providers(manifest: Manifest, requested: tuple[str, ...]) -> tuple[
   return tuple(dict.fromkeys(requested))
 
 
-def selected_entries(manifest: Manifest, providers: tuple[str, ...]) -> tuple[SyncEntry, ...]:
+def selected_entries(
+  manifest: Manifest, providers: tuple[str, ...], skills: tuple[str, ...] = ()
+) -> tuple[SyncEntry, ...]:
   entries = list(manifest.global_sync)
   for provider in providers:
     entries.extend(manifest.provider_sync.get(provider, ()))
-  return tuple(entries)
+  return tuple(entry for entry in entries if entry.skill is None or entry.skill in skills)
 
 
 def _parse_entries(scope: str, entries: object, provider: str | None) -> list[SyncEntry]:
@@ -101,7 +104,12 @@ def _parse_entries(scope: str, entries: object, provider: str | None) -> list[Sy
     link = entry.get("link", True)
     if not isinstance(link, bool):
       raise DotagentsError(f"agents.toml: {scope}.link must be a boolean")
-    parsed.append(SyncEntry(source=source, destination=destination, link=link, provider=provider))
+    skill = entry.get("skill")
+    if skill is not None and (not isinstance(skill, str) or not skill):
+      raise DotagentsError(f"agents.toml: {scope}.skill must be a non-empty string")
+    parsed.append(
+      SyncEntry(source=source, destination=destination, link=link, provider=provider, skill=skill)
+    )
   return parsed
 
 

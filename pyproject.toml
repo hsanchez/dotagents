@@ -38,6 +38,7 @@ artifacts = ["src/dotagents/py.typed"]
 "rules" = "dotagents/_assets/rules"
 "scripts" = "dotagents/_assets/scripts"
 "skills" = "dotagents/_assets/skills"
+"presets" = "dotagents/_assets/presets"
 "claude" = "dotagents/_assets/claude"
 "codex" = "dotagents/_assets/codex"
 "copilot" = "dotagents/_assets/copilot"

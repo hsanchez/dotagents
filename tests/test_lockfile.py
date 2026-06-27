@@ -12,12 +12,24 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
   assets = [LockedAsset("scripts/review", ".agents/scripts/review", "abc123")]
   links = [LockedLink("CLAUDE.md", ".rules", "claude")]
 
-  write_lock(lock_path, manifest_sha256, ("claude", "copilot"), assets, links)
+  write_lock(
+    lock_path,
+    manifest_sha256,
+    ("claude", "copilot"),
+    assets,
+    links,
+    skills=("research",),
+    skillfile_sha256="a" * 64,
+    generated_at="2026-06-26T00:00:00+00:00",
+  )
   runtime_lock = read_lock(lock_path)
 
   assert runtime_lock.lockfile_version == 1
   assert runtime_lock.manifest_sha256 == manifest_sha256
   assert runtime_lock.providers == ("claude", "copilot")
+  assert runtime_lock.skills == ("research",)
+  assert runtime_lock.skillfile_sha256 == "a" * 64
+  assert runtime_lock.generated_at == "2026-06-26T00:00:00+00:00"
   assert runtime_lock.assets == tuple(assets)
   assert runtime_lock.links == tuple(links)
 
@@ -26,41 +38,48 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
   ("content", "message"),
   [
     (
-      'version = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n',
+      'version = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
       "lockfile_version must be an integer",
     ),
     (
-      'lockfile_version = "1"\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n',
+      'lockfile_version = "1"\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
       "lockfile_version must be an integer",
     ),
     (
-      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
       "lockfile_version must be 1",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nproviders = "claude"\n',
+      'lockfile_version = 1\nversion = "0.1.0"\nproviders = "claude"\ngenerated_at = "now"\n',
       "providers must be a string array",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\nassets = ["bad"]\n',
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\nassets = ["bad"]\n',
       "lockfile assets must be tables",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n[[assets]]\nsource = "x"\n',
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n[[assets]]\nsource = "x"\n',
       "asset entries require source, destination, sha256",
     ),
-    ("lockfile_version = 1\nproviders = []\n", "version must be a non-empty string"),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nproviders = []\n',
+      'lockfile_version = 1\nproviders = []\ngenerated_at = "now"\n',
+      "version must be a non-empty string",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nproviders = []\ngenerated_at = "now"\n',
       "manifest_sha256 must be a non-empty string",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\nlinks = ["bad"]\n',
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\nlinks = ["bad"]\n',
       "lockfile links must be tables",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n[[links]]\ndestination = "x"\n',
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n[[links]]\ndestination = "x"\n',
       "link entries require destination and target",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = ""\n',
+      "generated_at must be a non-empty string",
     ),
   ],
 )

@@ -40,6 +40,54 @@ def test_init_dry_run_command_does_not_write_runtime(
   assert not (tmp_path / ".agents").exists()
 
 
+def test_init_without_skillfile_writes_default_skillfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["init", "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert (tmp_path / "Skillfile").read_text(encoding="utf-8") == "use default\n"
+  assert (tmp_path / ".agents" / "skills" / "research").is_dir()
+  assert (tmp_path / ".agents" / "skills" / "git-guardrails").is_dir()
+
+
+def test_init_with_preset_writes_skillfile_and_runtime(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["init", "--for", "claude", "--with", "review"])
+
+  assert result.exit_code == 0
+  assert (tmp_path / "Skillfile").read_text(encoding="utf-8") == "use review\n"
+  assert (tmp_path / ".agents" / "skills" / "research").is_dir()
+
+
+def test_init_with_skill_name_rejects_preset_value(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["init", "--for", "claude", "--with", "research"])
+
+  assert result.exit_code == 1
+  assert "--with accepts presets only" in result.output
+
+
+def test_init_with_preset_rejects_existing_conflicting_skillfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  (tmp_path / "Skillfile").write_text("use safety\n", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--for", "claude", "--with", "review"])
+
+  assert result.exit_code == 1
+  assert "Skillfile already exists and differs from --with review" in result.output
+
+
 def test_doctor_command_fails_without_runtime(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
