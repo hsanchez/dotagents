@@ -61,8 +61,9 @@ explicitly asks for that mode.
 
 `review-code` defines the review protocol.
 
-Reviewer CLIs consume the prompt. The audit skill coordinates execution,
-normalization, clustering, agreement filtering, and reporting.
+Reviewer CLIs independently evaluate the same canonical prompt. The audit skill
+coordinates execution, finding extraction, clustering, agreement filtering, and
+reporting.
 
 # Standard Audit
 
@@ -111,25 +112,28 @@ enabled.
 
 ```text
 review-code
-    ↓
+      ↓
 canonical review prompt
-    ↓
-independent reviewer CLIs (audit-output-01, audit-output-02, ...)
-    ↓
-normalized findings
-    ↓
+      ↓
+independent reviewer execution
+      ↓
+review artifacts
+(manifest + outputs)
+      ↓
+finding extraction
+      ↓
 semantic clustering
-    ↓
+      ↓
 agreement filtering
-    ↓
+      ↓
 consensus report
 ```
 
 ## Reviewer Backends
 
-Each backend is a named external CLI. Do not pre-check availability. Run the
-selected backend immediately and handle `command not found` or unsupported flags
-as failures.
+Each backend is a named reviewer implemented by an external CLI. Do not
+pre-check availability. Run the selected backend immediately and handle
+`command not found` or unsupported flags as failures.
 
 | Backend        | CLI        | Notes                                         |
 |----------------|------------|-----------------------------------------------|
@@ -140,8 +144,8 @@ as failures.
 | codex          | codex      | OpenAI Codex CLI (`codex exec --sandbox ...`) |
 | agy            | agy        | Antigravity CLI (`--sandbox` required)        |
 
-Exact model names and flags are implementation details. Use the best invocation
-the installed CLI version supports.
+The invocations below are preferred defaults. If a CLI version does not support
+one of them, retry once using the closest documented equivalent.
 
 Safety note: Always pass `--sandbox` to `agy`. In `-p`/`--print` mode it may
 auto-approve tool calls; `--sandbox` enforces isolation. Also, `agy -p` may drop
@@ -242,21 +246,16 @@ Do not re-run `review-code`.
 
 ## Execution
 
-Assign each selected reviewer a number based on selection order:
-
-```text
-reviewer 1 → $OUTPUT_DIR/audit-output-01
-reviewer 2 → $OUTPUT_DIR/audit-output-02
-reviewer 3 → $OUTPUT_DIR/audit-output-03
-...
-```
+Output filenames are opaque identifiers. Each reviewer writes to a unique file
+inside `$OUTPUT_DIR`. The manifest is the source of truth for the mapping from
+reviewer name to output file.
 
 Run selected reviewers independently. Prefer parallel execution when supported.
 Set a timeout of 600000 milliseconds for each reviewer process.
 
-Use best-effort invocations for the installed CLI version. If a flag is rejected,
-retry once with the closest supported equivalent. If still failing, mark that
-reviewer as failed.
+Use the documented invocation below. If a flag is rejected, inspect the CLI help
+once and retry with the closest equivalent. If still failing, mark that reviewer
+as failed.
 
 For each reviewer, run the invocation and register it in the manifest:
 
@@ -298,8 +297,6 @@ printf '%s\t%s\n' "agy" "$OUTPUT_DIR/audit-output-NN" \
   >> "$OUTPUT_DIR/manifest.tsv"
 ```
 
-Replace `NN` with the reviewer's assigned number (`01`, `02`, `03`, ...).
-
 Only write a manifest entry on success. A failed reviewer has no output file and
 no manifest entry. Aggregation reads `manifest.tsv` to map output files to
 reviewer names.
@@ -318,10 +315,10 @@ Default execution quorum: 2 successful reviewers.
 If fewer than 2 reviewers succeed, abort the audit and report which reviewers
 failed.
 
-## Normalization
+## Finding Extraction
 
 Read `$OUTPUT_DIR/manifest.tsv` to map each output file to its reviewer name.
-Normalize each output file into a common finding structure:
+Parse and normalize each output file into a common finding structure:
 
 ```text
 ReviewFinding
@@ -546,9 +543,9 @@ Agent:
 - Checks for untracked files.
 - Shows diff stats.
 - Runs review-code once.
-- Runs all three reviewers against the same prompt, writing outputs to
-  $OUTPUT_DIR/audit-output-01, audit-output-02, audit-output-03.
-- Normalizes outputs.
+- Runs all three reviewers against the same prompt, writing outputs and
+  manifest entries to $OUTPUT_DIR.
+- Extracts and normalizes findings from each output file.
 - Clusters equivalent findings.
 - Reports only findings with agreement >= 2.
 ```
@@ -560,7 +557,8 @@ User: /audit multi-model --reviewers claude,codex,agy
 Agent:
 - Shows diff stats.
 - Generates one canonical review prompt.
-- Runs claude → $OUTPUT_DIR/audit-output-01, codex → audit-output-02, agy → audit-output-03.
+- Runs claude, codex, and agy independently, writing each output and manifest
+  entry to $OUTPUT_DIR.
 - Reports consensus findings and reviewer failures.
 ```
 
@@ -568,9 +566,9 @@ Agent:
 
 ```text
 Agent:
-- Runs claude ($OUTPUT_DIR/audit-output-01), codex (audit-output-02), agy (audit-output-03).
-- codex fails with command not found.
-- claude and agy succeed.
+- Runs claude, codex, and agy independently.
+- codex fails with command not found; no output file or manifest entry written.
+- claude and agy succeed; their outputs and manifest entries are written to $OUTPUT_DIR.
 - Execution quorum is met.
 - Consensus is computed from the two successful reviewer outputs.
 - Summary notes that codex was unavailable.
