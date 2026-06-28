@@ -16,6 +16,8 @@ Frame the question
         ↓
 Assemble the council
         ↓
+Launch child agents
+        ↓
 Independent investigation
         ↓
 Structured reports
@@ -113,7 +115,23 @@ Avoid assigning every member the same perspective.
 
 #### 2.3 Configure execution
 
-When different children require different models, launch separate `run_agents` calls because model selection is run-wide.
+Use the active subagent launch mechanism to create the council.
+
+If a reusable `run_agents` launcher is available, use it. Otherwise use the
+active harness's native subagent-launch mechanism while preserving the same
+execution protocol.
+
+The launch mechanism should support:
+
+- assigning each child its model (or closest supported substitute);
+- assigning each child its perspective;
+- passing the same council question and decision criteria to every child;
+- enforcing read-only or isolated-worktree execution;
+- collecting structured reports;
+- sending follow-up questions to existing children when additional evidence is needed.
+
+When the active launcher applies model selection per run rather than per child,
+launch separate runs for different models.
 
 When using non-default harnesses, choose valid model identifiers for that environment.
 
@@ -127,7 +145,7 @@ For implementation or prototyping councils, give each child its own git worktree
 
 For explicit orchestration requests, briefly tell the user which council members will be launched and what each will investigate.
 
-Wait for approval before calling `run_agents`.
+Wait for approval before launching child agents.
 
 The shared brief should include:
 
