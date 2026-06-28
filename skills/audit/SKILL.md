@@ -8,8 +8,7 @@ allowed-tools: Bash Read Glob Grep AskUserQuestion
 
 Audit code changes.
 
-`review-code` is the custom script that constructs the review prompt. Reviewer
-backends are external CLIs that consume that prompt.
+`review-code` is the custom script that constructs the review prompt. Reviewer backends are external CLIs that consume that prompt.
 
 ## When to Use
 
@@ -43,8 +42,7 @@ Audit mode?
 
 Run `review-code` exactly once per audit.
 
-Every reviewer must review the exact same prompt produced by that single
-`review-code` invocation.
+Every reviewer must review the exact same prompt produced by that single `review-code` invocation.
 
 Do not re-run `review-code` per reviewer.
 
@@ -54,16 +52,13 @@ Reviewers must not see each other's outputs.
 
 Each reviewer receives only the canonical review prompt.
 
-Do not run iterative, conversational, or cross-informed review unless the user
-explicitly asks for that mode.
+Do not run iterative, conversational, or cross-informed review unless the user explicitly asks for that mode.
 
 ## Stable Interface Invariant
 
 `review-code` defines the review protocol.
 
-Reviewer CLIs independently evaluate the same canonical prompt. The audit skill
-coordinates execution, finding extraction, clustering, agreement filtering, and
-reporting.
+Reviewer CLIs independently evaluate the same canonical prompt. The audit skill coordinates execution, finding extraction, clustering, agreement filtering, and reporting.
 
 # Standard Audit
 
@@ -75,8 +70,7 @@ Run from the repository root.
    git ls-files --others --exclude-standard
    ```
 
-   If any exist, inform the user that untracked files are omitted by
-   `review-code` and `git diff`.
+   If any exist, inform the user that untracked files are omitted by `review-code` and `git diff`.
 
    Suggest:
 
@@ -94,8 +88,7 @@ Run from the repository root.
 
 3. Treat the output as a review prompt.
 
-   `review-code` produces the prompt. The current model consumes that prompt and
-   produces the actual audit findings.
+   `review-code` produces the prompt. The current model consumes that prompt and produces the actual audit findings.
 
 4. Present findings with file and line references where possible.
 
@@ -105,8 +98,7 @@ Run from the repository root.
 
 Run multiple independent reviewer CLIs against the same review prompt.
 
-Only report findings that satisfy the agreement threshold unless verbose mode is
-enabled.
+Only report findings that satisfy the agreement threshold unless verbose mode is enabled.
 
 ## Review Pipeline
 
@@ -131,9 +123,7 @@ consensus report
 
 ## Reviewer Backends
 
-Each backend is a named reviewer implemented by an external CLI. Do not
-pre-check availability. Run the selected backend immediately and handle
-`command not found` or unsupported flags as failures.
+Each backend is a named reviewer implemented by an external CLI. Do not pre-check availability. Run the selected backend immediately and handle `command not found` or unsupported flags as failures.
 
 | Backend        | CLI        | Notes                                         |
 |----------------|------------|-----------------------------------------------|
@@ -144,20 +134,15 @@ pre-check availability. Run the selected backend immediately and handle
 | codex          | codex      | OpenAI Codex CLI (`codex exec --sandbox ...`) |
 | agy            | agy        | Antigravity CLI (`--sandbox` required)        |
 
-The invocations below are preferred defaults. If a CLI version does not support
-one of them, retry once using the closest documented equivalent.
+The invocations below are preferred defaults. If a CLI version does not support one of them, retry once using the closest documented equivalent.
 
-Safety note: Always pass `--sandbox` to `agy`. In `-p`/`--print` mode it may
-auto-approve tool calls; `--sandbox` enforces isolation. Also, `agy -p` may drop
-stdout in non-TTY contexts, so pass the prompt inline rather than via stdin when
-needed.
+Safety note: Always pass `--sandbox` to `agy`. In `-p`/`--print` mode it may auto-approve tool calls; `--sandbox` enforces isolation. Also, `agy -p` may drop stdout in non-TTY contexts, so pass the prompt inline rather than via stdin when needed.
 
 Require at least 2 selected reviewer backends.
 
 ## Gather Context
 
-Ask the user for any parameters not already provided. Ask once, combining
-questions where possible.
+Ask the user for any parameters not already provided. Ask once, combining questions where possible.
 
 **Question 1 — Reviewers**
 Skip if reviewers were already specified.
@@ -169,8 +154,7 @@ Which reviewer combination should I use?
 - copilot-claude + claude + agy
 - Custom — I'll specify
 
-Require at least 2 reviewer backends. If the user picks fewer, ask them to add
-another.
+Require at least 2 reviewer backends. If the user picks fewer, ask them to add another.
 
 **Question 2 — Verbosity**
 Skip if already specified.
@@ -193,8 +177,7 @@ git ls-files --others --exclude-standard
 
 If any exist, stop and tell the user:
 
-`review-code` and `git diff` ignore untracked files. These files would be silently
-omitted from the audit.
+`review-code` and `git diff` ignore untracked files. These files would be silently omitted from the audit.
 
 Suggest:
 
@@ -210,14 +193,11 @@ Next show diff stats:
 git diff --stat HEAD
 ```
 
-If the diff is empty, stop and tell the user there are no uncommitted changes to
-audit.
+If the diff is empty, stop and tell the user there are no uncommitted changes to audit.
 
-If the diff exceeds 2000 changed lines, warn the user and ask whether to proceed
-or narrow the scope.
+If the diff exceeds 2000 changed lines, warn the user and ask whether to proceed or narrow the scope.
 
-If the user proceeds and `agy` is selected, warn that large prompts may exceed
-shell argument limits.
+If the user proceeds and `agy` is selected, warn that large prompts may exceed shell argument limits.
 
 ## Review Input
 
@@ -246,16 +226,11 @@ Do not re-run `review-code`.
 
 ## Execution
 
-Output filenames are opaque identifiers. Each reviewer writes to a unique file
-inside `$OUTPUT_DIR`. The manifest is the source of truth for the mapping from
-reviewer name to output file.
+Output filenames are opaque identifiers. Each reviewer writes to a unique file inside `$OUTPUT_DIR`. The manifest is the source of truth for the mapping from reviewer name to output file.
 
-Run selected reviewers independently. Prefer parallel execution when supported.
-Set a timeout of 600000 milliseconds for each reviewer process.
+Run selected reviewers independently. Prefer parallel execution when supported. Set a timeout of 600000 milliseconds for each reviewer process.
 
-Use the documented invocation below. If a flag is rejected, inspect the CLI help
-once and retry with the closest equivalent. If still failing, mark that reviewer
-as failed.
+Use the documented invocation below. If a flag is rejected, inspect the CLI help once and retry with the closest equivalent. If still failing, mark that reviewer as failed.
 
 For each reviewer, run the invocation and register it in the manifest:
 
@@ -297,12 +272,9 @@ printf '%s\t%s\n' "agy" "$OUTPUT_DIR/audit-output-NN" \
   >> "$OUTPUT_DIR/manifest.tsv"
 ```
 
-Only write a manifest entry on success. A failed reviewer has no output file and
-no manifest entry. Aggregation reads `manifest.tsv` to map output files to
-reviewer names.
+Only write a manifest entry on success. A failed reviewer has no output file and no manifest entry. Aggregation reads `manifest.tsv` to map output files to reviewer names.
 
-If a CLI does not accept stdin, pass the prompt file as a file argument or inline
-prompt according to that CLI's supported behavior.
+If a CLI does not accept stdin, pass the prompt file as a file argument or inline prompt according to that CLI's supported behavior.
 
 If a reviewer fails, continue if execution quorum remains satisfied.
 
@@ -312,13 +284,11 @@ Execution quorum is separate from agreement threshold.
 
 Default execution quorum: 2 successful reviewers.
 
-If fewer than 2 reviewers succeed, abort the audit and report which reviewers
-failed.
+If fewer than 2 reviewers succeed, abort the audit and report which reviewers failed.
 
 ## Finding Extraction
 
-Read `$OUTPUT_DIR/manifest.tsv` to map each output file to its reviewer name.
-Parse and normalize each output file into a common finding structure:
+Read `$OUTPUT_DIR/manifest.tsv` to map each output file to its reviewer name. Parse and normalize each output file into a common finding structure:
 
 ```text
 ReviewFinding
@@ -349,8 +319,7 @@ Preferred fields:
 - confidence
 - fingerprint
 
-If a reviewer returns prose instead of structured findings, extract findings
-conservatively.
+If a reviewer returns prose instead of structured findings, extract findings conservatively.
 
 Do not invent file or line references.
 
@@ -366,8 +335,7 @@ Examples:
 - "Unsanitized database input"
 - "Raw query construction from user input"
 
-These should cluster into one issue if they refer to the same code path and same
-bug.
+These should cluster into one issue if they refer to the same code path and same bug.
 
 Clustering should consider:
 
@@ -389,8 +357,7 @@ Rejected findings are hidden by default.
 
 ## Severity Reconciliation
 
-When reviewers disagree on severity, choose the highest severity only if the
-description supports it.
+When reviewers disagree on severity, choose the highest severity only if the description supports it.
 
 Otherwise choose the median practical severity.
 
@@ -488,8 +455,7 @@ If aggregation fails:
 
 ## Cleanup
 
-Scratch files must be removed regardless of success, failure, timeout, reviewer
-failure, or user cancellation.
+Scratch files must be removed regardless of success, failure, timeout, reviewer failure, or user cancellation.
 
 After aggregation completes (or on failure), run cleanup as an explicit final step:
 
@@ -498,8 +464,7 @@ rm -f "${PROMPT_FILE:-}"
 rm -rf "${OUTPUT_DIR:-}"
 ```
 
-If the run was interrupted before cleanup, stale files remain under `.scratch/`.
-Inform the user and suggest:
+If the run was interrupted before cleanup, stale files remain under `.scratch/`. Inform the user and suggest:
 
 ```bash
 rm -f .scratch/review-prompt.* && rm -rf .scratch/audit-outputs.*
