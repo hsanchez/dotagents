@@ -39,6 +39,8 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".agents" / "dotagents.lock").exists()
   assert (tmp_path / ".agents" / "skills" / "audit").is_dir()
   assert (tmp_path / ".agents" / "skills" / "clarify").is_dir()
+  assert (tmp_path / ".agents" / "skills" / "council").is_dir()
+  assert (tmp_path / ".agents" / "skills" / "cross-critique").is_dir()
   assert (tmp_path / ".agents" / "skills" / "git-guardrails").is_dir()
   assert (tmp_path / ".agents" / "skills" / "handoff").is_dir()
   assert (tmp_path / ".agents" / "skills" / "research").is_dir()

@@ -21,6 +21,9 @@ EOF
 uv sync --reinstall-package dotagents
 cat >Skillfile <<EOF
 use safety
+skill audit
+skill council
+skill cross-critique
 skill research
 EOF
 uv run dotagents init --for claude --for copilot
@@ -34,6 +37,8 @@ test -f .rules
 test -f .agents/dotagents.lock
 test -f .agents/agents.toml
 test -f .agents/skills/audit/SKILL.md
+test -f .agents/skills/council/SKILL.md
+test -f .agents/skills/cross-critique/SKILL.md
 test -f .agents/skills/git-guardrails/scripts/block-dangerous-git
 test -f .agents/skills/research/SKILL.md
 test -f .agents/scripts/review-code
@@ -49,13 +54,13 @@ test ! -f .agents/agent
 test ! -d .agents/claude
 test ! -d .agents/copilot
 
-printf '%s' '{"tool_input":{"command":"git reset --hard"}}' \
-  | uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git >"$smoke_dir/claude-hook.out" 2>&1 \
-  && exit 1 || test "$?" -eq 2
+printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
+  uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git >"$smoke_dir/claude-hook.out" 2>&1 &&
+  exit 1 || test "$?" -eq 2
 
-printf '%s' '{"toolInput":{"command":"git clean -fd"}}' \
-  | uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot \
-  | grep -q '"permissionDecision": "deny"'
+printf '%s' '{"toolInput":{"command":"git clean -fd"}}' |
+  uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot |
+  grep -q '"permissionDecision": "deny"'
 
 uv run dotagents uninstall --dry-run
 test -d .agents

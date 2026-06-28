@@ -39,7 +39,10 @@ def test_default_preset_resolves_all_supported_skills() -> None:
   selected = resolve_preset("default", asset_root())
 
   assert selected == (
+    "audit",
     "clarify",
+    "council",
+    "cross-critique",
     "git-guardrails",
     "handoff",
     "research",
