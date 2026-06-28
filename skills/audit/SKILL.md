@@ -1,19 +1,30 @@
 ---
 name: audit
 description: Audit code changes using either a standard review or a multi-model consensus review.
+allowed-tools: Bash Read Glob Grep AskUserQuestion
 ---
 
 # Audit Diff
 
 Audit code changes.
 
+`review-code` is the custom script that constructs the review prompt. Reviewer
+backends are external CLIs that consume that prompt.
+
+## When to Use
+
+- Reviewing uncommitted code changes.
+- Checking changes before committing or opening a PR.
+- Getting independent review signal from multiple models.
+- Filtering review noise through agreement-based consensus.
+
 ## When NOT to Use
 
-- **Standard audit**: `review-code` command is unavailable.
-- **Multi-model audit**: fewer than 2 reviewer CLIs are installed.
-- No reviewable changes exist (empty diff).
-- Auditing non-code files only (documentation, config with no logic).
-- You want the current model's own inline review — just ask it directly.
+- **Standard audit**: `review-code` is unavailable.
+- **Multi-model audit**: fewer than 2 reviewer CLIs are available.
+- No reviewable changes exist.
+- Auditing non-code files only.
+- The user wants the current model's own inline review — just ask directly.
 
 ## Audit Mode
 
@@ -26,33 +37,99 @@ Audit mode?
 - Standard audit
 - Multi-model audit
 
+# Core Invariants
+
+## Single Prompt Invariant
+
+Run `review-code` exactly once per audit.
+
+Every reviewer must review the exact same prompt produced by that single
+`review-code` invocation.
+
+Do not re-run `review-code` per reviewer.
+
+## Reviewer Independence Invariant
+
+Reviewers must not see each other's outputs.
+
+Each reviewer receives only the canonical review prompt.
+
+Do not run iterative, conversational, or cross-informed review unless the user
+explicitly asks for that mode.
+
+## Stable Interface Invariant
+
+`review-code` defines the review protocol.
+
+Reviewer CLIs consume the prompt. The audit skill coordinates execution,
+normalization, clustering, agreement filtering, and reporting.
+
 # Standard Audit
 
-At the root of the repository, run
+Run from the repository root.
 
-1. Check for untracked files that would be silently omitted:
+1. Check for untracked files:
+
    ```bash
    git ls-files --others --exclude-standard
    ```
-   If any exist, inform the user and suggest `git add -N <file>` to stage with
-   intent-to-add, then stop — let the user re-invoke after staging.
-2. Run `scripts/review-code` or `review-code` to generate the review prompt.
-3. Pipe the prompt to the current model and present its findings.
-4. Stop.
 
-`review-code` produces a prompt, not a review. The current model must
-consume it and produce the actual findings.
+   If any exist, inform the user that untracked files are omitted by
+   `review-code` and `git diff`.
+
+   Suggest:
+
+   ```bash
+   git add -N <file>
+   ```
+
+   Then stop and let the user re-invoke after staging with intent-to-add.
+
+2. Run `review-code` once:
+
+   ```bash
+   scripts/review-code 2>/dev/null || review-code
+   ```
+
+3. Treat the output as a review prompt.
+
+   `review-code` produces the prompt. The current model consumes that prompt and
+   produces the actual audit findings.
+
+4. Present findings with file and line references where possible.
+
+5. Stop.
 
 # Multi-Model Audit
 
-Run multiple independent reviewers in parallel against the same review input and
-report only findings that satisfy the configured agreement threshold.
+Run multiple independent reviewer CLIs against the same review prompt.
+
+Only report findings that satisfy the agreement threshold unless verbose mode is
+enabled.
+
+## Review Pipeline
+
+```text
+review-code
+    ↓
+canonical review prompt
+    ↓
+independent reviewer CLIs (audit-output-01, audit-output-02, ...)
+    ↓
+normalized findings
+    ↓
+semantic clustering
+    ↓
+agreement filtering
+    ↓
+consensus report
+```
 
 ## Reviewer Backends
 
-Each backend is a named CLI tool. Do not pre-check availability — run
-the selected backend immediately and handle `command not found` on
-failure (see Error Handling).
+Each backend is a named external CLI. Do not pre-check availability. Run the
+selected backend immediately and handle `command not found` or unsupported flags
+as failures.
 
 | Backend        | CLI        | Notes                                         |
 |----------------|------------|-----------------------------------------------|
@@ -63,268 +140,438 @@ failure (see Error Handling).
 | codex          | codex      | OpenAI Codex CLI (`codex exec --sandbox ...`) |
 | agy            | agy        | Antigravity CLI (`--sandbox` required)        |
 
-**Safety note:** Always pass `--sandbox` to `agy`. In `-p`/`--print` mode it
-auto-approves all tool calls; `--sandbox` enforces isolation. Also, `agy -p`
-drops stdout in non-TTY contexts (issue #76) — pass the prompt inline, not via
-stdin pipe.
+Exact model names and flags are implementation details. Use the best invocation
+the installed CLI version supports.
 
-Exact model names and flags are implementation details — use the best
-invocation the installed CLI version supports.
+Safety note: Always pass `--sandbox` to `agy`. In `-p`/`--print` mode it may
+auto-approve tool calls; `--sandbox` enforces isolation. Also, `agy -p` may drop
+stdout in non-TTY contexts, so pass the prompt inline rather than via stdin when
+needed.
+
+Require at least 2 selected reviewer backends.
 
 ## Gather Context
 
-Ask the user for any parameters not already provided. Combine into a
-single prompt (max 2 questions). Skip questions already answered in
-the invocation.
+Ask the user for any parameters not already provided. Ask once, combining
+questions where possible.
 
-**Question 1 — Reviewers** (skip if specified):
+**Question 1 — Reviewers**
+Skip if reviewers were already specified.
 
-    Which reviewer combination should I use?
-    - copilot-claude + copilot-gpt + copilot-gemini
-    - claude + codex + agy
-    - copilot-claude + claude + agy
-    - Custom — I'll specify
+Which reviewer combination should I use?
 
-Require at least 2 reviewer backends. If the user picks fewer, ask them
-to add another.
+- copilot-claude + copilot-gpt + copilot-gemini
+- claude + codex + agy
+- copilot-claude + claude + agy
+- Custom — I'll specify
+
+Require at least 2 reviewer backends. If the user picks fewer, ask them to add
+another.
+
+**Question 2 — Verbosity**
+Skip if already specified.
+
+How much output should I show?
+
+- Consensus only
+- Consensus + rejected single-reviewer findings
+- Full verbose output with per-reviewer details
+
+Default: Consensus only.
 
 ## Diff Preview
 
-After collecting answers, always check for untracked files first:
+Always check for untracked files first:
 
 ```bash
 git ls-files --others --exclude-standard
 ```
 
-If any exist, inform the user: `review-code` and `git diff` both ignore untracked
-files — they will be silently omitted even when tracked edits are present. Suggest
-staging with intent-to-add first:
+If any exist, stop and tell the user:
+
+`review-code` and `git diff` ignore untracked files. These files would be silently
+omitted from the audit.
+
+Suggest:
 
 ```bash
 git add -N <file>
 ```
 
-Then stop — let the user re-invoke after staging.
+Then let the user re-invoke the audit.
 
-Then show diff stats:
+Next show diff stats:
 
 ```bash
 git diff --stat HEAD
 ```
 
-If the diff is empty, the Review Input step will detect it and stop.
+If the diff is empty, stop and tell the user there are no uncommitted changes to
+audit.
 
-If the diff exceeds 2000 changed lines, warn the user and ask whether
-to proceed before continuing. If they proceed and `agy` is a selected
-backend, warn that large prompts may exceed shell argument limits (`E2BIG`)
-and suggest removing `agy` from the reviewer set.
+If the diff exceeds 2000 changed lines, warn the user and ask whether to proceed
+or narrow the scope.
+
+If the user proceeds and `agy` is selected, warn that large prompts may exceed
+shell argument limits.
 
 ## Review Input
 
-Run `review-code` once and write the output to a repo-local scratch file.
-Clean up all scratch files after the review completes (or fails).
+Create a per-run scratch directory and generate the canonical review prompt:
 
 ```bash
 mkdir -p .scratch
+OUTPUT_DIR=$(mktemp -d .scratch/audit-outputs.XXXXXX)
 PROMPT_FILE=$(mktemp .scratch/review-prompt.XXXXXX)
 (scripts/review-code 2>/dev/null || review-code) > "$PROMPT_FILE"
 ```
 
-Check for the no-changes sentinel before proceeding:
+Check for the no-changes sentinel:
 
 ```bash
 if grep -qF "No uncommitted changes to review." "$PROMPT_FILE"; then
   rm -f "$PROMPT_FILE"
-  # stop — inform user and exit
+  rm -rf "$OUTPUT_DIR"
+  # stop — inform user
 fi
 ```
 
-All reviewers read from `$PROMPT_FILE`. Do not re-run `review-code` per
-reviewer.
+All reviewers must consume `$PROMPT_FILE`.
+
+Do not re-run `review-code`.
 
 ## Execution
 
-Run all selected reviewers in parallel. Issue all Bash calls in a single
-response. Do not run sequentially unless the shell cannot support parallel
-execution.
+Assign each selected reviewer a number based on selection order:
 
-Adapt invocation per backend. Set `timeout: 600000` on each Bash call.
-All backends read from the shared `$PROMPT_FILE` written in Review Input.
-
-The invocations below are best-effort patterns. Exact flags depend on
-the installed CLI version — if a flag is rejected, check `--help` and
-adapt. In particular, verify that `gh copilot suggest` accepts stdin.
-
-```bash
-# copilot-claude
-gh copilot suggest --model claude-sonnet < "$PROMPT_FILE"
-
-# copilot-gpt
-gh copilot suggest --model gpt-4.1 < "$PROMPT_FILE"
-
-# copilot-gemini
-gh copilot suggest --model gemini-pro < "$PROMPT_FILE"
-
-# claude
-claude --print < "$PROMPT_FILE"
-
-# codex
-CODEX_OUT=$(mktemp .scratch/codex-output.XXXXXX)
-codex exec --sandbox read-only --ephemeral -o "$CODEX_OUT" - < "$PROMPT_FILE"
-cat "$CODEX_OUT"
-
-# agy (inline prompt — stdin pipe drops stdout in non-TTY, see issue #76)
-# Large prompts risk E2BIG; skip agy or abort if the diff exceeds ~2000 lines.
-agy --sandbox --print "$(cat "$PROMPT_FILE")"
+```text
+reviewer 1 → $OUTPUT_DIR/audit-output-01
+reviewer 2 → $OUTPUT_DIR/audit-output-02
+reviewer 3 → $OUTPUT_DIR/audit-output-03
+...
 ```
 
-If a CLI does not accept stdin, pass `$PROMPT_FILE` as a file argument
-instead.
+Run selected reviewers independently. Prefer parallel execution when supported.
+Set a timeout of 600000 milliseconds for each reviewer process.
 
-## Aggregation
+Use best-effort invocations for the installed CLI version. If a flag is rejected,
+retry once with the closest supported equivalent. If still failing, mark that
+reviewer as failed.
 
-Collect reviewer outputs.
+For each reviewer, run the invocation and register it in the manifest:
 
-Normalize findings into a common structure:
+```bash
+# copilot-claude → audit-output-NN
+gh copilot suggest --model claude-sonnet < "$PROMPT_FILE" \
+  > "$OUTPUT_DIR/audit-output-NN"
+printf '%s\t%s\n' "copilot-claude" "$OUTPUT_DIR/audit-output-NN" \
+  >> "$OUTPUT_DIR/manifest.tsv"
 
+# copilot-gpt → audit-output-NN
+gh copilot suggest --model gpt-4.1 < "$PROMPT_FILE" \
+  > "$OUTPUT_DIR/audit-output-NN"
+printf '%s\t%s\n' "copilot-gpt" "$OUTPUT_DIR/audit-output-NN" \
+  >> "$OUTPUT_DIR/manifest.tsv"
+
+# copilot-gemini → audit-output-NN
+gh copilot suggest --model gemini-pro < "$PROMPT_FILE" \
+  > "$OUTPUT_DIR/audit-output-NN"
+printf '%s\t%s\n' "copilot-gemini" "$OUTPUT_DIR/audit-output-NN" \
+  >> "$OUTPUT_DIR/manifest.tsv"
+
+# claude → audit-output-NN
+claude --print < "$PROMPT_FILE" \
+  > "$OUTPUT_DIR/audit-output-NN"
+printf '%s\t%s\n' "claude" "$OUTPUT_DIR/audit-output-NN" \
+  >> "$OUTPUT_DIR/manifest.tsv"
+
+# codex → audit-output-NN
+codex exec --sandbox read-only --ephemeral \
+  -o "$OUTPUT_DIR/audit-output-NN" - < "$PROMPT_FILE"
+printf '%s\t%s\n' "codex" "$OUTPUT_DIR/audit-output-NN" \
+  >> "$OUTPUT_DIR/manifest.tsv"
+
+# agy → audit-output-NN
+agy --sandbox --print "$(cat "$PROMPT_FILE")" \
+  > "$OUTPUT_DIR/audit-output-NN"
+printf '%s\t%s\n' "agy" "$OUTPUT_DIR/audit-output-NN" \
+  >> "$OUTPUT_DIR/manifest.tsv"
+```
+
+Replace `NN` with the reviewer's assigned number (`01`, `02`, `03`, ...).
+
+Only write a manifest entry on success. A failed reviewer has no output file and
+no manifest entry. Aggregation reads `manifest.tsv` to map output files to
+reviewer names.
+
+If a CLI does not accept stdin, pass the prompt file as a file argument or inline
+prompt according to that CLI's supported behavior.
+
+If a reviewer fails, continue if execution quorum remains satisfied.
+
+## Execution Quorum
+
+Execution quorum is separate from agreement threshold.
+
+Default execution quorum: 2 successful reviewers.
+
+If fewer than 2 reviewers succeed, abort the audit and report which reviewers
+failed.
+
+## Normalization
+
+Read `$OUTPUT_DIR/manifest.tsv` to map each output file to its reviewer name.
+Normalize each output file into a common finding structure:
+
+```text
+ReviewFinding
+
+reviewer
+severity
+file
+line
+title
+description
+category
+confidence
+fingerprint
+```
+
+Required fields:
+
+- reviewer
 - severity
-- file
-- line
 - title
 - description
 
-Merge findings that refer to the same underlying issue across reviewers.
+Preferred fields:
+
+- file
+- line
+- category
+- confidence
+- fingerprint
+
+If a reviewer returns prose instead of structured findings, extract findings
+conservatively.
+
+Do not invent file or line references.
+
+## Semantic Clustering
+
+Merge findings that describe the same underlying issue.
+
+Equivalent findings may use different wording.
+
+Examples:
+
+- "SQL injection risk"
+- "Unsanitized database input"
+- "Raw query construction from user input"
+
+These should cluster into one issue if they refer to the same code path and same
+bug.
+
+Clustering should consider:
+
+- file
+- line or nearby line range
+- affected symbol or function
+- bug category
+- described failure mode
 
 ## Agreement Threshold
 
-Default threshold: 2
+Default agreement threshold: 2 reviewers.
 
-A finding is accepted when reported by at least 2 reviewers.
-A finding is rejected when reported by only 1 reviewer.
+A finding is accepted when it is reported by at least 2 successful reviewers.
+
+A finding is rejected when reported by only 1 successful reviewer.
+
+Rejected findings are hidden by default.
+
+## Severity Reconciliation
+
+When reviewers disagree on severity, choose the highest severity only if the
+description supports it.
+
+Otherwise choose the median practical severity.
+
+Severity order:
+
+```text
+CRITICAL
+HIGH
+MEDIUM
+LOW
+INFO
+```
+
+Do not inflate severity just because one reviewer used stronger wording.
 
 ## Output
 
-Show consensus findings with agreement counts:
+Present consensus findings only unless verbose mode is enabled.
 
-    HIGH
-    auth.py:42
+Order findings deterministically by:
 
-    Missing authorization check.
+1. Severity
+2. Agreement count, descending
+3. File path
+4. Line number
+5. Title
 
-    Agreement: 3/3
+Use this format:
 
-    ----------------
+```text
+HIGH
+auth.py:42
 
-    MEDIUM
-    cache.py:88
+Missing authorization check before account update.
 
-    Potential race condition.
+Agreement: 3/3
 
-    Agreement: 2/3
+Reviewers:
+- claude
+- codex
+- agy
 
-Do not show rejected findings by default.
+----------------
+```
+
+If there are no consensus findings, say so clearly.
+
+Do not claim the code is correct. Say no finding met the agreement threshold.
 
 ## Verbose Mode
 
-If verbose mode is enabled:
+If verbose mode is enabled, also show:
 
-- Show rejected findings.
-- Show reviewer disagreements.
-- Show per-reviewer outputs.
+- Rejected single-reviewer findings.
+- Reviewer disagreements.
+- Per-reviewer outputs or summaries.
+
+Clearly separate consensus findings from rejected findings.
 
 ## Failure Handling
 
 If a reviewer fails:
 
 - Continue if at least 2 reviewers succeed.
-- Exclude failed reviewer from aggregation.
-- Report reviewer failure in summary.
+- Exclude failed reviewers from agreement counts.
+- Report failures in the summary.
 
 If fewer than 2 reviewers succeed:
 
-- Abort review.
-- Report failure.
+- Abort the multi-model audit.
+- Report failed reviewers and suggested fixes.
+
+If aggregation fails:
+
+- Stop immediately.
+- Report the failure.
+- Clean up scratch files.
 
 ## Error Handling
 
-| Error                              | Action                                                                 |
-|------------------------------------|------------------------------------------------------------------------|
-| `gh: command not found`            | Tell user: `brew install gh && gh extension install github/gh-copilot` |
-| `claude: command not found`        | Tell user: `npm i -g @anthropic-ai/claude-code` (or install Claude Code) |
-| `codex: command not found`         | Tell user: `npm i -g @openai/codex`                                    |
-| `agy: command not found`           | Tell user to install the Antigravity CLI (`agy`)                       |
-| `gh copilot` extension missing     | Tell user: `gh extension install github/gh-copilot`                   |
-| Fewer than 2 backends available    | Abort; list missing CLIs and their install commands                    |
-| `review-code` failed               | Stop immediately                                                       |
-| `review-code` reports no changes   | Stop; inform user; remove temp file                                    |
-| Reviewer returns no findings       | Treat as empty result; include in quorum count                         |
-| Reviewer timeout                   | Exclude reviewer; continue if quorum remains                           |
-| Aggregation failed                 | Stop immediately                                                       |
+| Error                           | Action                                                                  |
+|---------------------------------|-------------------------------------------------------------------------|
+| `review-code` unavailable       | Stop and report that the review prompt generator is unavailable.        |
+| `review-code` failed            | Stop immediately.                                                       |
+| No uncommitted changes          | Stop and report that there are no changes to audit.                     |
+| `gh: command not found`         | Tell user: `brew install gh && gh extension install github/gh-copilot`  |
+| `gh copilot` missing            | Tell user: `gh extension install github/gh-copilot`                     |
+| `claude: command not found`     | Tell user to install Claude Code.                                       |
+| `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
+| `agy: command not found`        | Tell user to install the Antigravity CLI.                               |
+| Reviewer timeout                | Exclude reviewer; continue if quorum remains.                           |
+| Reviewer returns no findings    | Treat as successful empty output.                                       |
+| Fewer than 2 successful reviews | Abort multi-model audit.                                                |
+| Aggregation failed              | Stop and report failure.                                                |
 
 ## Cleanup
 
-After the review completes or fails, remove scratch files:
+Scratch files must be removed regardless of success, failure, timeout, reviewer
+failure, or user cancellation.
+
+After aggregation completes (or on failure), run cleanup as an explicit final step:
 
 ```bash
-rm -f "${PROMPT_FILE:-}" "${CODEX_OUT:-}"
+rm -f "${PROMPT_FILE:-}"
+rm -rf "${OUTPUT_DIR:-}"
 ```
+
+If the run was interrupted before cleanup, stale files remain under `.scratch/`.
+Inform the user and suggest:
+
+```bash
+rm -f .scratch/review-prompt.* && rm -rf .scratch/audit-outputs.*
+```
+
+If debugging is needed, ask before preserving scratch files.
 
 ## Summary
 
 At the end report:
 
-- Review mode
+- Audit mode
 - Reviewers selected
 - Successful reviewers
 - Failed reviewers
+- Execution quorum
 - Agreement threshold
 - Consensus findings count
+- Rejected findings count, if verbose mode is enabled
 
 ## Examples
 
-**Copilot trio (default for Copilot users):**
-```
-User:  /audit multi-model
-Agent: [asks 1 question: reviewers]
-User:  "copilot-claude + copilot-gpt + copilot-gemini"
-Agent: [shows diff --stat: 6 files, +103 -15]
-Agent: [runs review-code once, pipes prompt to all 3 copilot variants in parallel]
-Agent: [aggregates findings, shows consensus with agreement counts]
+**Standard audit**
+
+```text
+User: /audit standard
+Agent:
+- Checks for untracked files.
+- Runs review-code once.
+- Consumes the prompt directly.
+- Presents current-model findings.
 ```
 
-**Cross-vendor trio:**
-```
-User:  /audit multi-model --reviewers claude,codex,agy
-Agent: [shows diff --stat: 4 files, +55 -8]
-Agent: [runs review-code once, pipes prompt to claude, codex, agy in parallel]
-Agent: [reports consensus findings, notes any reviewer failures]
+**Multi-model audit with Copilot trio**
+
+```text
+User: /audit multi-model
+Agent: asks reviewer set if not specified.
+User: copilot-claude + copilot-gpt + copilot-gemini
+Agent:
+- Checks for untracked files.
+- Shows diff stats.
+- Runs review-code once.
+- Runs all three reviewers against the same prompt, writing outputs to
+  $OUTPUT_DIR/audit-output-01, audit-output-02, audit-output-03.
+- Normalizes outputs.
+- Clusters equivalent findings.
+- Reports only findings with agreement >= 2.
 ```
 
-**Mixed Copilot + standalone:**
-```
-User:  /audit multi-model
-Agent: [asks 1 question: reviewers]
-User:  "copilot-claude + claude + agy"
-Agent: [shows diff --stat: 2 files, +30 -5]
-Agent: [runs review-code once, pipes prompt to copilot-claude, claude, agy in parallel]
-Agent: [aggregates and reports]
+**Cross-vendor review**
+
+```text
+User: /audit multi-model --reviewers claude,codex,agy
+Agent:
+- Shows diff stats.
+- Generates one canonical review prompt.
+- Runs claude → $OUTPUT_DIR/audit-output-01, codex → audit-output-02, agy → audit-output-03.
+- Reports consensus findings and reviewer failures.
 ```
 
-**Large diff warning:**
-```
-User:  /audit multi-model
-Agent: [asks 1 question] → "claude + codex"
-Agent: [shows diff --stat: 45 files, +3400 -900]
-Agent: "Large diff (3400+ lines). Proceed?"
-User:  "proceed"
-Agent: [runs both reviewers]
-```
+**Reviewer failure**
 
-**Reviewer failure:**
-```
-Agent: [runs claude, codex, agy in parallel]
-Agent: codex exits with "command not found"
-Agent: [continues with claude + agy (quorum met)]
-Agent: "Note: codex was unavailable. Run: npm i -g @openai/codex"
-Agent: [reports consensus from 2 remaining reviewers]
+```text
+Agent:
+- Runs claude ($OUTPUT_DIR/audit-output-01), codex (audit-output-02), agy (audit-output-03).
+- codex fails with command not found.
+- claude and agy succeed.
+- Execution quorum is met.
+- Consensus is computed from the two successful reviewer outputs.
+- Summary notes that codex was unavailable.
 ```
