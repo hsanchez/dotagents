@@ -175,7 +175,7 @@ def run_backend [
       run_copilot "gpt-5.5" $prompt $output_file
     }
     "copilot-gemini" => {
-      run_copilot "gemini-pro" $prompt $output_file
+      run_copilot "gemini-2.5-flash" $prompt $output_file
     }
     _ => {
       {
