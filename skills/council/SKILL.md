@@ -115,23 +115,34 @@ Avoid assigning every member the same perspective.
 
 #### 2.3 Configure execution
 
-Use the active subagent launch mechanism to create the council.
+Prefer `.agents/skills/council/scripts/run-agents` when it is available.
 
-If a reusable `run_agents` launcher is available, use it. Otherwise use the
-active harness's native subagent-launch mechanism while preserving the same
-execution protocol.
+If `.agents/skills/council/scripts/run-agents` is unavailable, use the active harness's native subagent-launch mechanism while preserving the same execution protocol.
 
 The launch mechanism should support:
 
-- assigning each child its model (or closest supported substitute);
+- assigning each child its model or closest supported substitute;
 - assigning each child its perspective;
 - passing the same council question and decision criteria to every child;
 - enforcing read-only or isolated-worktree execution;
 - collecting structured reports;
 - sending follow-up questions to existing children when additional evidence is needed.
 
-When the active launcher applies model selection per run rather than per child,
-launch separate runs for different models.
+When using `.agents/skills/council/scripts/run-agents`, prepare a shared council brief file and launch each member as a backend:perspective specification.
+
+Example:
+
+```bash
+.agents/skills/council/scripts/run-agents \
+  --brief .scratch/council-brief.md \
+  claude:architecture \
+  codex:implementation \
+  agy:contrarian
+```
+
+The launcher should produce a per-run output directory containing report files, a manifest, and any failure logs. Treat the manifest as the source of truth for mapping council members to reports.
+
+When the active launcher applies model selection per run rather than per child, launch separate runs for different models.
 
 When using non-default harnesses, choose valid model identifiers for that environment.
 
@@ -180,6 +191,8 @@ Do not share one member's findings with another unless intentionally performing 
 ### 5. Collect reports
 
 Read each report rather than relying solely on task completion.
+
+If using `.agents/skills/council/scripts/run-agents`, read the launcher manifest to locate report artifacts and identify failed members.
 
 If evidence is incomplete or unsupported, send a focused follow-up to the same member rather than launching a replacement.
 

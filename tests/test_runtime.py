@@ -51,6 +51,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert not (tmp_path / ".agents" / "README.md").exists()
   assert not (tmp_path / "skills").exists()
   assert (tmp_path / "scripts" / "review-code").is_symlink()
+  assert (tmp_path / ".agents" / "skills" / "council" / "scripts" / "run-agents").exists()
   assert (tmp_path / ".claude" / "commands").is_symlink()
   assert (tmp_path / ".claude" / "commands").readlink() == Path("../.agents/scripts")
   assert (tmp_path / ".claude" / "skills").is_symlink()
