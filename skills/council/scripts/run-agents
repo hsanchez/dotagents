@@ -1,0 +1,241 @@
+#!/usr/bin/env nu
+
+# Launch multiple external model CLIs against the same council brief and collect
+# their reports.
+#
+# This script is intentionally an execution primitive:
+# - it does not synthesize reports
+# - it does not decide which report is best
+# - it only launches agents, captures outputs, and writes a manifest
+
+def main [
+  --brief: string
+  ...agents: string
+] {
+  if not ($brief | path exists) {
+    print $"Brief file not found: ($brief)"
+    exit 1
+  }
+
+  if (($agents | length) < 1) {
+    print "At least one agent spec is required."
+    print "Usage: run-agents --brief <file> backend:perspective ..."
+    exit 1
+  }
+
+  mkdir .scratch
+
+  let output_dir = (mktemp -d --tmpdir-path ".scratch" "council-outputs.XXXXXX")
+  let manifest = $"($output_dir)/manifest.tsv"
+  let failures = $"($output_dir)/failures.tsv"
+
+  touch $manifest
+  touch $failures
+
+  print $"Council output dir: ($output_dir)"
+
+  mut index = 1
+
+  for spec in $agents {
+    let parsed = (parse_agent_spec $spec)
+    let backend = $parsed.backend
+    let perspective = $parsed.perspective
+    let output_file = $"($output_dir)/agent-output-($index | into string | fill --alignment right --character '0' --width 2).md"
+
+    let prompt = (build_prompt $brief $backend $perspective)
+
+    print $"Launching ($backend) as ($perspective) → ($output_file)"
+
+    let result = (run_backend $backend $prompt $output_file)
+
+    if $result.success {
+      $"($backend)\t($perspective)\t($output_file)\n" | save --append $manifest
+    } else {
+      $"($backend)\t($perspective)\t($result.error)\n" | save --append $failures
+    }
+
+    $index = $index + 1
+  }
+
+  print ""
+  print "Council run complete."
+  print $"Manifest: ($manifest)"
+  print $"Failures: ($failures)"
+  print $"Outputs:  ($output_dir)"
+}
+
+def parse_agent_spec [spec: string] {
+  let parts = ($spec | split row ":")
+
+  if (($parts | length) != 2) {
+    print $"Invalid agent spec: ($spec)"
+    print "Expected format: backend:perspective"
+    print "Example: claude:architecture"
+    exit 1
+  }
+
+  {
+    backend: ($parts | get 0),
+    perspective: ($parts | get 1)
+  }
+}
+
+def build_prompt [
+  brief_file: string
+  backend: string
+  perspective: string
+] {
+  let brief = (open --raw $brief_file | into string)
+
+  $"
+# Council Member Brief
+
+You are one member of a model-diverse technical council.
+
+## Your Assigned Perspective
+
+($perspective)
+
+## Your Task
+
+Investigate the council question independently from your assigned perspective.
+
+Do not assume other council members agree with you.
+Do not try to predict consensus.
+Do not write code unless the brief explicitly permits implementation work.
+
+Return a structured report.
+
+## Required Report Format
+
+# Council Report
+
+## Perspective
+
+($perspective)
+
+## Evidence inspected
+
+- [Files, symbols, docs, logs, commands, or artifacts inspected]
+
+## Current behavior or current implementation
+
+[What exists today.]
+
+## Alternative or hypothesis evaluated
+
+[What you evaluated.]
+
+## Findings
+
+[Your core analysis.]
+
+## Risks and edge cases
+
+- [Risk]
+- [Risk]
+
+## Implementation and testing cost
+
+[Cost, complexity, and testability.]
+
+## Recommendation
+
+[Keep current approach / pursue alternative / hybrid.]
+
+## Confidence and unknowns
+
+[Confidence level and material unknowns.]
+
+## Shared Council Brief
+
+($brief)
+" | str trim
+}
+
+def run_backend [
+  backend: string
+  prompt: string
+  output_file: string
+] {
+  match $backend {
+    "claude" => {
+      run_claude $prompt $output_file
+    }
+    "codex" => {
+      run_codex $prompt $output_file
+    }
+    "agy" => {
+      run_agy $prompt $output_file
+    }
+    "copilot-claude" => {
+      run_copilot "claude-sonnet" $prompt $output_file
+    }
+    "copilot-gpt" => {
+      run_copilot "gpt-5.5" $prompt $output_file
+    }
+    "copilot-gemini" => {
+      run_copilot "gemini-2.5-flash" $prompt $output_file
+    }
+    _ => {
+      {
+        success: false,
+        error: $"unsupported backend: ($backend)"
+      }
+    }
+  }
+}
+
+def run_claude [
+  prompt: string
+  output_file: string
+] {
+  try {
+    $prompt | claude --print | save --force $output_file
+    { success: true, error: "" }
+  } catch {|err|
+    { success: false, error: ($err.msg | default "claude failed") }
+  }
+}
+
+def run_codex [
+  prompt: string
+  output_file: string
+] {
+  let prompt_file = (mktemp --tmpdir-path ".scratch" "council-prompt.XXXXXX")
+  $prompt | save --force $prompt_file
+
+  try {
+    codex exec --sandbox read-only --ephemeral -o $output_file - < $prompt_file
+    rm -f $prompt_file
+    { success: true, error: "" }
+  } catch {|err|
+    rm -f $prompt_file
+    { success: false, error: ($err.msg | default "codex failed") }
+  }
+}
+
+def run_agy [
+  prompt: string
+  output_file: string
+] {
+  try {
+    agy --sandbox --print $prompt | save --force $output_file
+    { success: true, error: "" }
+  } catch {|err|
+    { success: false, error: ($err.msg | default "agy failed") }
+  }
+}
+
+def run_copilot [
+  model: string
+  prompt: string
+  output_file: string
+] {
+  try {
+    $prompt | gh copilot suggest --model $model | save --force $output_file
+    { success: true, error: "" }
+  } catch {|err|
+    { success: false, error: ($err.msg | default $"gh copilot failed for model ($model)") }
+  }
+}

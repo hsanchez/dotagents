@@ -242,13 +242,13 @@ printf '%s\t%s\n' "copilot-claude" "$OUTPUT_DIR/audit-output-NN" \
   >> "$OUTPUT_DIR/manifest.tsv"
 
 # copilot-gpt → audit-output-NN
-gh copilot suggest --model gpt-4.1 < "$PROMPT_FILE" \
+gh copilot suggest --model gpt-5.5 < "$PROMPT_FILE" \
   > "$OUTPUT_DIR/audit-output-NN"
 printf '%s\t%s\n' "copilot-gpt" "$OUTPUT_DIR/audit-output-NN" \
   >> "$OUTPUT_DIR/manifest.tsv"
 
 # copilot-gemini → audit-output-NN
-gh copilot suggest --model gemini-pro < "$PROMPT_FILE" \
+gh copilot suggest --model gemini-2.5-flash < "$PROMPT_FILE" \
   > "$OUTPUT_DIR/audit-output-NN"
 printf '%s\t%s\n' "copilot-gemini" "$OUTPUT_DIR/audit-output-NN" \
   >> "$OUTPUT_DIR/manifest.tsv"
