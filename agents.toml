@@ -16,6 +16,10 @@ destination = "scripts/review-branch"
 source = "scripts/review-code"
 destination = "scripts/review-code"
 
+[[sync]]
+source = ".rules"
+destination = "AGENTS.md"
+
 [providers]
 
 [providers.claude]
@@ -44,7 +48,6 @@ sync = [
 
 [providers.codex]
 sync = [
-  { source = ".rules", destination = "AGENTS.md" },
   { source = ".rules", destination = "CODEX.md" },
   { source = "codex/config.toml", destination = ".codex/config.toml" },
   { source = "codex/agents/reviewer.toml", destination = ".codex/agents/reviewer.toml" }
