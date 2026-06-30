@@ -282,6 +282,7 @@ For `--for claude --for copilot`, the generated repo state includes:
 .agents/providers/copilot/agents/reviewer.agent.md
 .agents/providers/copilot/hooks/git-guardrails.json
 .rules
+AGENTS.md -> .rules
 CLAUDE.md -> .rules
 .claude/commands -> ../.agents/scripts
 .claude/skills -> ../.agents/skills

@@ -44,6 +44,7 @@ test -f .agents/skills/research/SKILL.md
 test -f .agents/scripts/review-code
 test -f .agents/skills/council/scripts/run-agents
 test ! -f .agents/scripts/smoke-test
+test -L AGENTS.md
 test -L CLAUDE.md
 test -L scripts/review-code
 test ! -e skills
@@ -68,6 +69,7 @@ test -d .agents
 uv run dotagents uninstall
 test ! -e .agents
 test ! -e .rules
+test ! -e AGENTS.md
 test ! -e CLAUDE.md
 test ! -e .github
 

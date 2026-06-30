@@ -50,6 +50,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert not (tmp_path / ".agents" / "agent").exists()
   assert not (tmp_path / ".agents" / "README.md").exists()
   assert not (tmp_path / "skills").exists()
+  assert (tmp_path / "AGENTS.md").is_symlink()
   assert (tmp_path / "scripts" / "review-code").is_symlink()
   assert (tmp_path / ".agents" / "skills" / "council" / "scripts" / "run-agents").exists()
   assert (tmp_path / ".claude" / "commands").is_symlink()
@@ -59,6 +60,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".github" / "hooks" / "block-dangerous-git").is_symlink()
   runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   link_destinations = {link.destination for link in runtime_lock.links}
+  assert "AGENTS.md" in link_destinations
   assert "CLAUDE.md" in link_destinations
   assert ".claude/skills" in link_destinations
   assert "skills" not in link_destinations
@@ -180,6 +182,7 @@ def test_init_backs_up_existing_non_symlink_and_creates_link(
 
   init_runtime(Path.cwd(), ("claude",))
 
+  assert (tmp_path / "AGENTS.md").is_symlink()
   assert (tmp_path / "CLAUDE.md").is_symlink()
   assert (tmp_path / "CLAUDE.md.bak").read_text(encoding="utf-8") == "human-owned\n"
 
@@ -392,6 +395,7 @@ def test_uninstall_removes_claude_outputs(tmp_path: Path, monkeypatch: pytest.Mo
 
   assert not (tmp_path / ".agents").exists()
   assert not (tmp_path / ".rules").exists()
+  assert not (tmp_path / "AGENTS.md").exists()
   assert not (tmp_path / "CLAUDE.md").exists()
   assert not (tmp_path / ".claude").exists()
   assert not (tmp_path / "scripts").exists()
@@ -408,6 +412,7 @@ def test_uninstall_uses_lockfile_links_without_current_manifest(
 
   uninstall_existing(Path.cwd())
 
+  assert not (tmp_path / "AGENTS.md").exists()
   assert not (tmp_path / "CLAUDE.md").exists()
   assert not (tmp_path / ".claude").exists()
 
@@ -420,6 +425,7 @@ def test_uninstall_removes_multiple_provider_outputs(
 
   uninstall_existing(Path.cwd())
 
+  assert not (tmp_path / "AGENTS.md").exists()
   assert not (tmp_path / "CLAUDE.md").exists()
   assert not (tmp_path / ".claude").exists()
   assert not (tmp_path / ".github").exists()
@@ -650,6 +656,7 @@ def test_remove_last_provider_leaves_shared_outputs(
   assert (tmp_path / ".rules").exists()
   assert (tmp_path / ".agents" / "scripts").is_dir()
   assert (tmp_path / ".agents" / "skills").is_dir()
+  assert (tmp_path / "AGENTS.md").is_symlink()
   lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   assert lock.providers == ()
 
