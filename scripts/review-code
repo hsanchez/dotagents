@@ -8,7 +8,8 @@
 #
 # Exits cleanly if there are no uncommitted changes.
 def main [] {
-  let diff = git diff HEAD | str trim
+  let has_head = (do { git rev-parse HEAD } | complete).exit_code == 0
+  let diff = if $has_head { git diff HEAD | str trim } else { git diff --cached | str trim }
 
   if ($diff | is-empty) {
     print "No uncommitted changes to review."
