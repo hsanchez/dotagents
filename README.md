@@ -89,6 +89,24 @@ uv run dotagents providers add --dry-run gemini
 It also renders `.rules` and creates provider-facing files such as `CLAUDE.md`,
 `AGENTS.md`, `.claude/settings.json`, and `.github/copilot-instructions.md`.
 
+### Existing provider files
+
+If dotagents needs to create a managed provider-facing link and a regular file
+already exists at that path, it backs up the existing file to `<name>.bak` and
+replaces the path with the managed symlink.
+
+For example, an existing `.github/copilot-instructions.md` becomes
+`.github/copilot-instructions.md.bak`, and dotagents creates
+`.github/copilot-instructions.md` as a symlink to the generated rules.
+
+On uninstall or provider removal, dotagents restores the backup when it can
+safely remove the managed symlink. If the path was changed by the user after
+install, dotagents leaves the user-owned file in place and keeps the backup for
+manual recovery.
+
+If `<name>.bak` already exists during init, dotagents stops and asks you to
+resolve it manually.
+
 ## Skills
 
 `Skillfile` at the repository root selects the skills installed under

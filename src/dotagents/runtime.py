@@ -203,7 +203,9 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
 
   for link in runtime_lock.links:
     destination = root / link.destination
-    remove_locked_link(root, destination, link.target, operation_log)
+    removed = remove_locked_link(root, destination, link.target, operation_log)
+    if link.backup and removed:
+      restore_backup(root, root / link.backup, destination, operation_log)
     collect_parents(root, destination, prune_candidates)
 
   remove_generated_rules(root, operation_log)
@@ -274,7 +276,10 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   for link in (link for link in current_lock.links if link.provider == provider):
     destination = root / link.destination
     removed = remove_locked_link(root, destination, link.target, operation_log)
-    if not removed:
+    if removed:
+      if link.backup:
+        restore_backup(root, root / link.backup, destination, operation_log)
+    else:
       skipped_links.append(link)
     collect_parents(root, destination, prune_candidates)
 
@@ -370,7 +375,7 @@ def sync_runtime(
       if entry.source == ".rules"
       else runtime_destination(runtime_context.runtime_dir, entry)
     )
-    link_path(
+    backup_rel = link_path(
       runtime_context.repo_root,
       source,
       runtime_context.repo_root / entry.destination,
@@ -381,6 +386,7 @@ def sync_runtime(
         destination=entry.destination,
         target=os.path.relpath(source, (runtime_context.repo_root / entry.destination).parent),
         provider=entry.provider,
+        backup=backup_rel,
       )
     )
 
@@ -589,26 +595,47 @@ def write_text(
 
 def link_path(
   repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
-) -> None:
+) -> str | None:
+  """Return the relative path to the backup file if one was created or already exists, else None.
+
+  Raises:
+    DotagentsError: if a `.bak` file already exists at the backup path (conflict must be resolved manually).
+  """
+  backup = destination.parent / (destination.name + ".bak")
+
   if destination.exists() and not destination.is_symlink():
-    raise DotagentsError(
-      f"refusing to replace existing non-symlink: {relative(repo_root, destination)}"
-    )
+    if backup.exists():
+      raise DotagentsError(
+        f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
+      )
+    if operation_log.dry_run:
+      operation_log.add(
+        f"would back up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+      )
+    else:
+      destination.rename(backup)
+      operation_log.add(
+        f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+      )
+    backup_rel: str | None = relative(repo_root, backup)
+  else:
+    backup_rel = relative(repo_root, backup) if backup.exists() else None
 
   target = os.path.relpath(source, destination.parent)
   if destination.is_symlink() and os.readlink(destination) == target:
     operation_log.add(f"ok {relative(repo_root, destination)}")
-    return
+    return backup_rel
 
   if operation_log.dry_run:
     operation_log.add(f"would link {relative(repo_root, destination)} -> {target}")
-    return
+    return backup_rel
 
   destination.parent.mkdir(parents=True, exist_ok=True)
   if destination.exists() or destination.is_symlink():
     destination.unlink()
   destination.symlink_to(target)
   operation_log.add(f"linked {relative(repo_root, destination)} -> {target}")
+  return backup_rel
 
 
 def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None:
@@ -646,6 +673,23 @@ def remove_locked_link(
   destination.unlink()
   operation_log.add(f"removed {display}")
   return True
+
+
+def restore_backup(
+  repo_root: Path, backup_path: Path, destination: Path, operation_log: OperationLog
+) -> None:
+  if not backup_path.exists():
+    operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
+    return
+  if operation_log.dry_run:
+    operation_log.add(
+      f"would restore {relative(repo_root, backup_path)} -> {relative(repo_root, destination)}"
+    )
+    return
+  backup_path.rename(destination)
+  operation_log.add(
+    f"restored {relative(repo_root, backup_path)} -> {relative(repo_root, destination)}"
+  )
 
 
 def remove_locked_asset(
