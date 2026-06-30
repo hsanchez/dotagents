@@ -26,6 +26,7 @@ class LockedLink:
   destination: str
   target: str
   provider: str | None = None
+  backup: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ def write_lock(
         "destination": link.destination,
         "target": link.target,
         **({"provider": link.provider} if link.provider else {}),
+        **({"backup": link.backup} if link.backup else {}),
       }
       for link in links
     ],
@@ -154,7 +156,12 @@ def read_lock(path: Path) -> RuntimeLock:
       raise DotagentsError("lockfile link entries require destination and target")
     if provider is not None and (not isinstance(provider, str) or not provider):
       raise DotagentsError("lockfile link provider must be a non-empty string")
-    links.append(LockedLink(destination=destination, target=target, provider=provider))
+    backup = raw.get("backup")
+    if backup is not None and (not isinstance(backup, str) or not backup):
+      raise DotagentsError("lockfile link backup must be a non-empty string")
+    links.append(
+      LockedLink(destination=destination, target=target, provider=provider, backup=backup)
+    )
 
   version = data.get("version")
   if not isinstance(version, str) or not version:

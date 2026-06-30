@@ -172,13 +172,63 @@ def test_rules_local_is_composed_into_generated_rules(
   assert "Use project-specific guidance." in rules
 
 
-def test_init_refuses_to_replace_unmanaged_destination_file(
+def test_init_backs_up_existing_non_symlink_and_creates_link(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   monkeypatch.chdir(tmp_path)
   Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
 
-  with pytest.raises(DotagentsError, match="refusing to replace existing non-symlink"):
+  init_runtime(Path.cwd(), ("claude",))
+
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+  assert (tmp_path / "CLAUDE.md.bak").read_text(encoding="utf-8") == "human-owned\n"
+
+
+def test_init_records_backup_path_in_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  claude_link = next(link for link in lock.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup == "CLAUDE.md.bak"
+
+
+def test_uninstall_restores_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+
+  uninstall_existing(Path.cwd())
+
+  assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == "human-owned\n"
+  assert not (tmp_path / "CLAUDE.md.bak").exists()
+
+
+def test_init_dry_run_logs_would_back_up_without_moving(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+
+  operation_log = init_runtime(Path.cwd(), ("claude",), dry_run=True)
+
+  assert not (tmp_path / "CLAUDE.md.bak").exists()
+  assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == "human-owned\n"
+  assert any("would back up" in line and "CLAUDE.md" in line for line in operation_log.lines)
+
+
+def test_init_raises_when_backup_file_already_exists(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  Path("CLAUDE.md.bak").write_text("pre-existing backup\n", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="backup already exists"):
     init_runtime(Path.cwd(), ("claude",))
 
 
