@@ -155,6 +155,24 @@ Rules:
 - Only reference lines present in the annotated diff.
 - If a concern is not tied to an annotated line, put it in top-level `body`.
 
+## Suggestion Blocks
+
+Use suggestion blocks only for `🧹 [NIT]` and simple `💡 [SUGGESTION]` changes where the fix is a direct drop-in replacement. For `🚨 [CRITICAL]` and `⚠️ [IMPORTANT]`, describe the fix in prose — the correct solution often requires broader context than a single-range replacement can express.
+
+When proposing a code change, use:
+
+```suggestion
+<replacement code here>
+```
+
+Rules:
+- Match the exact indentation of the original file.
+- Include only the replacement lines for the range `start_line`–`line`. Lines outside that range remain in the file — repeating them here causes duplicates after commit.
+- Never open the block with a line that already appears immediately above `start_line`, and never close the block with a line that already appears immediately below `line`. If you need those lines as anchors, widen `start_line` or `line` so they are actually part of the replaced range.
+- Count brace, bracket, paren, and block-delimiter depth (`{`, `[`, `(`, `end`, etc.) across the original replaced lines and ensure the replacement ends at the same depth. Do not emit phantom closing tokens, and do not drop required ones.
+- When unsure of the surrounding context, widen `start_line`/`line` to include enough real lines from the diff rather than guessing at surrounding tokens.
+- For multi-line suggestions, set `start_line` and `start_side` to the first line, and `line` and `side` to the last line.
+
 ## Output format
 
 ```json
