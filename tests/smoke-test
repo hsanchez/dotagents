@@ -23,6 +23,7 @@ cat >Skillfile <<EOF
 use safety
 skill audit
 skill review-pr
+skill pr-comments
 skill council
 skill cross-critique
 skill research
@@ -41,6 +42,8 @@ test -f .agents/skills/audit/SKILL.md
 test -f .agents/skills/review-pr/SKILL.md
 test -f .agents/skills/review-pr/scripts/annotate_diff.py
 test -f .agents/skills/review-pr/scripts/validate_review.py
+test -f .agents/skills/pr-comments/SKILL.md
+test -f .agents/skills/pr-comments/scripts/fetch_comments.py
 test -f .agents/skills/council/SKILL.md
 test -f .agents/skills/cross-critique/SKILL.md
 test -f .agents/skills/git-guardrails/scripts/block-dangerous-git

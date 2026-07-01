@@ -68,9 +68,11 @@ def test_review_preset_resolves_review_pr() -> None:
   selected = resolve_preset("review", asset_root())
 
   assert "review-pr" in selected
+  assert "pr-comments" in selected
   assert selected == (
     "audit",
     "review-pr",
+    "pr-comments",
     "startup",
     "research",
     "council",
@@ -84,5 +86,6 @@ def test_template_lists_presets_and_skills() -> None:
 
   assert "# use default" in template
   assert "# use review" in template
+  assert "# skill pr-comments" in template
   assert "# skill research" in template
   assert "# skill review-pr" in template
