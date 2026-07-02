@@ -74,6 +74,7 @@ def test_review_preset_resolves_review_pr() -> None:
     "audit",
     "review-pr",
     "pr-comments",
+    "pr-walkthrough",
     "startup",
     "research",
     "council",
@@ -89,5 +90,6 @@ def test_template_lists_presets_and_skills() -> None:
   assert "# use review" in template
   assert "# skill create-pr" in template
   assert "# skill pr-comments" in template
+  assert "# skill pr-walkthrough" in template
   assert "# skill research" in template
   assert "# skill review-pr" in template

@@ -24,6 +24,7 @@ use safety
 skill audit
 skill review-pr
 skill pr-comments
+skill pr-walkthrough
 skill create-pr
 skill council
 skill cross-critique
@@ -45,6 +46,9 @@ test -f .agents/skills/review-pr/scripts/annotate_diff.py
 test -f .agents/skills/review-pr/scripts/validate_review.py
 test -f .agents/skills/pr-comments/SKILL.md
 test -f .agents/skills/pr-comments/scripts/fetch_comments.py
+test -f .agents/skills/pr-walkthrough/SKILL.md
+test -f .agents/skills/pr-walkthrough/scripts/d3_canvas_runtime.py
+test -f .agents/skills/pr-walkthrough/scripts/validate_d3_canvas.py
 test -f .agents/skills/create-pr/SKILL.md
 test -f .agents/skills/council/SKILL.md
 test -f .agents/skills/cross-critique/SKILL.md
