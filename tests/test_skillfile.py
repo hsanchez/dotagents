@@ -42,6 +42,7 @@ def test_default_preset_resolves_all_supported_skills() -> None:
     "audit",
     "clarify",
     "council",
+    "create-pr",
     "cross-critique",
     "git-guardrails",
     "handoff",
@@ -86,6 +87,7 @@ def test_template_lists_presets_and_skills() -> None:
 
   assert "# use default" in template
   assert "# use review" in template
+  assert "# skill create-pr" in template
   assert "# skill pr-comments" in template
   assert "# skill research" in template
   assert "# skill review-pr" in template
