@@ -42,6 +42,7 @@ def test_default_preset_resolves_all_supported_skills() -> None:
     "audit",
     "clarify",
     "council",
+    "create-pr",
     "cross-critique",
     "git-guardrails",
     "handoff",
@@ -64,9 +65,31 @@ def test_write_preset_skillfile_rejects_conflicting_existing_selection(tmp_path:
     write_preset_skillfile(tmp_path, asset_root(), "review")
 
 
+def test_review_preset_resolves_review_pr() -> None:
+  selected = resolve_preset("review", asset_root())
+
+  assert "review-pr" in selected
+  assert "pr-comments" in selected
+  assert selected == (
+    "audit",
+    "review-pr",
+    "pr-comments",
+    "pr-walkthrough",
+    "startup",
+    "research",
+    "council",
+    "cross-critique",
+    "git-guardrails",
+  )
+
+
 def test_template_lists_presets_and_skills() -> None:
   template = render_template(asset_root())
 
   assert "# use default" in template
   assert "# use review" in template
+  assert "# skill create-pr" in template
+  assert "# skill pr-comments" in template
+  assert "# skill pr-walkthrough" in template
   assert "# skill research" in template
+  assert "# skill review-pr" in template

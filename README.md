@@ -390,4 +390,4 @@ Apache 2.0. See [LICENSE](./LICENSE).
 
 ## Citation
 
-Please cite Promptory following the [CITATION.cff](./CITATION.cff) file.
+Please cite dotagents following the [CITATION.cff](./CITATION.cff) file.
