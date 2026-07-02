@@ -24,6 +24,7 @@ use safety
 skill audit
 skill review-pr
 skill pr-comments
+skill create-pr
 skill council
 skill cross-critique
 skill research

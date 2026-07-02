@@ -23,64 +23,114 @@ Create or update a pull request for the current branch, following the project's 
 
 ## Protocol
 
-### 1. Merge main
+### 1. Identify branches
 
-Bring the branch up to date before opening or updating a PR:
+```bash
+CURRENT=$(git branch --show-current)
+DEFAULT_BRANCH=$(GH_PAGER="" gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || echo "main")
+```
+
+If `CURRENT` equals `DEFAULT_BRANCH`, stop and tell the user to create a feature branch first.
+
+### 2. Check if a PR already exists and set base branch
+
+```bash
+BASE=$(GH_PAGER="" gh pr view --json baseRefName --jq .baseRefName 2>/dev/null)
+PR_EXISTS=$?
+
+[ $PR_EXISTS -ne 0 ] && BASE="$DEFAULT_BRANCH"
+```
+
+- If `PR_EXISTS` is 0 (PR exists): `BASE` is the PR's current base branch.
+- If `PR_EXISTS` is 1 (no PR): `BASE` falls back to `$DEFAULT_BRANCH` (or a user-provided base if one was given).
+
+All subsequent git operations use `$BASE`, not `$DEFAULT_BRANCH`, so PRs against `release/*` or other non-default bases are handled correctly.
+
+### 3. Safety checks
+
+**Working tree must be clean:**
+
+```bash
+git status --short
+```
+
+If uncommitted or unstaged changes are present, stop and ask the user to commit or stash them before continuing.
+
+**Commits must exist ahead of base:**
 
 ```bash
 git fetch origin
-git merge origin/main
+AHEAD=$(git rev-list --count origin/"$BASE"..HEAD)
 ```
 
-If merge conflicts arise, resolve them locally before continuing.
+If `AHEAD` is 0, stop — there is nothing to open a PR for.
 
-### 2. Run presubmit checks
+### 4. Check branch freshness
 
-Run the project's presubmit checks before opening or updating a PR with code changes. Check for common entry points in this order:
+Report how far behind the branch is without automatically merging:
+
+```bash
+BEHIND=$(git rev-list --count HEAD..origin/"$BASE")
+```
+
+If `BEHIND` is greater than 0, tell the user and ask whether to merge before continuing:
+
+- Merge `origin/$BASE` now
+- Continue without merging (risk of conflicts during review)
+- Stop
+
+If the user chooses to merge:
+
+```bash
+git merge origin/"$BASE"
+```
+
+Stop if merge conflicts arise. Resolve them locally before continuing.
+
+### 5. Run presubmit checks
+
+Read the project's agent instructions file for required presubmit steps:
+
+```bash
+for f in AGENTS.md CLAUDE.md GEMINI.md CODEX.md; do
+  [ -f "$f" ] && echo "Found: $f" && break
+done
+```
+
+Follow whatever presubmit requirements are defined there exactly. If no instructions file is found, use these fallback patterns in order:
 
 | Indicator | Command |
 |-----------|---------|
-| `pyproject.toml` with `prek` | `uv run prek run --all-files && uv run pytest` |
+| `pyproject.toml` with `prek` | `uv sync && uv run prek run --all-files && uv run pytest` |
 | `Makefile` with `test`/`check` | `make check` or `make test` |
 | `package.json` with `lint`/`test` | `npm run lint && npm test` |
 | `scripts/presubmit` or `script/presubmit` | `./scripts/presubmit` |
 
-If no entry point is found, skip this step and note the omission in the PR body.
+If no entry point is found, note the omission in the PR body. Do not assume docs-only or config-only changes skip presubmit — follow the project's own rules on this.
 
-For documentation-only changes (markdown, skill files, config), presubmit is not required.
+If presubmit fails, stop and fix the failures before proceeding.
 
-### 3. Review your changes
+### 6. Review your changes
 
-Before writing the PR description, inspect what is being submitted:
+Inspect what is being submitted before writing the PR description:
 
 ```bash
 # Commits on this branch
-git --no-pager log origin/main..HEAD --oneline
+git --no-pager log origin/"$BASE"..HEAD --oneline
 
 # Files changed
-git --no-pager diff origin/main...HEAD --stat
+git --no-pager diff origin/"$BASE"...HEAD --stat
 
 # Full diff
-git --no-pager diff origin/main...HEAD
+git --no-pager diff origin/"$BASE"...HEAD
 ```
 
-Use this to verify intended changes are included, catch unintended changes, and write an accurate description.
+### 7. Read PR hygiene rules
 
-### 4. Check if a PR already exists
-
-```bash
-GH_PAGER="" gh pr view --json number,url,title,isDraft
-```
-
-Exit code 0 means a PR exists — update it. Exit code 1 means none exists — create one.
-
-### 5. Read PR hygiene rules
-
-Check for a project-level agent instructions file and follow any PR hygiene rules it defines:
+Check for a project-level agent instructions file and follow any PR hygiene rules it defines. `AGENTS.md` is the cross-agent contract and takes precedence:
 
 ```bash
-# Check in order of precedence
-for f in CLAUDE.md AGENTS.md GEMINI.md CODEX.md; do
+for f in AGENTS.md CLAUDE.md GEMINI.md CODEX.md; do
   [ -f "$f" ] && echo "Found: $f" && break
 done
 ```
@@ -91,13 +141,19 @@ If no file is found or none defines PR rules, use these defaults:
 - **Body**: include What, Why, and How sections.
 - **Release Notes**: required as the final section. One bullet — `- Added ...`, `- Fixed ...`, or `- Improved ...` for user-facing changes; `- N/A` for docs-only or non-user-facing changes.
 
-```
-Release Notes:
+### 8. Push and preview
 
-- Added ...
+Push the branch and ensure the upstream tracking reference is set. This is a no-op if the branch is already up to date:
+
+```bash
+git push --set-upstream origin "$CURRENT"
 ```
 
-### 6. Create or update the PR
+Then compose the full title and body and show them to the user for confirmation **before running any mutating `gh pr create`, `gh pr edit`, or `gh pr ready` command**. Do not create or update a PR without explicit approval.
+
+### 9. Create or update the PR
+
+Only after the user approves the preview:
 
 **Create a new PR (draft by default):**
 
@@ -140,10 +196,10 @@ gh pr ready
 
 ## After opening
 
-1. Verify the PR URL and confirm the title, base branch, and draft status are correct.
+1. Confirm the PR URL, title, base branch, and draft status are correct.
 2. Monitor CI — ensure automated checks pass before requesting review.
-3. If checks fail, fix the issues locally, push, and re-run validation before marking ready.
-4. Keep the branch up to date — merge `origin/main` if new commits land before the PR is merged.
+3. If checks fail, fix locally, push, and re-run validation before marking ready.
+4. Keep the branch up to date — merge `origin/$BASE` if new commits land before the PR is merged.
 
 ---
 
@@ -163,6 +219,10 @@ gh pr ready
 |-------|--------|
 | `gh` unavailable | Stop. Tell user: `brew install gh && gh auth login` |
 | Auth fails | Stop. Run `gh auth login`. |
-| Merge conflicts | Stop. Resolve conflicts locally before continuing. |
-| Presubmit fails | Fix failures before opening or updating the PR. |
+| On default branch | Stop. Create a feature branch first. |
+| Uncommitted changes | Stop. Commit or stash before continuing. |
+| No commits ahead of base | Stop. Nothing to PR. |
+| Merge conflicts | Stop. Resolve locally before continuing. |
+| Presubmit fails | Stop. Fix failures before opening or updating the PR. |
+| Push fails | Stop. Report the error before attempting any PR mutation. |
 | `gh pr create` fails | Report the error and the full `gh` output. |
