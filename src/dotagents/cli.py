@@ -26,7 +26,7 @@ app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
 app.add_typer(providers_app, name="providers", help="Add or remove configured providers.")
 console = Console()
-DEFAULT_PRESET = "default"
+DEFAULT_PRESET = "dev"
 
 ProviderOption = Annotated[
   list[str] | None,
