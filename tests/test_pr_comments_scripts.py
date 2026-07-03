@@ -206,6 +206,11 @@ def test_classify_gh_error_authentication() -> None:
   assert result == "GitHub authentication failure"
 
 
+def test_classify_gh_error_cli_unavailable() -> None:
+  result = fetch_mod._classify_gh_error("gh executable not found")
+  assert result == "GitHub CLI unavailable"
+
+
 def test_run_retries_transient_error_once(monkeypatch: Any) -> None:
   calls: list[list[str]] = []
 
@@ -245,3 +250,18 @@ def test_run_does_not_retry_non_transient_error(monkeypatch: Any) -> None:
     raise AssertionError("expected GhCommandError")
 
   assert len(calls) == 1
+
+
+def test_run_converts_missing_gh_to_domain_error(monkeypatch: Any) -> None:
+  def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    raise FileNotFoundError("gh")
+
+  monkeypatch.setattr(fetch_mod.subprocess, "run", fake_run)
+
+  try:
+    fetch_mod._run(["gh", "api", "user"])
+  except fetch_mod.GhCommandError as error:
+    assert error.kind == "GitHub CLI unavailable"
+    assert error.returncode == 127
+  else:
+    raise AssertionError("expected GhCommandError")

@@ -28,13 +28,20 @@ class GhCommandError(RuntimeError):
     self.stderr = stderr
     details = stderr.strip() or stdout.strip() or "unknown gh error"
     self.kind = _classify_gh_error(details)
-    super().__init__(
-      f"{self.kind}: {' '.join(args)} failed with exit code {returncode}: {details}"
-    )
+    super().__init__(f"{self.kind}: {' '.join(args)} failed with exit code {returncode}: {details}")
 
 
 def _classify_gh_error(message: str) -> str:
   normalized = message.lower()
+  if any(
+    phrase in normalized
+    for phrase in (
+      "gh executable not found",
+      "no such file or directory: 'gh'",
+      "no such file or directory: gh",
+    )
+  ):
+    return "GitHub CLI unavailable"
   if any(
     phrase in normalized
     for phrase in (
@@ -75,13 +82,17 @@ def _is_transient_gh_error(error: GhCommandError) -> bool:
 def _run(args: list[str]) -> str:
   last_error: GhCommandError | None = None
   for attempt in range(2):
-    result = subprocess.run(
-      args,
-      capture_output=True,
-      text=True,
-      check=False,
-      env={**os.environ, "GH_PAGER": ""},
-    )
+    try:
+      result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GH_PAGER": ""},
+      )
+    except FileNotFoundError as error:
+      raise GhCommandError(args, 127, "", "gh executable not found") from error
+
     if result.returncode == 0:
       return result.stdout
 
