@@ -48,7 +48,7 @@ def test_init_without_skillfile_writes_default_skillfile(
   result = CliRunner().invoke(app, ["init", "--for", "claude"])
 
   assert result.exit_code == 0
-  assert (tmp_path / "Skillfile").read_text(encoding="utf-8") == "use default\n"
+  assert (tmp_path / "Skillfile").read_text(encoding="utf-8") == "use dev\n"
   assert (tmp_path / ".agents" / "skills" / "research").is_dir()
   assert (tmp_path / ".agents" / "skills" / "git-guardrails").is_dir()
 

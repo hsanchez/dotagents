@@ -5,6 +5,7 @@ import pytest
 from dotagents.assets import asset_root
 from dotagents.errors import DotagentsError
 from dotagents.skillfile import (
+  available_skills,
   render_template,
   resolve_preset,
   resolve_skillfile,
@@ -35,8 +36,12 @@ def test_resolve_preset_rejects_skill_name() -> None:
     resolve_preset("research", asset_root())
 
 
-def test_default_preset_resolves_all_supported_skills() -> None:
-  selected = resolve_preset("default", asset_root())
+def test_default_preset_alias_resolves_to_dev() -> None:
+  assert resolve_preset("default", asset_root()) == resolve_preset("dev", asset_root())
+
+
+def test_dev_preset_resolves_all_supported_skills() -> None:
+  selected = resolve_preset("dev", asset_root())
 
   assert selected == (
     "audit",
@@ -50,6 +55,12 @@ def test_default_preset_resolves_all_supported_skills() -> None:
     "resume-handoff",
     "startup",
   )
+
+
+def test_full_preset_resolves_all_skills() -> None:
+  selected = resolve_preset("full", asset_root())
+
+  assert set(selected) == set(available_skills(asset_root()))
 
 
 def test_write_preset_skillfile_creates_use_line(tmp_path: Path) -> None:
@@ -98,7 +109,8 @@ def test_contribute_preset_resolves_skills() -> None:
 def test_template_lists_presets_and_skills() -> None:
   template = render_template(asset_root())
 
-  assert "# use default" in template
+  assert "# use dev" in template
+  assert "# use full" in template
   assert "# use review" in template
   assert "# use contribute" in template
   assert "# skill create-pr" in template

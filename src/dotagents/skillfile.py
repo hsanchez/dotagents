@@ -10,6 +10,11 @@ from dotagents.errors import DotagentsError
 
 SKILLFILE_NAME = "Skillfile"
 
+# Renamed presets - old name maps to current name for backward compatibility.
+PRESET_ALIASES: dict[str, str] = {
+  "default": "dev",
+}
+
 
 def skillfile_path(repo_root: Path) -> Path:
   return repo_root / SKILLFILE_NAME
@@ -28,6 +33,7 @@ def resolve_skillfile(repo_root: Path, asset_root: Path) -> tuple[str, ...]:
 
 
 def resolve_preset(name: str, asset_root: Path) -> tuple[str, ...]:
+  name = PRESET_ALIASES.get(name, name)
   path = preset_path(name, asset_root)
   if not path.is_file():
     if name in available_skills(asset_root):
@@ -124,7 +130,8 @@ def _resolve(path: Path, asset_root: Path, visited: set[Path]) -> tuple[str, ...
         )
       selected.append(name)
       continue
-    preset = preset_path(name, asset_root)
+    resolved_name = PRESET_ALIASES.get(name, name)
+    preset = preset_path(resolved_name, asset_root)
     if not preset.is_file():
       available = ", ".join(available_presets(asset_root))
       raise DotagentsError(

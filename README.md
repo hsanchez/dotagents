@@ -111,15 +111,16 @@ resolve it manually.
 
 `Skillfile` at the repository root selects the skills installed under
 `.agents/skills`. Commit it with the repository; `.agents/` is generated output.
-On first `init`, dotagents creates `Skillfile` with the packaged `default`
+On first `init`, dotagents creates `Skillfile` with the packaged `dev`
 preset:
 
 ```text
-use default
+use dev
 ```
 
-The `default` preset contains the current maintainer-supported skill set. Use
-`init --with` to choose a custom selection interactively.
+The `dev` preset contains skills for everyday development work. The `full`
+preset installs every available skill. Use `init --with` to choose a custom
+selection interactively.
 
 For noninteractive bootstrap with one packaged preset, pass the preset name:
 
@@ -144,7 +145,7 @@ skill clarify
 
 After committing `Skillfile`, automation can run plain `init` without opening
 an editor. If `Skillfile` does not exist, plain `init` creates it with
-`use default`:
+`use dev`:
 
 ```bash
 uv run dotagents init --for claude
