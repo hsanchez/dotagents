@@ -83,11 +83,24 @@ def test_review_preset_resolves_review_pr() -> None:
   )
 
 
+def test_contribute_preset_resolves_skills() -> None:
+  selected = resolve_preset("contribute", asset_root())
+
+  assert selected == (
+    "startup",
+    "create-pr",
+    "review-pr",
+    "pr-comments",
+    "pr-walkthrough",
+  )
+
+
 def test_template_lists_presets_and_skills() -> None:
   template = render_template(asset_root())
 
   assert "# use default" in template
   assert "# use review" in template
+  assert "# use contribute" in template
   assert "# skill create-pr" in template
   assert "# skill pr-comments" in template
   assert "# skill pr-walkthrough" in template
