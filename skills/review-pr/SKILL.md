@@ -30,11 +30,28 @@ Review a pull request authored by someone else, producing `review.json`.
 
 If the PR number is not already provided, ask once.
 
-Optionally check out the PR for richer local context:
+Inspect the current branch and the PR head branch before checkout:
+
+```bash
+CURRENT_BRANCH=$(git branch --show-current)
+PR_HEAD_BRANCH=$(gh pr view <PR_NUMBER> --json headRefName,baseRefName --jq '.headRefName')
+```
+
+If `CURRENT_BRANCH` matches `PR_HEAD_BRANCH`, do not run checkout.
+
+Otherwise, optionally check out the PR for richer local context:
 
 ```bash
 gh pr checkout <PR_NUMBER>
 ```
+
+If checkout is useful and the current branch differs, check worktree state first:
+
+```bash
+git status --short
+```
+
+Ask before changing branches when the worktree is dirty.
 
 ### 2. Build review context
 
