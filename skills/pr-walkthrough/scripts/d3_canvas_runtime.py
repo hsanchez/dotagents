@@ -8,9 +8,23 @@ import html
 import json
 from pathlib import Path
 from textwrap import dedent
+from urllib.parse import urlsplit
 
 D3_VERSION = "7.9.0"
 D3_CDN_URL = f"https://cdn.jsdelivr.net/npm/d3@{D3_VERSION}/dist/d3.min.js"
+SAFE_HREF_SCHEMES = {"http", "https"}
+
+
+def safe_href(value: object) -> str:
+  text = str(value or "").strip()
+  if not text:
+    return "#"
+  if text.startswith("#"):
+    return text
+  parsed = urlsplit(text)
+  if parsed.scheme in SAFE_HREF_SCHEMES and parsed.netloc:
+    return text
+  return "#"
 
 
 def d3_canvas_css() -> str:
@@ -130,6 +144,16 @@ def d3_canvas_runtime_script() -> str:
           function escapeHtml(value) {{
             return String(value ?? '').replace(/[&<>"']/g, (char) => ({{ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }}[char]));
           }}
+          function safeHref(value) {{
+            const text = String(value ?? '').trim();
+            if (!text) return '#';
+            if (text.startsWith('#')) return text;
+            try {{
+              const url = new URL(text);
+              if (url.protocol === 'https:' || url.protocol === 'http:') return text;
+            }} catch (_) {{}}
+            return '#';
+          }}
           function listItems(items, render) {{
             if (!items || items.length === 0) return '<p class="d3-empty">None attached.</p>';
             return `<ul class="d3-detail-list">${{items.map(render).join('')}}</ul>`;
@@ -165,9 +189,9 @@ def d3_canvas_runtime_script() -> str:
               <p class="d3-detail-summary">${{escapeHtml(node.summary || '')}}</p>
               ${{step?.nodeId === node.id ? `<section class="d3-detail-section"><h3>Tour context</h3><ul class="d3-detail-list"><li>${{escapeHtml(step.body || '')}}</li></ul></section>` : ''}}
               <section class="d3-detail-section"><h3>Explanation</h3>${{details.length ? `<ul class="d3-detail-list">${{details.map((item) => `<li>${{escapeHtml(item)}}</li>`).join('')}}</ul>` : '<p class="d3-empty">No additional detail provided.</p>'}}</section>
-              <section class="d3-detail-section"><h3>Changed files</h3>${{listItems(files, (file) => `<li><a class="d3-file-link" href="${{escapeHtml(file.url || '#')}}" target="_blank" rel="noreferrer">${{escapeHtml(file.path || file.label || 'file')}}</a>${{file.note ? `<p>${{escapeHtml(file.note)}}</p>` : ''}}</li>`)}}</section>
-              <section class="d3-detail-section"><h3>Existing review discussion</h3>${{listItems(comments, (comment) => `<li><span class="d3-comment-author">${{escapeHtml(comment.author || 'reviewer')}}</span>${{escapeHtml(comment.body || '')}}${{comment.url ? `<br><a href="${{escapeHtml(comment.url)}}" target="_blank" rel="noreferrer">Open comment</a>` : ''}}</li>`)}}</section>
-              <section class="d3-detail-section"><h3>Links</h3>${{listItems(links, (link) => `<li><a href="${{escapeHtml(link.url || '#')}}" target="_blank" rel="noreferrer">${{escapeHtml(link.label || link.url || 'link')}}</a></li>`)}}</section>
+              <section class="d3-detail-section"><h3>Changed files</h3>${{listItems(files, (file) => `<li><a class="d3-file-link" href="${{escapeHtml(safeHref(file.url))}}" target="_blank" rel="noopener noreferrer">${{escapeHtml(file.path || file.label || 'file')}}</a>${{file.note ? `<p>${{escapeHtml(file.note)}}</p>` : ''}}</li>`)}}</section>
+              <section class="d3-detail-section"><h3>Existing review discussion</h3>${{listItems(comments, (comment) => `<li><span class="d3-comment-author">${{escapeHtml(comment.author || 'reviewer')}}</span>${{escapeHtml(comment.body || '')}}${{comment.url ? `<br><a href="${{escapeHtml(safeHref(comment.url))}}" target="_blank" rel="noopener noreferrer">Open comment</a>` : ''}}</li>`)}}</section>
+              <section class="d3-detail-section"><h3>Links</h3>${{listItems(links, (link) => `<li><a href="${{escapeHtml(safeHref(link.url))}}" target="_blank" rel="noopener noreferrer">${{escapeHtml(link.label || link.url || 'link')}}</a></li>`)}}</section>
             `;
           }}
 
@@ -426,6 +450,7 @@ def html_template(data: dict) -> str:
   title = str(meta.get("title") or "PR Walkthrough")
   summary = str(meta.get("summary") or "Interactive PR walkthrough graphs.")
   pr_url = str(meta.get("prUrl") or "")
+  pr_href = safe_href(pr_url)
   base = str(meta.get("baseRef") or "")
   head = str(meta.get("headRef") or "")
   data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
@@ -444,7 +469,7 @@ def html_template(data: dict) -> str:
             <header class="d3-walkthrough-header">
               <div class="d3-kicker">PR walkthrough</div>
               <h1>{html.escape(title)}</h1>
-              <div class="d3-meta-row"><span>{html.escape(base)} ← {html.escape(head)}</span>{f'<a href="{html.escape(pr_url)}" target="_blank" rel="noreferrer">Open PR</a>' if pr_url else ""}</div>
+              <div class="d3-meta-row"><span>{html.escape(base)} ← {html.escape(head)}</span>{f'<a href="{html.escape(pr_href)}" target="_blank" rel="noopener noreferrer">Open PR</a>' if pr_url else ""}</div>
               <p class="d3-summary">{html.escape(summary)}</p>
             </header>
             <section class="d3-canvas-layout">

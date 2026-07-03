@@ -151,6 +151,43 @@ def test_html_template_has_no_fetch(runtime_mod) -> None:
   assert "fetch(" not in html
 
 
+@pytest.mark.parametrize(
+  ("value", "expected"),
+  [
+    ("https://github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/1"),
+    ("http://example.com/path", "http://example.com/path"),
+    ("#diff-anchor", "#diff-anchor"),
+    ("javascript:alert(1)", "#"),
+    ("data:text/html,<script>alert(1)</script>", "#"),
+    ("", "#"),
+  ],
+)
+def test_safe_href_allows_only_http_https_and_fragments(
+  runtime_mod, value: str, expected: str
+) -> None:
+  assert runtime_mod.safe_href(value) == expected
+
+
+def test_html_template_sanitizes_meta_pr_url(runtime_mod) -> None:
+  data = runtime_mod.sample_data()
+  data["meta"]["prUrl"] = "javascript:alert(1)"
+
+  html = runtime_mod.html_template(data)
+
+  assert 'href="javascript:alert(1)"' not in html
+  assert 'href="#" target="_blank" rel="noopener noreferrer">Open PR</a>' in html
+
+
+def test_runtime_detail_links_sanitize_href_schemes(runtime_mod) -> None:
+  script = runtime_mod.d3_canvas_runtime_script()
+
+  assert "function safeHref(value)" in script
+  assert "safeHref(file.url)" in script
+  assert "safeHref(comment.url)" in script
+  assert "safeHref(link.url)" in script
+  assert 'rel="noopener noreferrer"' in script
+
+
 def test_html_template_contains_required_controls(runtime_mod) -> None:
   html = runtime_mod.html_template(runtime_mod.sample_data())
   for control in (
