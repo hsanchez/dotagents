@@ -12,15 +12,88 @@ from pathlib import Path
 from typing import Any
 
 
+class GhCommandError(RuntimeError):
+  """GitHub CLI command failure with a user-facing classification."""
+
+  def __init__(
+    self,
+    args: list[str],
+    returncode: int,
+    stdout: str,
+    stderr: str,
+  ) -> None:
+    self.args_list = args
+    self.returncode = returncode
+    self.stdout = stdout
+    self.stderr = stderr
+    details = stderr.strip() or stdout.strip() or "unknown gh error"
+    self.kind = _classify_gh_error(details)
+    super().__init__(
+      f"{self.kind}: {' '.join(args)} failed with exit code {returncode}: {details}"
+    )
+
+
+def _classify_gh_error(message: str) -> str:
+  normalized = message.lower()
+  if any(
+    phrase in normalized
+    for phrase in (
+      "error connecting to api.github.com",
+      "check your internet connection",
+      "connection reset",
+      "connection refused",
+      "could not resolve host",
+      "network is unreachable",
+      "operation timed out",
+      "timeout",
+      "timed out",
+    )
+  ):
+    return "GitHub connectivity failure"
+  if any(
+    phrase in normalized
+    for phrase in (
+      "authentication required",
+      "bad credentials",
+      "gh auth login",
+      "http 401",
+      "requires authentication",
+    )
+  ):
+    return "GitHub authentication failure"
+  if "rate limit" in normalized or "secondary rate limit" in normalized:
+    return "GitHub rate limit"
+  if "not found" in normalized or "could not resolve to a pullrequest" in normalized:
+    return "GitHub PR lookup failure"
+  return "GitHub CLI failure"
+
+
+def _is_transient_gh_error(error: GhCommandError) -> bool:
+  return error.kind in {"GitHub connectivity failure", "GitHub rate limit"}
+
+
 def _run(args: list[str]) -> str:
-  result = subprocess.run(
-    args,
-    capture_output=True,
-    text=True,
-    check=True,
-    env={**os.environ, "GH_PAGER": ""},
-  )
-  return result.stdout
+  last_error: GhCommandError | None = None
+  for attempt in range(2):
+    result = subprocess.run(
+      args,
+      capture_output=True,
+      text=True,
+      check=False,
+      env={**os.environ, "GH_PAGER": ""},
+    )
+    if result.returncode == 0:
+      return result.stdout
+
+    last_error = GhCommandError(args, result.returncode, result.stdout, result.stderr)
+    if attempt == 1 or not _is_transient_gh_error(last_error):
+      raise last_error
+
+  raise RuntimeError("unreachable gh retry state")
+
+
+def _format_gh_error(error: GhCommandError) -> str:
+  return str(error)
 
 
 def _parse_paginated(text: str) -> list[dict[str, Any]]:
@@ -171,8 +244,8 @@ def main() -> None:
     pr_level = fetch_pr_level_comments(owner, repo, args.pr_number)
     reviews = fetch_pr_reviews(owner, repo, args.pr_number)
     thread_map = fetch_thread_map(owner, repo, args.pr_number)
-  except subprocess.CalledProcessError as exc:
-    print(f"error: gh command failed: {exc.stderr.strip()}", file=sys.stderr)
+  except GhCommandError as exc:
+    print(f"error: {_format_gh_error(exc)}", file=sys.stderr)
     sys.exit(1)
 
   output: dict[str, Any] = {

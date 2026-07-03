@@ -43,6 +43,8 @@ python3 .agents/skills/pr-comments/scripts/fetch_comments.py \
   --output-dir "$OUTPUT_DIR"
 ```
 
+The script retries transient GitHub connectivity or rate-limit failures once. If fetching comments fails, stop and report the exact error. Do not proceed without `$OUTPUT_DIR/comments.json`.
+
 This writes `$OUTPUT_DIR/comments.json` containing:
 
 - `current_user` — GitHub login of the authenticated user
@@ -127,7 +129,7 @@ uv run prek run --all-files
 uv run pytest
 ```
 
-If validation cannot run, note the reason in the summary. Do not commit until validation passes or the user explicitly waives it.
+If either command fails, stop. Report the failed command and the relevant error. Do not commit, push, post replies, or resolve threads unless the user explicitly waives validation.
 
 ### 8. Review changes
 
@@ -241,9 +243,10 @@ rm -rf "${OUTPUT_DIR:-}"
 | `gh` unavailable | Stop. Tell user: `brew install gh && gh auth login` |
 | Auth fails | Stop. Run `gh auth login`. |
 | No open PR for branch | Stop. Report: no PR found for current branch. |
-| `fetch_comments.py` fails | Stop. Report the error. |
+| `fetch_comments.py` reports transient GitHub connectivity or rate-limit failure | Stop and report the exact error; the script already retried once. |
+| `fetch_comments.py` fails for any other reason | Stop. Report the exact error. |
 | No actionable comments | Report: no actionable comments found. Done. |
 | Fix is ambiguous or risky | Stop and ask the user before editing. |
-| Validation fails | Fix the issue before proceeding to commit/post. |
+| Validation fails | Stop. Report the failed command and relevant error. Do not commit, push, post replies, or resolve threads unless the user explicitly waives validation. |
 | Commit or push fails | Stop before posting replies. Report the error. |
 | Reply or resolve fails | Report the failure. Continue with remaining comments. |

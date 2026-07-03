@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import types
 from pathlib import Path
 from typing import Any
@@ -188,3 +189,59 @@ def test_fetch_pr_reviews_empty_list(monkeypatch: Any) -> None:
   monkeypatch.setattr(fetch_mod, "_run", lambda _args: "[]")
   result = fetch_mod.fetch_pr_reviews("owner", "repo", 1)
   assert result == []
+
+
+# --- gh error handling ---
+
+
+def test_classify_gh_error_connectivity() -> None:
+  result = fetch_mod._classify_gh_error(
+    "error connecting to api.github.com\ncheck your internet connection"
+  )
+  assert result == "GitHub connectivity failure"
+
+
+def test_classify_gh_error_authentication() -> None:
+  result = fetch_mod._classify_gh_error("HTTP 401: bad credentials; run gh auth login")
+  assert result == "GitHub authentication failure"
+
+
+def test_run_retries_transient_error_once(monkeypatch: Any) -> None:
+  calls: list[list[str]] = []
+
+  def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    calls.append(args)
+    if len(calls) == 1:
+      return subprocess.CompletedProcess(
+        args,
+        1,
+        "",
+        "error connecting to api.github.com",
+      )
+    return subprocess.CompletedProcess(args, 0, "ok\n", "")
+
+  monkeypatch.setattr(fetch_mod.subprocess, "run", fake_run)
+
+  result = fetch_mod._run(["gh", "api", "user"])
+
+  assert result == "ok\n"
+  assert len(calls) == 2
+
+
+def test_run_does_not_retry_non_transient_error(monkeypatch: Any) -> None:
+  calls: list[list[str]] = []
+
+  def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    calls.append(args)
+    return subprocess.CompletedProcess(args, 1, "", "HTTP 401: bad credentials")
+
+  monkeypatch.setattr(fetch_mod.subprocess, "run", fake_run)
+
+  try:
+    fetch_mod._run(["gh", "api", "user"])
+  except fetch_mod.GhCommandError as error:
+    assert error.kind == "GitHub authentication failure"
+  else:
+    raise AssertionError("expected GhCommandError")
+
+  assert len(calls) == 1
