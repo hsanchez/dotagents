@@ -90,6 +90,34 @@ Escalation triggers:
 
 The contract should be specific enough to verify without becoming a separate specification project.
 
+## Routing
+
+Use the smallest execution path that can complete the step safely:
+
+| Need | Use |
+| --- | --- |
+| Missing or ambiguous requirements | `clarify` |
+| Broad code discovery before editing | `research` |
+| One obvious local edit | Main agent |
+| Independent implementation step | Subagent |
+| Multiple independent implementation steps | Parallel subagents |
+| Final diff quality check | `audit` |
+| Judgment-heavy technical decision | `council` or `cross-critique` |
+| Long-running handoff | `handoff` |
+
+For each delegated step, collect a compact report:
+
+```text
+Step:
+Status:
+Changed:
+Verified:
+Blocked:
+```
+
+Do not spawn subagents for tiny edits, heavily coupled changes, or steps whose
+files and acceptance checks are unclear. Split or clarify those first.
+
 ## Execution
 
 For each saga:

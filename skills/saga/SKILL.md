@@ -50,6 +50,33 @@ Maintain one source of truth for plan progress. Track each checkbox in exactly o
 
 Use the repo's normal verification commands. Prefer focused tests during the loop and full required checks before commit or final handoff.
 
+## Routing And Step Contracts
+
+Use the smallest execution path that can complete the step safely:
+
+| Need | Use |
+| --- | --- |
+| Missing or ambiguous requirements | `clarify` |
+| Broad code discovery before editing | `research` |
+| One obvious local edit | Main agent |
+| Independent implementation step | Subagent |
+| Multiple independent implementation steps | Parallel subagents |
+| Final diff quality check | `audit` |
+| Judgment-heavy technical decision | `council` or `cross-critique` |
+| Long-running handoff | `handoff` |
+
+For each delegated step, collect a compact report:
+
+```text
+Step:
+Status:
+Changed:
+Verified:
+Blocked:
+```
+
+Do not spawn subagents for tiny edits, heavily coupled changes, or steps whose files and acceptance checks are unclear. Split or clarify those first.
+
 ## Escalation
 
 Default to continuing autonomously.
