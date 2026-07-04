@@ -1,7 +1,7 @@
 ---
 name: review-saga
 description: Use only when the developer explicitly asks to run a review saga for one PR or branch, with phrases like "review this PR as a saga", "saga this branch", or similar. A review saga coordinates PR understanding, review planning, optional subagents, finding synthesis, and human escalation without modifying code or posting comments unless explicitly approved.
-allowed-tools: Bash Read Glob Grep
+allowed-tools: Read Glob Grep Bash(uv sync *) Bash(uv run pytest *) Bash(uv run prek *)
 ---
 
 # Review Saga

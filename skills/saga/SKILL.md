@@ -1,7 +1,7 @@
 ---
 name: saga
 description: Use only when the developer explicitly asks to run a saga for an active plan, with phrases like "execute this plan as a saga", "saga this plan", or similar. A saga coordinates the plan's checkbox steps, tracks progress, runs verification loops, integrates results, and escalates to the human only for true blockers.
-allowed-tools: Bash Read Glob Grep
+allowed-tools: Read Glob Grep Bash(uv sync *) Bash(uv run pytest *) Bash(uv run prek *)
 ---
 
 # Saga
