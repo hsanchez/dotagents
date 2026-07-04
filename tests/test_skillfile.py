@@ -84,6 +84,7 @@ def test_review_preset_resolves_review_pr() -> None:
   assert "pr-comments" in selected
   assert selected == (
     "audit",
+    "review-saga",
     "review-pr",
     "pr-comments",
     "pr-walkthrough",
@@ -119,4 +120,5 @@ def test_template_lists_presets_and_skills() -> None:
   assert "# skill pr-walkthrough" in template
   assert "# skill research" in template
   assert "# skill review-pr" in template
+  assert "# skill review-saga" in template
   assert "# skill saga" in template
