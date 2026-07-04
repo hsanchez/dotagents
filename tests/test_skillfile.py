@@ -53,6 +53,7 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
     "handoff",
     "research",
     "resume-handoff",
+    "saga",
     "startup",
   )
 
@@ -118,3 +119,4 @@ def test_template_lists_presets_and_skills() -> None:
   assert "# skill pr-walkthrough" in template
   assert "# skill research" in template
   assert "# skill review-pr" in template
+  assert "# skill saga" in template
