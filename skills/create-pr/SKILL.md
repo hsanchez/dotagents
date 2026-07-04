@@ -30,7 +30,7 @@ CURRENT=$(git branch --show-current)
 DEFAULT_BRANCH=$(GH_PAGER="" gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || echo "main")
 ```
 
-If `CURRENT` equals `DEFAULT_BRANCH`, stop and tell the user to create a feature branch first.
+If `CURRENT` equals `DEFAULT_BRANCH`, stop and tell the user to create a feature branch first, e.g. `git switch -c <feature-branch-name>`.
 
 ### 2. Check if a PR already exists and set base branch
 
