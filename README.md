@@ -181,6 +181,57 @@ Locked mode does not open an editor. It fails when `Skillfile` is missing, the
 lockfile is missing, the resolved skills differ, the Skillfile hash differs,
 or the package/manifest metadata differs.
 
+### Agentic delivery workflow
+
+The packaged `saga` skill supports opt-in semi-autonomous execution of one
+active plan at a time, with human escalation only for true blockers. The parent
+agent owns understanding the request, defining scope, and producing the plan. A
+saga owns coordinated execution of that plan: sequencing checkbox steps,
+tracking progress, integrating results, and verifying plan-level completion. The
+agent should not enter saga mode unless the developer explicitly asks for it. See
+`docs/workflows/saga.md` for the workflow guide.
+
+```text
+request
+  -> understand
+  -> plan
+       [ ] task A
+       [ ] task B
+       [ ] task C
+  -> saga executes the plan
+       task A -> execute / verify / mark done
+       task B -> execute / verify / mark done
+       task C -> execute / verify / mark done
+  -> final integration / verify / handoff
+```
+
+### Agentic review workflow
+
+The packaged `review-saga` skill supports opt-in semi-autonomous execution of
+one active PR or branch review plan at a time. The parent agent owns identifying
+the review target and confirming the requested review mode. A review saga owns
+coordinated execution of that plan: orienting on the branch or PR, organizing
+review passes, routing to focused review skills when useful, synthesizing
+findings, and handing back a review-level report. The agent should not enter
+review saga mode unless the developer explicitly asks for it. See
+`docs/workflows/review-saga.md` for the workflow guide.
+
+```text
+review request
+  -> identify PR / branch
+  -> review plan
+       [ ] orientation
+       [ ] correctness
+       [ ] tests
+       [ ] architecture / risk
+  -> review-saga executes the review plan
+       orientation -> inspect / evidence / synthesize
+       correctness -> inspect / evidence / synthesize
+       tests -> inspect / evidence / synthesize
+       architecture / risk -> inspect / evidence / synthesize
+  -> final findings / blocked items / residual risk
+```
+
 ### Authoring skills and presets
 
 Harness maintainers add a skill under `skills/<name>/`, with its `SKILL.md`,

@@ -46,6 +46,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".agents" / "skills" / "handoff").is_dir()
   assert (tmp_path / ".agents" / "skills" / "research").is_dir()
   assert (tmp_path / ".agents" / "skills" / "resume-handoff").is_dir()
+  assert (tmp_path / ".agents" / "skills" / "saga").is_dir()
   assert (tmp_path / ".agents" / "skills" / "startup").is_dir()
   assert (tmp_path / ".agents" / "providers" / "copilot" / "review.prompt.md").exists()
   assert not (tmp_path / ".agents" / "agent").exists()
