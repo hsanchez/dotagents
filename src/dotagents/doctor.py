@@ -52,14 +52,14 @@ def doctor(repo_root: Path) -> DoctorResult:
   drift = version_drift(lock)
   if drift:
     lines.append(
-      f"lockfile: version drift: runtime {drift.runtime_version}, package {drift.package_version}"
+      f"lockfile: version drift: runtime {drift.runtime_value}, package {drift.package_value}"
     )
     passed = False
   elif manifest := manifest_drift(runtime_context, lock):
     lines.append(
       "lockfile: manifest drift: "
-      f"runtime {manifest.runtime_manifest_sha256[:12]}, "
-      f"package {manifest.package_manifest_sha256[:12]}"
+      f"runtime {manifest.runtime_value[:12]}, "
+      f"package {manifest.package_value[:12]}"
     )
     passed = False
   else:
