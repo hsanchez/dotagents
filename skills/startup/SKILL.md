@@ -5,19 +5,13 @@ description: Readiness and synchronization check. Use before starting any task, 
 
 At repo root, ask: "Resume from a handoff file?"
 
-If the user provides a handoff path, first run the baseline sync:
-
-1. Re-read `.rules`.
-2. Read `MEMORY.md`.
-3. If `MEMORY.md` is sparse, read `MEMORY_LOG.md`.
-
-Then use the `resume-handoff` skill with the provided handoff path.
+If the user provides a handoff path, use the `resume-handoff` skill with that path — it performs its own baseline sync before loading the handoff.
 
 If the user wants to resume but has not provided a path, ask for the handoff path.
 
 If the user declines or has no handoff:
 
-1. Re-read this `.rules` file.
+1. Re-read the project's `.rules` file.
 2. Read `MEMORY.md`.
 3. If `MEMORY.md` has no substantive content beyond headings or whitespace, read `MEMORY_LOG.md`.
 4. Also read `MEMORY_LOG.md` when debugging, recovering context, or tracing prior decisions.

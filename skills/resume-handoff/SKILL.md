@@ -6,11 +6,13 @@ argument-hint: "Path to the handoff file, e.g. ~/.handoffs/<repo-name>/handoff-2
 
 If no argument is passed, run `ls ~/.handoffs/<repo-name>/` (where `<repo-name>` is `basename $(git rev-parse --show-toplevel)`) and ask the user to pick a file.
 
-Read the handoff document at the given path and internalize its contents to resume work from a previous session.
+Before reading the handoff, sync project state:
+1. Re-read the project's `.rules` file.
+2. Read `MEMORY.md`.
+3. If `MEMORY.md` is sparse, read `MEMORY_LOG.md`.
+4. Run `git status` and `git log --oneline -5` — compare against what the handoff describes; alert the user if significant drift is detected.
 
-Sync project state by running, in order:
-1. `git status` and `git log --oneline -5` — compare against what the handoff describes; alert the user if significant drift is detected.
-2. Read `.rules` and `MEMORY.md`. If `MEMORY.md` is sparse (only headings/whitespace), also read `MEMORY_LOG.md`.
+Then read the handoff document at the given path and internalize its contents to resume work from a previous session.
 
 Present a structured summary to the user covering: tasks in progress, outstanding issues, failed approaches to avoid, and the immediate next step.
 
