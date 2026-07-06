@@ -3,7 +3,7 @@ name: startup
 description: Readiness and synchronization check. Use before starting any task, or when the user asks "are you on?", to refresh repo rules, memory, and recent project context.
 ---
 
-At repo root, ask: "Resume from a handoff file?"
+At repo root, ask: "Resume from a handoff file?" and wait for an answer.
 
 If the user provides a handoff path, use the `resume-handoff` skill with that path — it performs its own baseline sync before loading the handoff.
 

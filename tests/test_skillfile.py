@@ -55,6 +55,7 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
     "resume-handoff",
     "saga",
     "startup",
+    "unpack",
   )
 
 
