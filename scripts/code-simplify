@@ -1,0 +1,75 @@
+#!/usr/bin/env nu
+
+# A command to simplify code while preserving behavior.
+#
+# Without a scope, this command targets uncommitted changes in the working tree.
+# Pass a scope to target an existing file, directory, symbol, or described area.
+def main [
+  scope?: string, # Optional file, directory, symbol, or plain-language scope
+] {
+  let has_head = (do { git rev-parse HEAD } | complete).exit_code == 0
+  let diff = if $scope == null {
+    if $has_head { git diff HEAD | str trim } else { git diff --cached | str trim }
+  } else {
+    ""
+  }
+
+  if $scope == null and ($diff | is-empty) {
+    print "No uncommitted changes to simplify. Pass a scope to target existing code."
+    return
+  }
+
+  let target = if $scope == null {
+    "the uncommitted changes in the working tree"
+  } else {
+    $scope
+  }
+
+  let diff_section = if $scope == null {
+    $"
+## Uncommitted Changes
+
+```diff
+($diff)
+```
+"
+  } else {
+    ""
+  }
+
+  $"
+# Code Simplification
+
+Simplify ($target) while preserving exact behavior.
+
+## Your Tasks
+
+You are an experienced software developer focused on small,
+behavior-preserving refactors.
+
+Read the project instructions first. Understand the target code, callers,
+edge cases, and test coverage before editing.
+
+Scan for simplification opportunities:
+
+- Deep nesting -> guard clauses or clearer explicit control flow
+- Long functions -> split only when distinct responsibilities become clearer
+- Compact expressions or nested ternaries -> expand when readability improves
+- Vague local names -> descriptive names when the new name adds meaning
+- Duplicated logic -> shared helpers only when the abstraction is obvious and reduces real complexity
+- Dead code -> remove after confirming it is unused and not part of the public API
+- Comments -> remove summary comments; keep or add comments only for non-obvious reasons
+
+Keep the change narrow. Prefer existing files and local patterns. Do not rename
+public APIs, move modules, introduce new components, or redesign architecture
+unless explicitly asked.
+
+Run relevant tests after significant changes. If preparing a commit, run the
+full project checks required by the repo instructions.
+
+Summarize the behavior-preserving changes made and any checks that could not
+be run.
+
+($diff_section)
+" | str trim
+}
