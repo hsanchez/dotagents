@@ -1,8 +1,8 @@
 version = 1
 
 [[sync]]
-source = "scripts/code-simplify"
-destination = "scripts/code-simplify"
+source = "scripts/simplify-code"
+destination = "scripts/simplify-code"
 
 [[sync]]
 source = "scripts/gh-issue"
