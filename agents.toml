@@ -1,6 +1,10 @@
 version = 1
 
 [[sync]]
+source = "scripts/code-simplify"
+destination = "scripts/code-simplify"
+
+[[sync]]
 source = "scripts/gh-issue"
 destination = "scripts/gh-issue"
 

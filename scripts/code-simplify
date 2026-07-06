@@ -40,7 +40,7 @@ def main [
   $"
 # Code Simplification
 
-Simplify ($target) while preserving exact behavior.
+Simplify ($target) while preserving exact behavior and following the project rules.
 
 ## Your Tasks
 
