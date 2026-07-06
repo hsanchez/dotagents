@@ -220,6 +220,20 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
   return operation_log
 
 
+def read_provider_operation_state(
+  repo_root: Path, lock_path: Path
+) -> tuple[RuntimeLock, RuntimeContext]:
+  current_lock = read_lock(lock_path)
+  drift = version_drift(current_lock)
+  if drift:
+    raise DotagentsError(drift.update_guidance())
+  runtime_context = build_context(repo_root, current_lock.providers)
+  manifest = manifest_drift(runtime_context, current_lock)
+  if manifest:
+    raise DotagentsError(manifest.update_guidance())
+  return current_lock, runtime_context
+
+
 def add_provider(repo_root: Path, provider: str, dry_run: bool = False) -> OperationLog:
   root = repo_root.resolve()
   lock_path = root / ".agents" / "dotagents.lock"
@@ -227,14 +241,7 @@ def add_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Opera
     raise DotagentsError(
       "cannot add provider: missing .agents/dotagents.lock. Run: uv run dotagents init"
     )
-  current_lock = read_lock(lock_path)
-  drift = version_drift(current_lock)
-  if drift:
-    raise DotagentsError(drift.update_guidance())
-  runtime_context = build_context(root, current_lock.providers)
-  manifest = manifest_drift(runtime_context, current_lock)
-  if manifest:
-    raise DotagentsError(manifest.update_guidance())
+  current_lock, _ = read_provider_operation_state(root, lock_path)
   if provider in current_lock.providers:
     operation_log = OperationLog(dry_run=dry_run)
     operation_log.add(f"provider already configured: {provider}")
@@ -250,14 +257,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   if not lock_path.exists():
     raise DotagentsError("cannot remove provider: missing .agents/dotagents.lock")
 
-  current_lock = read_lock(lock_path)
-  drift = version_drift(current_lock)
-  if drift:
-    raise DotagentsError(drift.update_guidance())
-  runtime_context = build_context(root, current_lock.providers)
-  manifest = manifest_drift(runtime_context, current_lock)
-  if manifest:
-    raise DotagentsError(manifest.update_guidance())
+  current_lock, runtime_context = read_provider_operation_state(root, lock_path)
   if provider not in current_lock.providers:
     raise DotagentsError(f"provider not configured: {provider}")
 
