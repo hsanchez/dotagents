@@ -1,11 +1,10 @@
 # Readiness and Synchronization Check
 
 If the user says "are you on?" or Simply **Before starting any new task**, always:
-1. Re-read this `.rules` file.
-2. Read `MEMORY.md`.
-3. If `MEMORY.md` has no substantive content beyond headings or whitespace, read `MEMORY_LOG.md`.
+1. If you have not read this `.rules` file, read it. Otherwise, move to next step.
+2. Read `MEMORY.md`. If `MEMORY.md` has no substantive content beyond headings or whitespace, read `MEMORY_LOG.md`.
 4. Also read `MEMORY_LOG.md` when debugging, recovering context, or tracing prior decisions.
-5. When really uncertain about this project, read `README.md` before proceeding
+5. Compress every model response per response compression guideline
 
 # Python coding guidelines
 
