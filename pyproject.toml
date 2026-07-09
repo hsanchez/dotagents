@@ -1,6 +1,6 @@
 [project]
 name = "dotagents"
-version = "0.1.1"
+version = "0.1.2"
 description = "Package-driven agent configuration harness for repo-local AI coding environments."
 readme = "README.md"
 requires-python = ">=3.14"
