@@ -9,8 +9,14 @@
 def main [
   ...message: string  # Entry content
 ] {
+  let messageText = $message | str join " " | str trim
+
+  if ($messageText | is-empty) {
+    error make { msg: "message is required" }
+  }
+
   let timestamp = (date now | format date "%Y-%m-%d %H:%M")
-  let entry = $"($timestamp) — ($message | str join ' ')"
+  let entry = $"($timestamp) — ($messageText)"
   let log_path = "MEMORY_LOG.md"
 
   if not ($log_path | path exists) {
