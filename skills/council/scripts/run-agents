@@ -8,6 +8,12 @@
 # - it does not decide which report is best
 # - it only launches agents, captures outputs, and writes a manifest
 
+const _COPILOT_MODELS = {
+  copilot-claude: "claude-sonnet"
+  copilot-gpt: "gpt-5.5"
+  copilot-gemini: "gemini-3.5-flash"
+}
+
 def main [
   --brief: string
   ...agents: string
@@ -158,6 +164,10 @@ def run_backend [
   prompt: string
   output_file: string
 ] {
+  if ($backend in ($_COPILOT_MODELS | columns)) {
+    return (run_copilot ($_COPILOT_MODELS | get $backend) $prompt $output_file)
+  }
+
   match $backend {
     "claude" => {
       run_claude $prompt $output_file
@@ -167,15 +177,6 @@ def run_backend [
     }
     "agy" => {
       run_agy $prompt $output_file
-    }
-    "copilot-claude" => {
-      run_copilot "claude-sonnet" $prompt $output_file
-    }
-    "copilot-gpt" => {
-      run_copilot "gpt-5.5" $prompt $output_file
-    }
-    "copilot-gemini" => {
-      run_copilot "gemini-2.5-flash" $prompt $output_file
     }
     _ => {
       {
@@ -227,13 +228,37 @@ def run_agy [
   }
 }
 
+def calculate_copilot_prompt_limit [] {
+  try {
+    let arg_max = (getconf ARG_MAX | str trim | into int)
+
+    if $arg_max <= 0 {
+      200000
+    } else {
+      [65535, ($arg_max / 2 | math floor)] | math max
+    }
+  } catch {
+    200000
+  }
+}
+
 def run_copilot [
   model: string
   prompt: string
   output_file: string
 ] {
+  let prompt_limit = (calculate_copilot_prompt_limit)
+  let prompt_bytes = ($prompt | encode utf-8 | bytes length)
+
+  if $prompt_bytes > $prompt_limit {
+    return {
+      success: false,
+      error: $"gh copilot prompt is too large: ($prompt_bytes) UTF-8 bytes exceeds limit ($prompt_limit)"
+    }
+  }
+
   try {
-    $prompt | gh copilot suggest --model $model | save --force $output_file
+    gh copilot -- --model $model --prompt $prompt --silent | save --force $output_file
     { success: true, error: "" }
   } catch {|err|
     { success: false, error: ($err.msg | default $"gh copilot failed for model ($model)") }

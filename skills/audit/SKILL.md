@@ -1,7 +1,6 @@
 ---
 name: audit
 description: Audit code changes using either a standard review or a multi-model consensus review.
-allowed-tools: Bash Read Glob Grep AskUserQuestion
 ---
 
 # Audit Diff

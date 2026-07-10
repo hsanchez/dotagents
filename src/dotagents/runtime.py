@@ -27,6 +27,8 @@ from dotagents.manifest import (
 from dotagents.skillfile import available_skills, resolve_skillfile, skillfile_path
 from dotagents.version import package_version
 
+OPT_IN_SKILLS = frozenset({"prek-bootstrap"})
+
 
 @dataclass
 class OperationLog:
@@ -92,6 +94,10 @@ def manifest_drift(
   )
 
 
+def default_skills(asset_root: Path) -> tuple[str, ...]:
+  return tuple(skill for skill in available_skills(asset_root) if skill not in OPT_IN_SKILLS)
+
+
 def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) -> RuntimeContext:
   root = repo_root.resolve()
   assets = asset_root()
@@ -99,7 +105,7 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
   configured = requested_providers or configured_providers(root, manifest)
   providers = selected_providers(manifest, configured)
   skills = (
-    resolve_skillfile(root, assets) if (root / "Skillfile").exists() else available_skills(assets)
+    resolve_skillfile(root, assets) if (root / "Skillfile").exists() else default_skills(assets)
   )
   return RuntimeContext(
     repo_root=root,

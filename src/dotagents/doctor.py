@@ -103,5 +103,23 @@ def doctor(repo_root: Path) -> DoctorResult:
     lines.append("rules: missing .rules")
     passed = False
 
+  prek_bootstrap_selected = lock.skills is not None and "prek-bootstrap" in lock.skills
+  if prek_bootstrap_selected:
+    prek_available = shutil.which("prek") is not None
+    prek_config_exists = (repo_root / "prek.toml").exists() or (
+      repo_root / ".pre-commit-config.yaml"
+    ).exists()
+    missing_parts = []
+    if not prek_available:
+      missing_parts.append("prek")
+    if not prek_config_exists:
+      missing_parts.append("prek.toml or .pre-commit-config.yaml")
+    if missing_parts:
+      lines.append(
+        f"prek: missing ({', '.join(missing_parts)}) - enable the prek-bootstrap skill "
+        "(add to Skillfile, run: uv run dotagents sync)"
+      )
+      passed = False
+
   lines.append("doctor: ok" if passed else "doctor: failed")
   return DoctorResult(passed, tuple(lines))

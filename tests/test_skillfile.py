@@ -1,3 +1,5 @@
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,10 @@ from dotagents.skillfile import (
   resolve_preset,
   resolve_skillfile,
   write_preset_skillfile,
+)
+
+TOML_FENCE_RE = re.compile(
+  r"^[ \t]*```toml\s*\n(?P<content>.*?)^[ \t]*```", re.DOTALL | re.MULTILINE
 )
 
 
@@ -61,8 +67,10 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
 
 def test_full_preset_resolves_all_skills() -> None:
   selected = resolve_preset("full", asset_root())
+  opt_in_skills = {"prek-bootstrap"}
 
-  assert set(selected) == set(available_skills(asset_root()))
+  assert set(selected) == set(available_skills(asset_root())) - opt_in_skills
+  assert "prek-bootstrap" not in selected
 
 
 def test_write_preset_skillfile_creates_use_line(tmp_path: Path) -> None:
@@ -123,3 +131,10 @@ def test_template_lists_presets_and_skills() -> None:
   assert "# skill review-pr" in template
   assert "# skill review-saga" in template
   assert "# skill saga" in template
+
+
+def test_skill_docs_have_valid_toml_fences() -> None:
+  for skill_doc in sorted((asset_root() / "skills").glob("*/SKILL.md")):
+    content = skill_doc.read_text(encoding="utf-8")
+    for match in TOML_FENCE_RE.finditer(content):
+      tomllib.loads(match.group("content"))

@@ -7,6 +7,11 @@ from dotagents.doctor import doctor
 from dotagents.runtime import init_runtime
 
 
+def init_prek_bootstrap_runtime(repo_root: Path) -> None:
+  (repo_root / "Skillfile").write_text("skill prek-bootstrap\n", encoding="utf-8")
+  init_runtime(repo_root, ("claude",))
+
+
 def test_doctor_reports_missing_lockfile(tmp_path: Path) -> None:
   result = doctor(tmp_path)
 
@@ -88,3 +93,48 @@ def test_doctor_fails_when_uv_is_missing(tmp_path: Path, monkeypatch: pytest.Mon
 
   assert not result.passed
   assert "uv: missing" in result.lines
+
+
+def test_doctor_fails_when_prek_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_prek_bootstrap_runtime(Path.cwd())
+  monkeypatch.setattr(
+    "dotagents.doctor.shutil.which", lambda command: None if command == "prek" else "/bin/tool"
+  )
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert any(
+    line.startswith("prek: missing") and "prek-bootstrap" in line and "Skillfile" in line
+    for line in result.lines
+  )
+
+
+def test_doctor_prek_warning_lists_missing_config(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_prek_bootstrap_runtime(Path.cwd())
+  monkeypatch.setattr("dotagents.doctor.shutil.which", lambda _command: "/bin/tool")
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  warning = next(line for line in result.lines if line.startswith("prek: missing"))
+  assert "config" in warning
+  assert "prek," not in warning
+
+
+def test_doctor_prek_ok_when_binary_and_config_present(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_prek_bootstrap_runtime(Path.cwd())
+  (tmp_path / "prek.toml").write_text("repos: []\n")
+  monkeypatch.setattr("dotagents.doctor.shutil.which", lambda _command: "/bin/tool")
+
+  result = doctor(Path.cwd())
+
+  assert result.passed
+  assert not any(line.startswith("prek:") for line in result.lines)
