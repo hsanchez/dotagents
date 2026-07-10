@@ -63,6 +63,8 @@ The audit skill coordinates execution, finding extraction, clustering, confidenc
 
 Run from the repository root.
 
+By default this audits uncommitted changes. If the user names a base ref (a branch, tag, or commit to compare against — for example "audit this branch against main"), pass it to `review-code` to audit committed changes relative to that ref, plus any uncommitted changes on top.
+
 1. Check for untracked files:
 
    ```bash
@@ -83,8 +85,12 @@ Run from the repository root.
 2. Run `review-code` once:
 
    ```bash
-   scripts/review-code 2>/dev/null || review-code
+   REVIEW_CODE=scripts/review-code
+   command -v "$REVIEW_CODE" >/dev/null 2>&1 || REVIEW_CODE=review-code
+   "$REVIEW_CODE" ${BASE_REF:+"$BASE_REF"}
    ```
+
+   `review-code` exits nonzero on a real failure (for example, an invalid base ref). Check the exit code from this command, not just its printed output — a nonzero exit means there is no usable prompt, regardless of what was printed. Stop and relay the error in that case.
 
 3. Treat the output as a review prompt.
 
@@ -97,6 +103,8 @@ Run from the repository root.
 # Adversarial Audit
 
 Run multiple reviewer personas against the same canonical review prompt. Each persona has a different review lens, and each can run on a different backend. Agreement across personas carries stronger signal because they are looking for different classes of failure.
+
+By default this audits uncommitted changes. If the user names a base ref (a branch, tag, or commit to compare against), pass it through as `$BASE_REF` — `review-code` will then audit committed changes relative to that ref, plus any uncommitted changes on top.
 
 ## Personas
 
@@ -186,31 +194,51 @@ Then let the user re-invoke the audit.
 Next show diff stats:
 
 ```bash
+if [ -n "${BASE_REF:-}" ]; then
+  git diff --stat --no-ext-diff "${BASE_REF}...HEAD"
+fi
 git diff --stat HEAD
 ```
 
-If the diff is empty, stop and tell the user there are no uncommitted changes to audit.
+If both are empty, stop and tell the user there are no changes to audit.
 
 If the diff exceeds 2000 changed lines, warn the user and ask whether to proceed or narrow the scope.
 
 ## Review Input
 
-Create a per-run scratch directory and generate the canonical review prompt:
+Create a per-run scratch directory and generate the canonical review prompt. Resolve `$OUTPUT_DIR`, `$PROMPT_FILE`, and `$PERSONA_DIR` to absolute paths immediately — reviewer processes run from a neutral working directory (see [Reviewer Working Directory](#reviewer-working-directory)), so relative paths would break:
 
 ```bash
 mkdir -p .scratch
 OUTPUT_DIR=$(mktemp -d .scratch/audit-outputs.XXXXXX)
+OUTPUT_DIR=$(cd "$OUTPUT_DIR" && pwd)
 PROMPT_FILE=$(mktemp .scratch/review-prompt.XXXXXX)
-(scripts/review-code 2>/dev/null || review-code) > "$PROMPT_FILE"
+PROMPT_FILE="$(cd "$(dirname "$PROMPT_FILE")" && pwd)/$(basename "$PROMPT_FILE")"
+PERSONA_DIR="$(cd .agents/skills/audit/prompts && pwd)"
+REVIEWER_CWD=$(mktemp -d)
+trap 'rm -f "${PROMPT_FILE:-}"; rm -rf "${OUTPUT_DIR:-}" "${REVIEWER_CWD:-}"' EXIT
+
+REVIEW_CODE=scripts/review-code
+command -v "$REVIEW_CODE" >/dev/null 2>&1 || REVIEW_CODE=review-code
+"$REVIEW_CODE" ${BASE_REF:+"$BASE_REF"} > "$PROMPT_FILE"
+REVIEW_CODE_EXIT=$?
 ```
 
-Check for the no-changes sentinel:
+The `trap` is the authoritative cleanup mechanism for this run — it fires on normal completion, error, or interruption. The explicit cleanup step in [Cleanup](#cleanup) is a fallback for a session that cannot rely on shell traps, not a replacement.
+
+Check the exit code before trusting `$PROMPT_FILE`. `review-code` exits nonzero on a real failure — for example an invalid `$BASE_REF` — and in that case `$PROMPT_FILE` does not contain a usable prompt:
 
 ```bash
-if grep -qF "No uncommitted changes to review." "$PROMPT_FILE"; then
-  rm -f "$PROMPT_FILE"
-  rm -rf "$OUTPUT_DIR"
-  # stop and inform the user
+if [ "$REVIEW_CODE_EXIT" -ne 0 ]; then
+  # stop and relay the error review-code printed; do not proceed to execution
+fi
+```
+
+Only once `review-code` has exited 0 should you check for the no-changes sentinel:
+
+```bash
+if grep -qE "^No (uncommitted changes to review|changes to review relative to)" "$PROMPT_FILE"; then
+  # stop and inform the user there are no changes to review
 fi
 ```
 
@@ -220,7 +248,7 @@ For Copilot backends, build a combined input file because `gh copilot` does not 
 
 ```bash
 {
-  cat ".agents/skills/audit/prompts/<persona>.txt"
+  cat "$PERSONA_DIR/<persona>.txt"
   echo
   echo "Apply the lens above exclusively. Disregard any generic role framing in the instructions below."
   echo
@@ -240,8 +268,21 @@ Output filenames are opaque identifiers. Each persona writes to a unique file in
 
 Run selected personas independently. Prefer parallel execution when supported. Set a timeout of 600000 milliseconds for each reviewer process.
 
-Only write a manifest entry on success. A failed persona has no output file and
-no manifest entry.
+Only write a manifest entry on success, determined by exit code, not by whether stdout is empty. A failed persona's output, including partial stdout, is not a valid review result and must not receive a manifest entry.
+
+### Reviewer Working Directory
+
+Backend CLIs (notably `codex`) auto-load configuration from the current working directory on startup — `.codex/config.toml`, `.agents/`, etc. Running them from the audited repo's root means they load that repo's own agent configuration, which can break sandboxed startup (for example, `--sandbox read-only` rejecting the PATH-alias step Codex performs during init).
+
+The canonical prompt already contains the full diff, so reviewers do not need to start inside the repository. Launch every backend from a neutral working directory using absolute paths only:
+
+```bash
+REVIEWER_CWD=$(mktemp -d)
+```
+
+Wrap each invocation in a subshell that `cd`s into `$REVIEWER_CWD` first, as shown in [Default Backend Invocations](#default-backend-invocations). Every path passed to a reviewer (`$PROMPT_FILE`, `$PERSONA_DIR/<persona>.txt`, `$OUTPUT_DIR/...`) must already be absolute for this to work.
+
+If a backend still fails to initialize from a neutral directory, treat it as a genuine startup failure — do not retry inside the repo root, since that reintroduces the same repo-local config problem. Report the exact startup error (see [Error Handling](#error-handling)).
 
 ### Copilot Prompt Limit
 
@@ -261,31 +302,51 @@ fi
 **Auditor - codex**
 
 ```bash
-codex exec --sandbox read-only --ephemeral \
-  -o "$OUTPUT_DIR/audit-output-NN" \
-  "$(cat ".agents/skills/audit/prompts/auditor.txt")" < "$PROMPT_FILE"
-printf '%s\t%s\n' "auditor" "$OUTPUT_DIR/audit-output-NN" \
-  >> "$OUTPUT_DIR/manifest.tsv"
+(
+  cd "$REVIEWER_CWD" && \
+  codex exec --sandbox read-only --ephemeral \
+    -o "$OUTPUT_DIR/audit-output-NN" \
+    "$(cat "$PERSONA_DIR/auditor.txt")" < "$PROMPT_FILE" \
+    2> "$OUTPUT_DIR/auditor.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "auditor" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
 ```
 
 **Adversary - claude**
 
 ```bash
-claude --system-prompt "$(cat ".agents/skills/audit/prompts/adversary.txt")" \
-  --print < "$PROMPT_FILE" \
-  > "$OUTPUT_DIR/audit-output-NN"
-printf '%s\t%s\n' "adversary" "$OUTPUT_DIR/audit-output-NN" \
-  >> "$OUTPUT_DIR/manifest.tsv"
+(
+  cd "$REVIEWER_CWD" && \
+  claude --system-prompt "$(cat "$PERSONA_DIR/adversary.txt")" \
+    --print < "$PROMPT_FILE" \
+    > "$OUTPUT_DIR/audit-output-NN" \
+    2> "$OUTPUT_DIR/adversary.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "adversary" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
 ```
 
 **Pragmatist - copilot-gemini**
 
 ```bash
-gh copilot -- --model gemini-3.5-flash --prompt "$(cat "$OUTPUT_DIR/input-pragmatist")" --silent \
-  > "$OUTPUT_DIR/audit-output-NN"
-printf '%s\t%s\n' "pragmatist" "$OUTPUT_DIR/audit-output-NN" \
-  >> "$OUTPUT_DIR/manifest.tsv"
+(
+  cd "$REVIEWER_CWD" && \
+  gh copilot -- --model gemini-3.5-flash --prompt "$(cat "$OUTPUT_DIR/input-pragmatist")" --silent \
+    > "$OUTPUT_DIR/audit-output-NN" \
+    2> "$OUTPUT_DIR/pragmatist.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "pragmatist" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
 ```
+
+An exit code of 0 with empty stdout is a valid result: the persona found nothing. A nonzero exit code is always a failure, regardless of what was written to stdout — never report it as "no findings." Read the matching `.stderr` file to report or diagnose the failure.
 
 If a persona is assigned to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt, `codex` → instruction prompt, `copilot-gemini` → combined prompt).
 
@@ -451,11 +512,13 @@ If verbose mode is enabled, include disputed and solo findings after consensus f
 
 ## Failure Handling
 
+A persona has failed when its process exits nonzero, regardless of what was written to stdout. Empty stdout with a zero exit code is a successful run with no findings — do not conflate the two. Determine success from the exit code captured in [Default Backend Invocations](#default-backend-invocations), never from output emptiness alone.
+
 If a persona fails:
 
 - Continue if at least 2 personas succeed.
 - Exclude failed personas from confidence tiers and verdict counts.
-- Report failures in the summary.
+- Report failures in the summary, including the exit code and the relevant `.stderr` file content.
 
 If fewer than 2 personas succeed:
 
@@ -473,13 +536,15 @@ If aggregation fails:
 | Error                           | Action                                                                  |
 |---------------------------------|-------------------------------------------------------------------------|
 | `review-code` unavailable       | Stop and report that the review prompt generator is unavailable.        |
-| `review-code` failed            | Stop immediately.                                                       |
-| No uncommitted changes          | Stop and report that there are no changes to audit.                     |
+| `review-code` failed            | Stop immediately. Check `$REVIEW_CODE_EXIT`, not `$PROMPT_FILE` content — a nonzero exit means the file is not a usable prompt (for example, an invalid `$BASE_REF`). |
+| No changes to review            | Stop and report that there are no changes to audit (uncommitted, or relative to `$BASE_REF`). |
 | `gh: command not found`         | Tell user: `brew install gh && gh extension install github/gh-copilot`  |
 | `gh copilot` missing            | Tell user: `gh extension install github/gh-copilot`                     |
 | `claude: command not found`     | Tell user to install Claude Code.                                       |
 | `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
+| Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If it still fails, treat as a genuine failure and report the exact startup error from `auditor.stderr` — do not retry inside the repo root. |
 | Reviewer timeout                | Exclude reviewer; continue if quorum remains.                           |
+| Reviewer exits nonzero          | Treat as failed regardless of stdout content; report exit code and stderr.|
 | Fewer than 2 successful reviews | Abort adversarial audit.                                                |
 | Aggregation failed              | Stop and report failure.                                                |
 
@@ -487,19 +552,24 @@ If aggregation fails:
 
 Scratch files must be removed regardless of success, failure, timeout, reviewer failure, or user cancellation.
 
+The `trap` set in [Review Input](#review-input) is the primary cleanup mechanism — it removes `$PROMPT_FILE`, `$OUTPUT_DIR`, and `$REVIEWER_CWD` automatically when that shell session exits, including on error or interruption. Treat the steps below as an explicit fallback: run them if the trap-owning shell session has already ended (for example, execution moved to a new session) or if you cannot rely on shell traps in the current environment.
+
 After aggregation completes, or on failure, run cleanup as an explicit final
 step:
 
 ```bash
 rm -f "${PROMPT_FILE:-}"
 rm -rf "${OUTPUT_DIR:-}"
+rm -rf "${REVIEWER_CWD:-}"
 ```
 
-If the run was interrupted before cleanup, stale files remain under `.scratch/`. Inform the user and suggest:
+If the run was interrupted before cleanup, stale files remain under `.scratch/` and in the system temp directory. Inform the user and suggest:
 
 ```bash
 rm -f .scratch/review-prompt.* && rm -rf .scratch/audit-outputs.*
 ```
+
+`$REVIEWER_CWD` lives outside `.scratch/` (it must be a neutral directory, not one inside the audited repo) — if orphaned, it is an empty temp directory with no reviewer output in it, since reviewers only ever write to `$OUTPUT_DIR`.
 
 If debugging is needed, ask before preserving scratch files.
 
