@@ -130,6 +130,8 @@ Overrides are limited to these documented backends. Each backend has a fixed per
 
 Any persona can run on any backend in this table. A persona is not tied to its default backend.
 
+If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `codex` and run the same persona there. This is a backend fallback, not a persona failure. If `codex` is unavailable or fails to start, try `claude`. Only mark the persona failed after all non-Copilot fallback backends have failed.
+
 If the user asks for a backend not in this table, tell them it is unsupported and list the table above.
 
 ## Gather Context
@@ -284,18 +286,24 @@ Wrap each invocation in a subshell that `cd`s into `$REVIEWER_CWD` first, as sho
 
 If a backend still fails to initialize from a neutral directory, treat it as a genuine startup failure — do not retry inside the repo root, since that reintroduces the same repo-local config problem. Report the exact startup error (see [Error Handling](#error-handling)).
 
-### Copilot Prompt Limit
+### Copilot Prompt Limit and Fallback
 
-`gh copilot` passes the combined prompt via `--prompt` as a command-line argument. Before invoking any `copilot-*` backend, check the combined input file size and skip with a failure if it exceeds the safe limit derived from the operating system argument limit.
+`gh copilot` passes the combined prompt via `--prompt` as a command-line argument. Before invoking any `copilot-*` backend, check the combined input file size. If it exceeds the safe limit derived from the operating system argument limit, do not skip the persona. Reroute that persona to a non-Copilot backend using the same persona prompt and canonical review prompt.
 
 Use this shell approximation when no better runtime helper is available:
 
 ```bash
 if [ "$(wc -c < "$OUTPUT_DIR/input-<persona>")" -gt 200000 ]; then
-  echo "<persona>: prompt too large for copilot backend" >&2
-  # Treat as failed reviewer; continue if quorum remains.
+  BACKEND_<persona>=codex
 fi
 ```
+
+Fallback order for an oversized Copilot prompt:
+
+1. `codex`
+2. `claude`
+
+When a persona is rerouted, record the actual backend used in the summary. Do not include the failed Copilot attempt in `Failed personas`; it was never invoked.
 
 ### Default Backend Invocations
 
@@ -348,7 +356,7 @@ fi
 
 An exit code of 0 with empty stdout is a valid result: the persona found nothing. A nonzero exit code is always a failure, regardless of what was written to stdout — never report it as "no findings." Read the matching `.stderr` file to report or diagnose the failure.
 
-If a persona is assigned to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt, `codex` → instruction prompt, `copilot-gemini` → combined prompt).
+If a persona is assigned or rerouted to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt, `codex` → instruction prompt, `copilot-gemini` → combined prompt).
 
 ## Execution Quorum
 
@@ -543,6 +551,7 @@ If aggregation fails:
 | `claude: command not found`     | Tell user to install Claude Code.                                       |
 | `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
 | Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If it still fails, treat as a genuine failure and report the exact startup error from `auditor.stderr` — do not retry inside the repo root. |
+| Copilot prompt exceeds limit   | Reroute that persona to `codex`, then `claude` if needed. Treat as failed only if every non-Copilot fallback fails. |
 | Reviewer timeout                | Exclude reviewer; continue if quorum remains.                           |
 | Reviewer exits nonzero          | Treat as failed regardless of stdout content; report exit code and stderr.|
 | Fewer than 2 successful reviews | Abort adversarial audit.                                                |
