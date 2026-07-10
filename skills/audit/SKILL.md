@@ -436,7 +436,9 @@ Present tiers in order: cross-validated, consensus, disputed, solo.
 
 Within each tier, order by severity, then file path, then line number.
 
-Cross-validated and consensus findings always appear. Disputed and solo findings are hidden unless verbose mode is enabled.
+Cross-validated and consensus findings always appear.
+
+Disputed and solo findings are hidden unless verbose mode is enabled, except when they explain a non-ship verdict. If the final verdict is `NEEDS-WORK` or `SHIP-WITH-CAVEATS`, include the highest-severity finding from each non-approving persona even when that finding is disputed or solo. The user must be able to see why a persona rejected or conditionally approved the change.
 
 ## Severity Reconciliation
 
@@ -471,6 +473,30 @@ Use this summary scale:
 
 If no verdicts were emitted, omit the verdict line and report that persona verdicts were unavailable.
 
+## Verdict Drivers
+
+Every non-ship verdict must be explainable from the visible output.
+
+For each successful persona that emits `conditional` or `rejected`, identify the highest-severity finding from that persona and show it in a `Verdict drivers` section if it is not already visible in a cross-validated or consensus tier.
+
+Each verdict driver must include:
+
+- persona
+- backend actually used
+- verdict
+- severity
+- file and line, when available
+- title
+- fix, when available
+
+If a persona emits `conditional` or `rejected` but provides no finding, say that explicitly:
+
+```text
+Pragmatist: rejected, but emitted no extractable finding. Treat this reviewer output as incomplete and inspect the raw persona output before acting on the verdict.
+```
+
+Do not let a hidden solo finding be the only reason for `NEEDS-WORK`.
+
 ## Output
 
 Present findings grouped by confidence tier, then by severity:
@@ -485,6 +511,24 @@ Cross-validated findings: 1
 Consensus findings: 2
 Disputed findings: 0
 Solo findings: 0
+
+## Verdict Drivers
+
+Auditor (`codex`): rejected
+CRITICAL
+auth.py:42
+
+Missing authorization check before account update.
+
+Fix: Add `require_permission()` before any state mutation in this handler.
+
+Pragmatist (`copilot-gemini`): conditional
+HIGH
+worker.py:88
+
+Retry loop can repeat a non-idempotent operation.
+
+Fix: Add an idempotency key or move the retry boundary around only the safe read operation.
 
 ## Cross-Validated
 
@@ -515,6 +559,8 @@ Personas:
 ```
 
 If there are no cross-validated or consensus findings, say no finding met the confidence threshold. Do not claim the code is correct.
+
+If the verdict is `NEEDS-WORK` or `SHIP-WITH-CAVEATS`, include `Verdict drivers` before the confidence-tier findings. This section is required even at default verbosity.
 
 If verbose mode is enabled, include disputed and solo findings after consensus findings, clearly separated by tier.
 
@@ -593,6 +639,7 @@ At the end report:
 - Successful personas
 - Failed personas
 - Execution quorum
+- Verdict drivers for any non-ship verdict
 - Cross-validated findings count
 - Consensus findings count
 - Disputed and solo findings count, if verbose mode is enabled
@@ -627,7 +674,9 @@ Agent:
 - Runs the personas on their assigned default backends.
 - Extracts findings and verdict lines from each persona output.
 - Clusters equivalent findings across personas.
+- Shows verdict drivers for non-ship persona verdicts.
 - Reports cross-validated and consensus findings by default.
-- Reports disputed and solo findings only in verbose mode.
+- Reports disputed and solo findings in verbose mode, plus any hidden findings
+  required to explain the final verdict.
 - Verdict: SHIP-WITH-CAVEATS (2/3 approved, 1/3 conditional)
 ```
