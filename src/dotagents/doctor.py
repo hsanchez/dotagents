@@ -10,6 +10,7 @@ from dotagents.lockfile import read_lock, sha256_file
 from dotagents.runtime import (
   BUILD_MANIFEST_DESTINATION,
   build_context,
+  compiled_staleness_messages,
   compute_skillfile_sha256,
   manifest_drift,
   relative,
@@ -80,6 +81,9 @@ def doctor(repo_root: Path) -> DoctorResult:
     runtime_context.repo_root / BUILD_MANIFEST_DESTINATION
   ).exists() and BUILD_MANIFEST_DESTINATION not in lock_asset_destinations:
     lines.append("compiled artifacts: not locked; run: uv run dotagents sync")
+    passed = False
+  for message in compiled_staleness_messages(runtime_context.repo_root):
+    lines.append(f"{message}; rerun the compiler before sync")
     passed = False
 
   for asset in lock.assets:

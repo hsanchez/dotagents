@@ -369,6 +369,11 @@ listed artifact hash, and records the manifest plus artifacts in
 synced into the lockfile. `uninstall` removes locked compiled artifacts through
 the same safe-removal path used for packaged runtime files.
 
+Build manifests can also record source lineage. Supported source records include
+repo-local files, the installed dotagents package version, and explicit variable
+sets. `doctor` checks local file and package source versions and reports stale
+compiled artifacts when they differ from the manifest.
+
 ## Ownership
 
 ```text

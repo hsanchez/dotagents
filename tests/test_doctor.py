@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
+from dotagents.compiler import BuildSource, file_build_source
 from dotagents.doctor import doctor
 from dotagents.runtime import init_runtime
 
@@ -43,6 +44,125 @@ def test_doctor_reports_unlocked_compiled_build_manifest(
 
   assert not result.passed
   assert "compiled artifacts: not locked; run: uv run dotagents sync" in result.lines
+
+
+def test_doctor_reports_stale_compiled_file_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "templates" / "skill.md.j2"
+  source.parent.mkdir()
+  source.write_text("# {{ name }}\n", encoding="utf-8")
+  write_compiled_manifest(tmp_path, sources=(file_build_source(tmp_path, source),))
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.write_text("# changed\n", encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: file source changed: templates/skill.md.j2; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_stale_compiled_package_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    sources=(BuildSource(kind="package", reference="dotagents", version="0.0.0"),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: dotagents package changed; rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_unsafe_compiled_file_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    sources=(BuildSource(kind="file", reference="../outside.md", version="sha"),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: artifact path must stay within output root: ../outside.md; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_unrecognized_compiled_source_kind(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    sources=(BuildSource(kind="mcp", reference="github", version="0"),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: unrecognized source kind: mcp; rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_missing_compiled_file_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "templates" / "skill.md.j2"
+  source.parent.mkdir()
+  source.write_text("# {{ name }}\n", encoding="utf-8")
+  write_compiled_manifest(tmp_path, sources=(file_build_source(tmp_path, source),))
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.unlink()
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: file source missing: templates/skill.md.j2; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_invalid_build_manifest_json(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  manifest_path = tmp_path / ".agents" / "build" / "manifest.json"
+  manifest_path.parent.mkdir(parents=True, exist_ok=True)
+  manifest_path.write_text("not json", encoding="utf-8")
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert any(
+    line.startswith("compiled artifacts: build manifest error: cannot parse build manifest")
+    and line.endswith("; rerun the compiler before sync")
+    for line in result.lines
+  )
 
 
 def test_doctor_reports_version_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import uuid
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -14,6 +14,8 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 from jinja2.ext import Extension
 
 from dotagents.errors import DotagentsError
+from dotagents.lockfile import sha256_file
+from dotagents.version import package_version
 
 
 class CompilerError(DotagentsError):
@@ -49,8 +51,16 @@ class BuildManifestEntry:
 
 
 @dataclass(frozen=True)
+class BuildSource:
+  kind: str
+  reference: str
+  version: str
+
+
+@dataclass(frozen=True)
 class BuildManifest:
   artifacts: tuple[BuildManifestEntry, ...]
+  sources: tuple[BuildSource, ...] = field(default_factory=tuple)
 
 
 class ArtifactBlockExtension(Extension):
@@ -360,7 +370,11 @@ def write_build_manifest(path: Path, manifest: BuildManifest) -> None:
     "artifacts": [
       {"artifact": entry.artifact, "source": entry.source, "sha256": entry.sha256}
       for entry in manifest.artifacts
-    ]
+    ],
+    "sources": [
+      {"kind": source.kind, "reference": source.reference, "version": source.version}
+      for source in manifest.sources
+    ],
   }
   content = json.dumps(payload, indent=2) + "\n"
   temp_path: Path | None = None
@@ -399,6 +413,9 @@ def read_build_manifest(path: Path) -> BuildManifest:
   artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
   if not isinstance(artifacts, list):
     raise CompilerError("build manifest artifacts must be an array")
+  raw_sources = payload.get("sources", []) if isinstance(payload, dict) else []
+  if not isinstance(raw_sources, list):
+    raise CompilerError("build manifest sources must be an array")
 
   entries: list[BuildManifestEntry] = []
   for item in artifacts:
@@ -420,8 +437,52 @@ def read_build_manifest(path: Path) -> BuildManifest:
         sha256=sha256,
       )
     )
-  return BuildManifest(artifacts=tuple(entries))
+
+  sources: list[BuildSource] = []
+  for item in raw_sources:
+    if not isinstance(item, dict):
+      raise CompilerError("build manifest source entries must be objects")
+    kind = item.get("kind")
+    reference = item.get("reference")
+    version = item.get("version")
+    if not isinstance(kind, str) or not kind:
+      raise CompilerError("build manifest source entries require kind")
+    if not isinstance(reference, str) or not reference:
+      raise CompilerError("build manifest source entries require reference")
+    if not isinstance(version, str) or not version:
+      raise CompilerError("build manifest source entries require version")
+    sources.append(BuildSource(kind=kind, reference=reference, version=version))
+  return BuildManifest(artifacts=tuple(entries), sources=tuple(sources))
+
+
+def file_build_source(repo_root: Path, path: Path) -> BuildSource:
+  """Create a build source for a repo-local file.
+
+  Raises:
+    CompilerError: If the path is outside the repo root or cannot be hashed.
+  """
+  try:
+    reference = path.resolve().relative_to(repo_root.resolve()).as_posix()
+  except ValueError as exc:
+    raise CompilerError(f"build source file must be under repo root: {path}") from exc
+  try:
+    version = sha256_file(path)
+  except OSError as exc:
+    raise CompilerError(f"cannot hash file: {path}") from exc
+  return BuildSource(kind="file", reference=reference, version=version)
+
+
+def package_build_source() -> BuildSource:
+  return BuildSource(kind="package", reference="dotagents", version=package_version())
+
+
+def variables_build_source(name: str, variables: dict[str, Any]) -> BuildSource:
+  return BuildSource(kind="variables", reference=name, version=sha256_json(variables))
 
 
 def sha256_text(content: str) -> str:
   return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def sha256_json(value: object) -> str:
+  return sha256_text(json.dumps(value, sort_keys=True, separators=(",", ":")))

@@ -5,14 +5,21 @@ import pytest
 
 import dotagents.compiler as compiler
 from dotagents.compiler import (
+  BuildManifest,
+  BuildManifestEntry,
+  BuildSource,
   CompilerError,
   TemplateArtifact,
   compile_artifacts,
   compile_template_artifacts,
+  file_build_source,
+  package_build_source,
+  read_build_manifest,
   render_template,
   render_template_with_artifacts,
   required_template_variables,
   validate_relative_output_path,
+  variables_build_source,
   write_artifacts,
   write_build_manifest,
 )
@@ -296,6 +303,41 @@ def test_write_build_manifest_writes_json(tmp_path: Path) -> None:
   assert payload["artifacts"][0]["artifact"] == "demo/SKILL.md"
   assert payload["artifacts"][0]["source"] == "template"
   assert payload["artifacts"][0]["sha256"]
+
+
+def test_write_build_manifest_records_sources(tmp_path: Path) -> None:
+  manifest_path = tmp_path / ".agents" / "build" / "manifest.json"
+  manifest = BuildManifest(
+    artifacts=(BuildManifestEntry("demo/SKILL.md", "template", "artifact-sha"),),
+    sources=(
+      BuildSource("file", "templates/skill.md.j2", "source-sha"),
+      BuildSource("package", "dotagents", "0.1.0"),
+    ),
+  )
+
+  write_build_manifest(manifest_path, manifest)
+  loaded = read_build_manifest(manifest_path)
+
+  assert loaded == manifest
+
+
+def test_build_source_helpers_create_stable_versions(tmp_path: Path) -> None:
+  source = tmp_path / "templates" / "skill.md.j2"
+  source.parent.mkdir()
+  source.write_text("# {{ name }}\n", encoding="utf-8")
+
+  file_source = file_build_source(tmp_path, source)
+  variable_source = variables_build_source("skill", {"name": "demo"})
+  same_variable_source = variables_build_source("skill", {"name": "demo"})
+  package_source = package_build_source()
+
+  assert file_source.kind == "file"
+  assert file_source.reference == "templates/skill.md.j2"
+  assert file_source.version
+  assert variable_source == same_variable_source
+  assert package_source.kind == "package"
+  assert package_source.reference == "dotagents"
+  assert package_source.version
 
 
 def test_write_build_manifest_preserves_existing_file_when_replace_fails(

@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Literal
 
 from dotagents.assets import asset_root
-from dotagents.compiler import CompilerError, read_build_manifest, validate_relative_output_path
+from dotagents.compiler import (
+  BuildManifest,
+  BuildSource,
+  CompilerError,
+  read_build_manifest,
+  validate_relative_output_path,
+)
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import (
   LockedAsset,
@@ -422,22 +428,11 @@ def sync_runtime(
 
 
 def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) -> list[LockedAsset]:
-  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
-  if not manifest_path.exists():
-    if previous_lock is not None and any(
-      asset.destination == BUILD_MANIFEST_DESTINATION for asset in previous_lock.assets
-    ):
-      raise DotagentsError(
-        "compiled build manifest missing; restore .agents/build/manifest.json "
-        "or run the compiler before sync"
-      )
+  build_manifest = load_build_manifest_for_sync(repo_root, previous_lock)
+  if build_manifest is None:
     return []
 
-  try:
-    build_manifest = read_build_manifest(manifest_path)
-  except CompilerError as exc:
-    raise DotagentsError(str(exc)) from exc
-
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
   locked_assets = [
     LockedAsset(
       source=BUILD_MANIFEST_DESTINATION,
@@ -466,6 +461,26 @@ def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) ->
   return locked_assets
 
 
+def load_build_manifest_for_sync(
+  repo_root: Path, previous_lock: RuntimeLock | None
+) -> BuildManifest | None:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    if previous_lock is not None and any(
+      asset.destination == BUILD_MANIFEST_DESTINATION for asset in previous_lock.assets
+    ):
+      raise DotagentsError(
+        "compiled build manifest missing; restore .agents/build/manifest.json "
+        "or run the compiler before sync"
+      )
+    return None
+
+  try:
+    return read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    raise DotagentsError(str(exc)) from exc
+
+
 def validate_compiled_artifact_destination(destination: str) -> str:
   try:
     safe_destination = validate_relative_output_path(destination)
@@ -474,6 +489,48 @@ def validate_compiled_artifact_destination(destination: str) -> str:
   if not safe_destination.startswith(".agents/"):
     raise DotagentsError(f"compiled artifact must be under .agents: {safe_destination}")
   return safe_destination
+
+
+def compiled_staleness_messages(repo_root: Path) -> list[str]:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    return []
+  try:
+    build_manifest = read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    return [f"compiled artifacts: build manifest error: {exc}"]
+
+  messages: list[str] = []
+  for source in build_manifest.sources:
+    message = compiled_source_staleness_message(repo_root, source)
+    if message:
+      messages.append(message)
+  return messages
+
+
+def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> str | None:
+  if source.kind == "file":
+    try:
+      reference = validate_relative_output_path(source.reference)
+    except CompilerError as exc:
+      return f"compiled artifacts stale: {exc}"
+    path = repo_root / reference
+    if not path.is_file():
+      return f"compiled artifacts stale: file source missing: {reference}"
+    try:
+      current_version = sha256_file(path)
+    except OSError as exc:
+      return f"compiled artifacts stale: cannot hash file: {reference}: {exc}"
+    if current_version != source.version:
+      return f"compiled artifacts stale: file source changed: {reference}"
+    return None
+  if source.kind == "package":
+    if source.reference == "dotagents" and source.version != package_version():
+      return "compiled artifacts stale: dotagents package changed"
+    return None
+  if source.kind == "variables":
+    return None
+  return f"compiled artifacts stale: unrecognized source kind: {source.kind}"
 
 
 def remove_stale_links(
