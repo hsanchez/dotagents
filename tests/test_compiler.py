@@ -1,26 +1,38 @@
 import json
+import subprocess
+import sys
+import tarfile
+import time
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 
 import dotagents.compiler as compiler
 from dotagents.compiler import (
+  BuildGroup,
   BuildManifest,
   BuildManifestEntry,
   BuildSource,
   CompilerError,
+  GitHubSkillSource,
   MCPCapabilities,
   MCPTool,
   TemplateArtifact,
   compile_artifacts,
+  compile_github_skill,
+  compile_mcp_command_skill,
   compile_mcp_skill_artifacts,
   compile_template_artifacts,
   file_build_source,
   mcp_build_source,
   mcp_capabilities_version,
+  merge_build_manifest,
   package_build_source,
   read_build_manifest,
+  read_github_skill_artifacts,
   read_mcp_capabilities,
+  read_mcp_capabilities_from_command,
   read_template_variables,
   render_template,
   render_template_with_artifacts,
@@ -33,12 +45,55 @@ from dotagents.compiler import (
   write_template_skill,
 )
 
+GITHUB_REPO = "owner/repo"
+GITHUB_REF = "0123456789abcdef0123456789abcdef01234567"
+
 
 @pytest.fixture
 def templates(tmp_path: Path) -> Path:
   templates_dir = tmp_path / "templates"
   templates_dir.mkdir()
   return templates_dir
+
+
+def github_tarball(files: dict[str, str]) -> bytes:
+  archive = BytesIO()
+  with tarfile.open(fileobj=archive, mode="w") as tar:
+    for path, content in files.items():
+      data = content.encode("utf-8")
+      item = tarfile.TarInfo(f"repo-root/{path}")
+      item.size = len(data)
+      tar.addfile(item, BytesIO(data))
+  return archive.getvalue()
+
+
+def github_tarball_with_sizes(files: dict[str, int]) -> bytes:
+  archive = BytesIO()
+  with tarfile.open(fileobj=archive, mode="w") as tar:
+    for path, size in files.items():
+      data = b"x" * size
+      item = tarfile.TarInfo(f"repo-root/{path}")
+      item.size = len(data)
+      tar.addfile(item, BytesIO(data))
+  return archive.getvalue()
+
+
+class FakeProcess:
+  def __init__(self, stdout: bytes, stderr: bytes = b"", returncode: int = 0) -> None:
+    self.stdout = BytesIO(stdout)
+    self.stderr = BytesIO(stderr)
+    self.returncode = returncode
+    self.killed = False
+
+  def kill(self) -> None:
+    self.killed = True
+
+  def wait(self, timeout: int | None = None) -> int:
+    return self.returncode
+
+
+def fetch_test_github_archive(timeout_seconds: float) -> bytes:
+  return compiler.fetch_github_archive(GITHUB_REPO, GITHUB_REF, timeout_seconds)
 
 
 def test_required_template_variables_ignores_default_filter(templates: Path) -> None:
@@ -149,7 +204,7 @@ def test_compile_template_artifacts_returns_declared_artifacts(templates: Path) 
 
 
 @pytest.mark.parametrize(
-  "path", ("", " ", "/absolute.md", "../escape.md", "nested/../escape.md", ".")
+  "path", ("", " ", "/absolute.md", "../escape.md", "nested/../escape.md", ".", "windows\\path.md")
 )
 def test_validate_relative_output_path_rejects_unsafe_paths(path: str) -> None:
   with pytest.raises(CompilerError):
@@ -328,6 +383,67 @@ def test_write_build_manifest_records_sources(tmp_path: Path) -> None:
   loaded = read_build_manifest(manifest_path)
 
   assert loaded == manifest
+
+
+def test_write_build_manifest_records_groups(tmp_path: Path) -> None:
+  manifest_path = tmp_path / ".agents" / "build" / "manifest.json"
+  artifact = BuildManifestEntry(".agents/skills/demo/SKILL.md", "template:demo", "artifact-sha")
+  source = BuildSource("template", "source-ref", "source-sha")
+  group = BuildGroup(
+    id="skill:demo",
+    compiler="template",
+    output_prefix=".agents/skills/demo",
+    artifacts=(artifact,),
+    sources=(source,),
+  )
+  manifest = BuildManifest(artifacts=(artifact,), sources=(source,), groups=(group,))
+
+  write_build_manifest(manifest_path, manifest)
+  payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+  loaded = read_build_manifest(manifest_path)
+
+  assert payload["schema_version"] == 1
+  assert payload["groups"][0]["id"] == "skill:demo"
+  assert loaded == manifest
+  assert loaded.artifacts == (artifact,)
+  assert loaded.sources == (source,)
+
+
+def test_merge_build_manifest_preserves_flat_manifest_entries_as_legacy_group() -> None:
+  legacy_artifact = BuildManifestEntry(
+    ".agents/skills/legacy/SKILL.md",
+    "template:legacy",
+    "legacy-sha",
+  )
+  legacy_source = BuildSource("file", "templates/legacy.md.j2", "source-sha")
+  replacement_artifact = BuildManifestEntry(
+    ".agents/skills/new/SKILL.md",
+    "template:new",
+    "new-sha",
+  )
+  replacement_source = BuildSource("template", "new-source", "new-source-sha")
+  replacement_group = BuildGroup(
+    id="skill:new",
+    compiler="template",
+    output_prefix=".agents/skills/new",
+    artifacts=(replacement_artifact,),
+    sources=(replacement_source,),
+  )
+
+  merged = merge_build_manifest(
+    BuildManifest(artifacts=(legacy_artifact,), sources=(legacy_source,)),
+    BuildManifest(
+      artifacts=(replacement_artifact,),
+      sources=(replacement_source,),
+      groups=(replacement_group,),
+    ),
+    ".agents/skills/new",
+    {("template", ".agents/skills/new")},
+  )
+
+  assert [group.id for group in merged.groups] == ["legacy:compiled-artifacts", "skill:new"]
+  assert merged.groups[0].artifacts == (legacy_artifact,)
+  assert merged.groups[0].sources == (legacy_source,)
 
 
 def test_build_source_helpers_create_stable_versions(tmp_path: Path) -> None:
@@ -583,6 +699,51 @@ def test_write_mcp_skill_keeps_metadata_sources_for_distinct_output_skills(
   }
 
 
+def test_read_mcp_capabilities_from_command_reads_stdout(tmp_path: Path) -> None:
+  command = tmp_path / "metadata.py"
+  command.write_text(
+    "import json\nprint(json.dumps({'tools': [{'name': 'search', 'description': 'Search'}]}))\n",
+    encoding="utf-8",
+  )
+
+  capabilities = read_mcp_capabilities_from_command(
+    sys.executable,
+    (str(command),),
+    server="github",
+  )
+
+  assert capabilities.server == "github"
+  assert [tool.name for tool in capabilities.tools] == ["search"]
+
+
+def test_read_mcp_capabilities_from_command_rejects_non_utf8_stdout(tmp_path: Path) -> None:
+  command = tmp_path / "metadata.py"
+  command.write_text(
+    "import sys\nsys.stdout.buffer.write(b'\\xff')\n",
+    encoding="utf-8",
+  )
+
+  with pytest.raises(CompilerError, match="output must be UTF-8"):
+    read_mcp_capabilities_from_command(sys.executable, (str(command),), server="github")
+
+
+def test_compile_mcp_command_skill_records_command_source(tmp_path: Path) -> None:
+  capabilities = MCPCapabilities("github", (MCPTool("search", "Search", {}),))
+
+  compiled_skill = compile_mcp_command_skill(
+    tmp_path,
+    capabilities,
+    "github",
+    "inspect-mcp",
+    ("github", "--json"),
+  )
+
+  assert compiled_skill.rendered_artifacts["SKILL.md"].startswith("# github MCP")
+  assert [source.kind for source in compiled_skill.sources] == ["mcp", "mcp-command", "package"]
+  assert "inspect-mcp" in compiled_skill.sources[1].reference
+  assert "github" in compiled_skill.sources[1].reference
+
+
 def test_write_mcp_skill_rejects_reserved_skill_name(tmp_path: Path) -> None:
   metadata = tmp_path / "github-mcp.json"
   metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
@@ -598,6 +759,282 @@ def test_write_mcp_skill_rejects_reserved_skill_name(tmp_path: Path) -> None:
     )
 
   assert not (tmp_path / ".agents" / "skills" / "research").exists()
+
+
+def test_read_github_skill_artifacts_extracts_requested_skill(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  archive = github_tarball(
+    {
+      "skills/review/SKILL.md": "# Review\n",
+      "skills/review/tools/check.md": "Check\n",
+      "skills/other/SKILL.md": "# Other\n",
+    }
+  )
+
+  def fake_fetch(repo: str, ref: str, timeout_seconds: float) -> bytes:
+    return archive
+
+  monkeypatch.setattr(compiler, "fetch_github_archive", fake_fetch)
+
+  artifacts = read_github_skill_artifacts(
+    GitHubSkillSource(
+      repo=GITHUB_REPO,
+      path="skills/review",
+      ref=GITHUB_REF,
+    )
+  )
+
+  assert artifacts == {"SKILL.md": "# Review\n", "tools/check.md": "Check\n"}
+
+
+def test_github_skill_artifacts_reject_windows_style_paths() -> None:
+  archive = github_tarball({"skills/review/..\\..\\escaped.txt": "bad\n"})
+
+  with pytest.raises(CompilerError, match="POSIX separators"):
+    compiler.extract_github_skill_artifacts(archive, "skills/review")
+
+
+def test_github_skill_artifacts_reject_large_files(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(compiler, "MAX_GITHUB_SKILL_FILE_BYTES", 3)
+  archive = github_tarball_with_sizes({"skills/review/SKILL.md": 4})
+
+  with pytest.raises(CompilerError, match="GitHub archive file exceeds 3 bytes"):
+    compiler.extract_github_skill_artifacts(archive, "skills/review")
+
+
+def test_github_skill_artifacts_limits_out_of_scope_regular_members(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  monkeypatch.setattr(compiler, "MAX_GITHUB_SKILL_FILE_BYTES", 3)
+  archive = github_tarball_with_sizes(
+    {
+      "vendor/blob.bin": 4,
+      "skills/review/SKILL.md": 1,
+    }
+  )
+
+  with pytest.raises(CompilerError, match="GitHub archive file exceeds 3 bytes"):
+    compiler.extract_github_skill_artifacts(archive, "skills/review")
+
+
+def test_github_skill_artifacts_limits_total_out_of_scope_uncompressed_bytes(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  monkeypatch.setattr(compiler, "MAX_GITHUB_SKILL_FILE_BYTES", 10)
+  monkeypatch.setattr(compiler, "MAX_GITHUB_SKILL_BYTES", 5)
+  archive = github_tarball_with_sizes(
+    {
+      "vendor/first.bin": 3,
+      "vendor/second.bin": 3,
+      "skills/review/SKILL.md": 1,
+    }
+  )
+
+  with pytest.raises(CompilerError, match="GitHub archive files exceed 5 bytes"):
+    compiler.extract_github_skill_artifacts(archive, "skills/review")
+
+
+def test_github_skill_artifacts_reject_too_many_members(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(compiler, "MAX_GITHUB_ARCHIVE_MEMBERS", 1)
+  archive = github_tarball(
+    {
+      "README.md": "# Repo\n",
+      "skills/review/SKILL.md": "# Review\n",
+    }
+  )
+
+  with pytest.raises(CompilerError, match="GitHub archive exceeds 1 members"):
+    compiler.extract_github_skill_artifacts(archive, "skills/review")
+
+
+def test_fetch_github_archive_streams_with_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+  process = FakeProcess(b"abcdef")
+
+  def fake_open_process(endpoint: str) -> FakeProcess:
+    return process
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+  monkeypatch.setattr(compiler, "MAX_GITHUB_ARCHIVE_BYTES", 3)
+
+  with pytest.raises(CompilerError, match="GitHub archive exceeds 3 bytes"):
+    fetch_test_github_archive(60)
+
+  assert process.killed
+
+
+def test_fetch_github_archive_reports_gh_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+  process = FakeProcess(b"", stderr=b"bad auth", returncode=1)
+
+  def fake_open_process(endpoint: str) -> FakeProcess:
+    return process
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+
+  with pytest.raises(CompilerError, match="GitHub archive fetch failed.*bad auth"):
+    fetch_test_github_archive(60)
+
+
+def test_fetch_github_archive_rejects_without_process_group_cleanup(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  monkeypatch.setattr(compiler, "supports_github_archive_process_cleanup", lambda: False)
+
+  with pytest.raises(CompilerError, match="requires POSIX process-group cleanup"):
+    fetch_test_github_archive(60)
+
+
+def test_fetch_github_archive_drains_stderr_without_deadlock(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  script = (
+    "import sys\n"
+    "sys.stdout.buffer.write(b'a')\n"
+    "sys.stdout.buffer.flush()\n"
+    "sys.stderr.buffer.write(b'x' * (2 * 1024 * 1024))\n"
+    "sys.stderr.buffer.flush()\n"
+  )
+
+  def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+      [sys.executable, "-c", script],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+    )
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+
+  archive = fetch_test_github_archive(10)
+
+  assert archive == b"a"
+
+
+def test_fetch_github_archive_times_out_without_waiting_for_child_exit(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  script = (
+    "import sys, time\n"
+    "sys.stdout.buffer.write(b'a')\n"
+    "sys.stdout.buffer.flush()\n"
+    "sys.stdout.buffer.close()\n"
+    "time.sleep(5)\n"
+  )
+
+  def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+      [sys.executable, "-c", script],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+    )
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+
+  started = time.monotonic()
+  with pytest.raises(CompilerError, match="GitHub archive fetch timed out"):
+    fetch_test_github_archive(1)
+  elapsed = time.monotonic() - started
+
+  assert elapsed < 3
+
+
+def test_fetch_github_archive_timeout_kills_descendant_with_inherited_pipes(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  script = (
+    "import subprocess, sys, time\n"
+    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+    "time.sleep(5)\n"
+  )
+
+  def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+      [sys.executable, "-c", script],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      start_new_session=True,
+    )
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+
+  started = time.monotonic()
+  with pytest.raises(CompilerError, match="GitHub archive fetch timed out"):
+    fetch_test_github_archive(0.1)
+  elapsed = time.monotonic() - started
+
+  assert elapsed < 1
+
+
+def test_fetch_github_archive_bounds_stderr_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
+  script = (
+    "import sys\n"
+    "sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024))\n"
+    "sys.stderr.buffer.flush()\n"
+    "sys.exit(1)\n"
+  )
+
+  def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+      [sys.executable, "-c", script],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+    )
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+
+  with pytest.raises(CompilerError, match="GitHub archive fetch failed") as excinfo:
+    fetch_test_github_archive(10)
+
+  diagnostic = str(excinfo.value).rsplit(": ", 1)[1]
+  assert len(diagnostic) <= compiler.GITHUB_ARCHIVE_STDERR_DIAGNOSTIC_BYTES
+
+
+def test_fetch_github_archive_preserves_stderr_diagnostic_prefix(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  script = (
+    "import sys\n"
+    "sys.stderr.buffer.write(b'useful diagnostic\\n' + b'x' * 1000)\n"
+    "sys.stderr.buffer.flush()\n"
+    "sys.exit(1)\n"
+  )
+
+  def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+      [sys.executable, "-c", script],
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+    )
+
+  monkeypatch.setattr(compiler, "open_github_archive_process", fake_open_process)
+
+  with pytest.raises(CompilerError, match="useful diagnostic"):
+    fetch_test_github_archive(10)
+
+
+def test_compile_github_skill_requires_commit_sha() -> None:
+  with pytest.raises(CompilerError, match="full 40-character commit SHA"):
+    compile_github_skill(GITHUB_REPO, "skills/review", "main", "review")
+
+
+def test_compile_github_skill_records_pinned_source(monkeypatch: pytest.MonkeyPatch) -> None:
+  archive = github_tarball({"skills/review/SKILL.md": "# Review\n"})
+
+  def fake_fetch(repo: str, ref: str, timeout_seconds: float) -> bytes:
+    return archive
+
+  monkeypatch.setattr(compiler, "fetch_github_archive", fake_fetch)
+
+  compiled_skill = compile_github_skill(
+    GITHUB_REPO,
+    "skills/review",
+    GITHUB_REF,
+    "review",
+  )
+
+  assert compiled_skill.rendered_artifacts == {"SKILL.md": "# Review\n"}
+  assert compiled_skill.artifact_source == "github-skill:review"
+  assert [source.kind for source in compiled_skill.sources] == ["github-skill", "package"]
+  assert compiled_skill.sources[0].version == GITHUB_REF
 
 
 def test_write_build_manifest_preserves_existing_file_when_replace_fails(

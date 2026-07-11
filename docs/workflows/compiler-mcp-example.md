@@ -1,7 +1,8 @@
 # MCP compiler example
 
 This example compiles deterministic MCP capability metadata into a managed
-dotagents skill. It demonstrates the compiler path without live MCP discovery.
+dotagents skill. It supports a repo-local metadata file or an explicit command
+that prints the same metadata shape to stdout.
 
 ## Why this matters
 
@@ -50,7 +51,40 @@ Create `github-mcp.json` in the consuming repo:
 }
 ```
 
+You can also generate the snapshot through an explicit command:
+
+```bash
+uv run dotagents compile mcp \
+  --name github \
+  --from-command ./scripts/export-github-mcp-tools \
+  --output-skill github-mcp \
+  --dry-run
+```
+
+Use `--arg` for command arguments:
+
+```bash
+uv run dotagents compile mcp \
+  --name github \
+  --from-command ./scripts/export-mcp-tools \
+  --arg github \
+  --output-skill github-mcp
+```
+
+dotagents runs this command only during `compile`. The resulting skill and
+manifest record the captured capability hash and command provenance. `sync`,
+`doctor`, `compile status`, and `compile check` do not rerun the command or
+poll the MCP server.
+
 ## 2. Compile it into a skill
+
+Preview first:
+
+```bash
+uv run dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp --dry-run
+```
+
+Then write the generated skill:
 
 ```bash
 uv run dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp

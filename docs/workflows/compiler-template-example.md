@@ -47,6 +47,18 @@ Create `team-policy.json`:
 
 ## 3. Compile the skill
 
+Preview first:
+
+```bash
+uv run dotagents compile template \
+  --template templates/team-policy.md.j2 \
+  --variables team-policy.json \
+  --output-skill team-policy \
+  --dry-run
+```
+
+Then write the generated skill:
+
 ```bash
 uv run dotagents compile template \
   --template templates/team-policy.md.j2 \

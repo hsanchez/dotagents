@@ -9,7 +9,9 @@ from typing import Literal
 
 from dotagents.assets import asset_root
 from dotagents.compiler import (
+  BuildGroup,
   BuildManifest,
+  BuildManifestEntry,
   BuildSource,
   CompilerError,
   parse_mcp_metadata_reference,
@@ -73,6 +75,13 @@ class RuntimeDrift:
         f"package is {self.package_value}. Run: uv run dotagents update"
       )
     return "agents.toml manifest changed. Run: uv run dotagents update"
+
+
+@dataclass(frozen=True)
+class CompiledGroupStatus:
+  id: str
+  status: Literal["ok", "stale", "missing", "invalid"]
+  messages: tuple[str, ...] = ()
 
 
 def check_drift(
@@ -521,6 +530,75 @@ def compiled_staleness_messages(repo_root: Path) -> list[str]:
   return messages
 
 
+def compiled_group_statuses(repo_root: Path) -> tuple[CompiledGroupStatus, ...]:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    return (CompiledGroupStatus("compiled artifacts", "ok", ("no compiled artifacts",)),)
+  try:
+    build_manifest = read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    return (
+      CompiledGroupStatus(
+        "compiled artifacts",
+        "invalid",
+        (f"compiled artifacts: build manifest error: {exc}",),
+      ),
+    )
+
+  groups = build_manifest.groups or (
+    BuildGroup(
+      id="compiled artifacts",
+      compiler="unknown",
+      output_prefix=".agents",
+      artifacts=build_manifest.artifacts,
+      sources=build_manifest.sources,
+    ),
+  )
+  return tuple(compiled_group_status(repo_root, group) for group in groups)
+
+
+def compiled_group_status(repo_root: Path, group: BuildGroup) -> CompiledGroupStatus:
+  messages: list[str] = []
+  for artifact in group.artifacts:
+    message = compiled_artifact_status_message(repo_root, artifact)
+    if message:
+      messages.append(message)
+  for source in group.sources:
+    message = compiled_source_staleness_message(repo_root, source)
+    if message:
+      messages.append(message)
+  return CompiledGroupStatus(group.id, compiled_status_from_messages(messages), tuple(messages))
+
+
+def compiled_artifact_status_message(
+  repo_root: Path,
+  artifact: BuildManifestEntry,
+) -> str | None:
+  try:
+    destination = validate_compiled_artifact_destination(artifact.artifact)
+  except DotagentsError as exc:
+    return f"compiled artifacts invalid: {exc}"
+  path = repo_root / destination
+  if not path.is_file():
+    return f"compiled artifact missing: {destination}"
+  actual_sha256 = sha256_file(path)
+  if actual_sha256 != artifact.sha256:
+    return f"compiled artifact changed since build manifest: {destination}"
+  return None
+
+
+def compiled_status_from_messages(
+  messages: list[str],
+) -> Literal["ok", "stale", "missing", "invalid"]:
+  if not messages:
+    return "ok"
+  if any("invalid" in message or "error" in message for message in messages):
+    return "invalid"
+  if any("missing" in message for message in messages):
+    return "missing"
+  return "stale"
+
+
 def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> str | None:
   if source.kind == "file":
     try:
@@ -541,7 +619,7 @@ def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> s
     return None
   if source.kind == "variables":
     return None
-  if source.kind == "mcp":
+  if source.kind in {"mcp", "mcp-command", "github-skill"}:
     return None
   if source.kind == "mcp-metadata":
     try:
