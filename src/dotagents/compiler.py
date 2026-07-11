@@ -421,20 +421,13 @@ def read_build_manifest(path: Path) -> BuildManifest:
   for item in artifacts:
     if not isinstance(item, dict):
       raise CompilerError("build manifest artifact entries must be objects")
-    artifact = item.get("artifact")
-    source = item.get("source")
-    sha256 = item.get("sha256")
-    if not isinstance(artifact, str) or not artifact:
-      raise CompilerError("build manifest artifact entries require artifact")
-    if not isinstance(source, str) or not source:
-      raise CompilerError("build manifest artifact entries require source")
-    if not isinstance(sha256, str) or not sha256:
-      raise CompilerError("build manifest artifact entries require sha256")
     entries.append(
       BuildManifestEntry(
-        artifact=validate_relative_output_path(artifact),
-        source=source,
-        sha256=sha256,
+        artifact=validate_relative_output_path(
+          require_manifest_string(item, "artifact", "artifact")
+        ),
+        source=require_manifest_string(item, "source", "artifact"),
+        sha256=require_manifest_string(item, "sha256", "artifact"),
       )
     )
 
@@ -442,17 +435,26 @@ def read_build_manifest(path: Path) -> BuildManifest:
   for item in raw_sources:
     if not isinstance(item, dict):
       raise CompilerError("build manifest source entries must be objects")
-    kind = item.get("kind")
-    reference = item.get("reference")
-    version = item.get("version")
-    if not isinstance(kind, str) or not kind:
-      raise CompilerError("build manifest source entries require kind")
-    if not isinstance(reference, str) or not reference:
-      raise CompilerError("build manifest source entries require reference")
-    if not isinstance(version, str) or not version:
-      raise CompilerError("build manifest source entries require version")
-    sources.append(BuildSource(kind=kind, reference=reference, version=version))
+    sources.append(
+      BuildSource(
+        kind=require_manifest_string(item, "kind", "source"),
+        reference=require_manifest_string(item, "reference", "source"),
+        version=require_manifest_string(item, "version", "source"),
+      )
+    )
   return BuildManifest(artifacts=tuple(entries), sources=tuple(sources))
+
+
+def require_manifest_string(item: dict[str, Any], field_name: str, entity_name: str) -> str:
+  """Return item[field_name] as a non-empty string.
+
+  Raises:
+    CompilerError: If the field is missing, not a string, or empty.
+  """
+  value = item.get(field_name)
+  if not isinstance(value, str) or not value:
+    raise CompilerError(f"build manifest {entity_name} entries require {field_name}")
+  return value
 
 
 def file_build_source(repo_root: Path, path: Path) -> BuildSource:
