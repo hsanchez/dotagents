@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from helpers import make_lock_stale, make_manifest_stale
+from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
 from dotagents.doctor import doctor
 from dotagents.runtime import init_runtime
@@ -30,6 +30,19 @@ def test_doctor_reports_missing_managed_asset(
 
   assert not result.passed
   assert "missing: .agents/scripts/review-code" in result.lines
+
+
+def test_doctor_reports_unlocked_compiled_build_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(tmp_path)
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert "compiled artifacts: not locked; run: uv run dotagents sync" in result.lines
 
 
 def test_doctor_reports_version_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

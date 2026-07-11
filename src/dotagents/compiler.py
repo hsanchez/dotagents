@@ -383,5 +383,45 @@ def write_build_manifest(path: Path, manifest: BuildManifest) -> None:
     raise CompilerError(f"cannot write build manifest: {path}") from exc
 
 
+def read_build_manifest(path: Path) -> BuildManifest:
+  """Read a JSON build manifest.
+
+  Raises:
+    CompilerError: If the manifest cannot be read or is invalid.
+  """
+  try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+  except OSError as exc:
+    raise CompilerError(f"cannot read build manifest: {path}") from exc
+  except json.JSONDecodeError as exc:
+    raise CompilerError(f"cannot parse build manifest: {path}") from exc
+
+  artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+  if not isinstance(artifacts, list):
+    raise CompilerError("build manifest artifacts must be an array")
+
+  entries: list[BuildManifestEntry] = []
+  for item in artifacts:
+    if not isinstance(item, dict):
+      raise CompilerError("build manifest artifact entries must be objects")
+    artifact = item.get("artifact")
+    source = item.get("source")
+    sha256 = item.get("sha256")
+    if not isinstance(artifact, str) or not artifact:
+      raise CompilerError("build manifest artifact entries require artifact")
+    if not isinstance(source, str) or not source:
+      raise CompilerError("build manifest artifact entries require source")
+    if not isinstance(sha256, str) or not sha256:
+      raise CompilerError("build manifest artifact entries require sha256")
+    entries.append(
+      BuildManifestEntry(
+        artifact=validate_relative_output_path(artifact),
+        source=source,
+        sha256=sha256,
+      )
+    )
+  return BuildManifest(artifacts=tuple(entries))
+
+
 def sha256_text(content: str) -> str:
   return hashlib.sha256(content.encode("utf-8")).hexdigest()

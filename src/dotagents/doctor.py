@@ -8,6 +8,7 @@ from pathlib import Path
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import read_lock, sha256_file
 from dotagents.runtime import (
+  BUILD_MANIFEST_DESTINATION,
   build_context,
   compute_skillfile_sha256,
   manifest_drift,
@@ -73,6 +74,13 @@ def doctor(repo_root: Path) -> DoctorResult:
     elif lock.skillfile_sha256 != compute_skillfile_sha256(repo_root):
       lines.append("Skillfile: changed since lockfile; run: uv run dotagents sync")
       passed = False
+
+  lock_asset_destinations = {asset.destination for asset in lock.assets}
+  if (
+    runtime_context.repo_root / BUILD_MANIFEST_DESTINATION
+  ).exists() and BUILD_MANIFEST_DESTINATION not in lock_asset_destinations:
+    lines.append("compiled artifacts: not locked; run: uv run dotagents sync")
+    passed = False
 
   for asset in lock.assets:
     path = repo_root / asset.destination

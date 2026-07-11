@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotagents.assets import asset_root
+from dotagents.compiler import CompilerError, read_build_manifest, validate_relative_output_path
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import (
   LockedAsset,
@@ -28,6 +29,7 @@ from dotagents.skillfile import available_skills, resolve_skillfile, skillfile_p
 from dotagents.version import package_version
 
 OPT_IN_SKILLS = frozenset({"prek-bootstrap"})
+BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
 
 
 @dataclass
@@ -328,6 +330,7 @@ def sync_runtime(
   locked_links: list[LockedLink] = []
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
   previous_lock = read_lock(lock_path) if lock_path.exists() else None
+  compiled_assets = compiled_lock_entries(runtime_context.repo_root, previous_lock)
 
   ensure_dir(runtime_context.repo_root, runtime_context.runtime_dir, operation_log)
   copy_file(
@@ -363,6 +366,7 @@ def sync_runtime(
     )
 
   render_rules(runtime_context, operation_log)
+  locked_assets.extend(compiled_assets)
 
   for entry in selected_entries(
     runtime_context.manifest, runtime_context.providers, runtime_context.skills
@@ -415,6 +419,61 @@ def sync_runtime(
     operation_log.add("wrote .agents/dotagents.lock")
 
   return operation_log
+
+
+def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) -> list[LockedAsset]:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    if previous_lock is not None and any(
+      asset.destination == BUILD_MANIFEST_DESTINATION for asset in previous_lock.assets
+    ):
+      raise DotagentsError(
+        "compiled build manifest missing; restore .agents/build/manifest.json "
+        "or run the compiler before sync"
+      )
+    return []
+
+  try:
+    build_manifest = read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    raise DotagentsError(str(exc)) from exc
+
+  locked_assets = [
+    LockedAsset(
+      source=BUILD_MANIFEST_DESTINATION,
+      destination=BUILD_MANIFEST_DESTINATION,
+      sha256=sha256_file(manifest_path),
+    )
+  ]
+  seen_destinations = {BUILD_MANIFEST_DESTINATION}
+  for entry in build_manifest.artifacts:
+    destination = validate_compiled_artifact_destination(entry.artifact)
+    if destination in seen_destinations:
+      raise DotagentsError(f"duplicate compiled artifact: {destination}")
+    seen_destinations.add(destination)
+    artifact_path = repo_root / destination
+    if not artifact_path.is_file():
+      raise DotagentsError(f"compiled artifact missing: {destination}")
+    actual_sha256 = sha256_file(artifact_path)
+    if actual_sha256 != entry.sha256:
+      raise DotagentsError(
+        f"compiled artifact changed since build manifest: {destination}; "
+        "rerun the compiler before sync"
+      )
+    locked_assets.append(
+      LockedAsset(source=f"compiled:{destination}", destination=destination, sha256=entry.sha256)
+    )
+  return locked_assets
+
+
+def validate_compiled_artifact_destination(destination: str) -> str:
+  try:
+    safe_destination = validate_relative_output_path(destination)
+  except CompilerError as exc:
+    raise DotagentsError(str(exc)) from exc
+  if not safe_destination.startswith(".agents/"):
+    raise DotagentsError(f"compiled artifact must be under .agents: {safe_destination}")
+  return safe_destination
 
 
 def remove_stale_links(

@@ -356,6 +356,19 @@ Shared skills are canonical under `.agents/skills`. Claude receives them through
 Repo-root `scripts/*` links are intentional convenience commands backed by
 `.agents/scripts`.
 
+## Compiled Artifacts
+
+dotagents can track compiler-produced artifacts under the same runtime ownership
+model as packaged assets. A compiler writes artifact files and records them in
+`.agents/build/manifest.json`. Manifest `artifact` paths are relative to the
+repo root and must stay under `.agents/`.
+
+During `sync` and `update`, dotagents validates the manifest, verifies each
+listed artifact hash, and records the manifest plus artifacts in
+`.agents/dotagents.lock`. `doctor` reports a build manifest that has not been
+synced into the lockfile. `uninstall` removes locked compiled artifacts through
+the same safe-removal path used for packaged runtime files.
+
 ## Ownership
 
 ```text
