@@ -419,6 +419,7 @@ def sync_runtime(
     runtime_context.repo_root, previous_lock, locked_assets, operation_log
   )
   locked_assets.extend(skipped_stale_assets)
+  validate_locked_asset_destinations_unique(locked_assets)
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
@@ -796,6 +797,18 @@ def unique_locked_assets(locked_assets: list[LockedAsset]) -> list[LockedAsset]:
   for asset in locked_assets:
     unique[(asset.source, asset.destination)] = asset
   return list(unique.values())
+
+
+def validate_locked_asset_destinations_unique(locked_assets: list[LockedAsset]) -> None:
+  assets_by_destination: dict[str, LockedAsset] = {}
+  for asset in locked_assets:
+    existing = assets_by_destination.get(asset.destination)
+    if existing is not None and existing.source != asset.source:
+      raise DotagentsError(
+        "managed asset destination collision: "
+        f"{asset.destination} from {existing.source} and {asset.source}"
+      )
+    assets_by_destination[asset.destination] = asset
 
 
 def unique_locked_links(locked_links: list[LockedLink]) -> list[LockedLink]:

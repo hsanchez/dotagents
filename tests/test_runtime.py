@@ -219,6 +219,20 @@ def test_sync_rejects_compiled_artifact_conflicting_with_selected_skill(
     sync_existing(Path.cwd())
 
 
+def test_sync_rejects_compiled_artifact_destination_collision(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/agents.toml": "# generated\n"},
+  )
+
+  with pytest.raises(DotagentsError, match="managed asset destination collision"):
+    sync_existing(Path.cwd())
+
+
 def test_uninstall_removes_locked_compiled_artifacts(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
