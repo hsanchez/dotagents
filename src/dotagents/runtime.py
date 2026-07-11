@@ -385,6 +385,7 @@ def sync_runtime(
 
   render_rules(runtime_context, operation_log)
   locked_assets.extend(compiled_assets)
+  validate_locked_asset_destinations_unique(locked_assets)
 
   for entry in selected_entries(
     runtime_context.manifest, runtime_context.providers, runtime_context.skills
