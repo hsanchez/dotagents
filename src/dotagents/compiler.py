@@ -63,6 +63,19 @@ class BuildManifest:
   sources: tuple[BuildSource, ...] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True)
+class MCPTool:
+  name: str
+  description: str
+  input_schema: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MCPCapabilities:
+  server: str
+  tools: tuple[MCPTool, ...]
+
+
 class ArtifactBlockExtension(Extension):
   """Capture deterministic multi-file template outputs."""
 
@@ -397,6 +410,46 @@ def write_build_manifest(path: Path, manifest: BuildManifest) -> None:
     raise CompilerError(f"cannot write build manifest: {path}") from exc
 
 
+def merge_build_manifest(
+  existing: BuildManifest | None,
+  replacement: BuildManifest,
+  artifact_prefix: str,
+  source_keys: set[tuple[str, str]],
+) -> BuildManifest:
+  """Replace one compiled artifact group in a larger build manifest."""
+  safe_prefix = validate_relative_output_path(artifact_prefix)
+  if not safe_prefix.endswith("/"):
+    safe_prefix = f"{safe_prefix}/"
+  existing_artifacts = existing.artifacts if existing else ()
+  existing_sources = existing.sources if existing else ()
+  replaced_source_keys = set(source_keys)
+  for entry in existing_artifacts:
+    if entry.artifact.startswith(safe_prefix):
+      replaced_source_keys.add((entry.source, safe_prefix.rstrip("/")))
+  return BuildManifest(
+    artifacts=tuple(
+      entry for entry in existing_artifacts if not entry.artifact.startswith(safe_prefix)
+    )
+    + replacement.artifacts,
+    sources=tuple(
+      source
+      for source in existing_sources
+      if not should_replace_build_source(source, replaced_source_keys)
+    )
+    + replacement.sources,
+  )
+
+
+def should_replace_build_source(source: BuildSource, source_keys: set[tuple[str, str]]) -> bool:
+  if source.kind in {"mcp", "mcp-metadata"}:
+    try:
+      server, output_skill = mcp_source_identity(source)
+    except CompilerError:
+      return False
+    return (f"mcp:{server}", f".agents/skills/{output_skill}") in source_keys
+  return (source.kind, source.reference) in source_keys
+
+
 def read_build_manifest(path: Path) -> BuildManifest:
   """Read a JSON build manifest.
 
@@ -478,8 +531,279 @@ def package_build_source() -> BuildSource:
   return BuildSource(kind="package", reference="dotagents", version=package_version())
 
 
+def mcp_build_source(capabilities: MCPCapabilities, output_skill: str) -> BuildSource:
+  return BuildSource(
+    kind="mcp",
+    reference=mcp_capabilities_reference(capabilities.server, output_skill),
+    version=mcp_capabilities_version(capabilities),
+  )
+
+
+def mcp_metadata_build_source(
+  repo_root: Path, server: str, output_skill: str, path: Path
+) -> BuildSource:
+  file_source = file_build_source(repo_root, path)
+  return BuildSource(
+    kind="mcp-metadata",
+    reference=mcp_metadata_reference(server, output_skill, file_source.reference),
+    version=file_source.version,
+  )
+
+
 def variables_build_source(name: str, variables: dict[str, Any]) -> BuildSource:
   return BuildSource(kind="variables", reference=name, version=sha256_json(variables))
+
+
+def read_mcp_capabilities(path: Path, server: str | None = None) -> MCPCapabilities:
+  """Read deterministic MCP capability metadata from JSON.
+
+  Raises:
+    CompilerError: If the metadata cannot be read or is invalid.
+  """
+  try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+  except OSError as exc:
+    raise CompilerError(f"cannot read MCP metadata: {path}") from exc
+  except json.JSONDecodeError as exc:
+    raise CompilerError(f"cannot parse MCP metadata: {path}") from exc
+
+  if not isinstance(payload, dict):
+    raise CompilerError("MCP metadata must be an object")
+  server_name = server or payload.get("server") or payload.get("name")
+  if not isinstance(server_name, str) or not server_name:
+    raise CompilerError("MCP metadata requires a server name")
+  raw_tools = payload.get("tools")
+  if not isinstance(raw_tools, list):
+    raise CompilerError("MCP metadata tools must be an array")
+
+  tools: list[MCPTool] = []
+  for item in raw_tools:
+    if not isinstance(item, dict):
+      raise CompilerError("MCP metadata tool entries must be objects")
+    name = item.get("name")
+    if not isinstance(name, str) or not name:
+      raise CompilerError("MCP metadata tool entries require name")
+    description = item.get("description", "")
+    if not isinstance(description, str):
+      raise CompilerError("MCP metadata tool descriptions must be strings")
+    input_schema = item.get("inputSchema", item.get("input_schema", {}))
+    if not isinstance(input_schema, dict):
+      raise CompilerError("MCP metadata tool input schemas must be objects")
+    tools.append(MCPTool(name=name, description=description, input_schema=input_schema))
+  return MCPCapabilities(server=server_name, tools=tuple(sorted(tools, key=lambda tool: tool.name)))
+
+
+def compile_mcp_skill_artifacts(capabilities: MCPCapabilities) -> dict[str, str]:
+  """Compile MCP capabilities into a skill directory artifact map.
+
+  Raises:
+    CompilerError: If tool documentation paths collide.
+  """
+  artifacts = {"SKILL.md": render_mcp_skill(capabilities)}
+  for tool in capabilities.tools:
+    path = f"tools/{mcp_tool_doc_name(tool.name)}.md"
+    if path in artifacts:
+      raise CompilerError(f"duplicate MCP tool documentation path: {path}")
+    artifacts[path] = render_mcp_tool(capabilities, tool)
+  return artifacts
+
+
+def write_mcp_skill(
+  repo_root: Path,
+  capabilities: MCPCapabilities,
+  output_skill: str,
+  metadata_path: Path,
+  reserved_skill_names: set[str] | None = None,
+) -> BuildManifest:
+  """Write an MCP-compiled skill and update the build manifest.
+
+  Raises:
+    CompilerError: If the skill cannot be compiled or written.
+  """
+  safe_output_skill = validate_relative_output_path(output_skill)
+  if "/" in safe_output_skill:
+    raise CompilerError(f"output skill must be a single directory name: {output_skill}")
+  if reserved_skill_names and safe_output_skill in reserved_skill_names:
+    raise CompilerError(f"compiled skill conflicts with bundled skill: {safe_output_skill}")
+
+  artifact_prefix = f".agents/skills/{safe_output_skill}"
+  metadata_source = mcp_metadata_build_source(
+    repo_root,
+    capabilities.server,
+    safe_output_skill,
+    metadata_path,
+  )
+  sources = (
+    mcp_build_source(capabilities, safe_output_skill),
+    metadata_source,
+    package_build_source(),
+  )
+  manifest_path = repo_root / ".agents" / "build" / "manifest.json"
+  existing_manifest = read_build_manifest(manifest_path) if manifest_path.exists() else None
+  skill_manifest = write_artifacts(
+    repo_root / artifact_prefix,
+    compile_mcp_skill_artifacts(capabilities),
+  )
+  prefixed_manifest = BuildManifest(
+    artifacts=tuple(
+      BuildManifestEntry(
+        artifact=f"{artifact_prefix}/{entry.artifact}",
+        source=f"mcp:{capabilities.server}",
+        sha256=entry.sha256,
+      )
+      for entry in skill_manifest.artifacts
+    ),
+    sources=sources,
+  )
+
+  merged_manifest = merge_build_manifest(
+    existing_manifest,
+    prefixed_manifest,
+    artifact_prefix,
+    {
+      ("mcp", mcp_capabilities_reference(capabilities.server, safe_output_skill)),
+      ("mcp-metadata", metadata_source.reference),
+      ("package", "dotagents"),
+    },
+  )
+  write_build_manifest(manifest_path, merged_manifest)
+  return merged_manifest
+
+
+def render_mcp_skill(capabilities: MCPCapabilities) -> str:
+  lines = [
+    f"# {capabilities.server} MCP",
+    "",
+    f"Use the `{capabilities.server}` MCP server tools when they match the task.",
+    "",
+    "## Tools",
+    "",
+  ]
+  if not capabilities.tools:
+    lines.append("No tools were reported by this MCP server.")
+  for tool in capabilities.tools:
+    doc_name = mcp_tool_doc_name(tool.name)
+    summary = f" — {tool.description}" if tool.description else ""
+    lines.append(f"- [`{tool.name}`](tools/{doc_name}.md){summary}")
+  lines.append("")
+  return "\n".join(lines)
+
+
+def render_mcp_tool(capabilities: MCPCapabilities, tool: MCPTool) -> str:
+  lines = [
+    f"# {tool.name}",
+    "",
+    f"MCP server: `{capabilities.server}`",
+    "",
+  ]
+  if tool.description:
+    lines.extend([tool.description, ""])
+  lines.extend(
+    [
+      "## Input schema",
+      "",
+      "```json",
+      json.dumps(tool.input_schema, indent=2, sort_keys=True),
+      "```",
+      "",
+    ]
+  )
+  return "\n".join(lines)
+
+
+def mcp_tool_doc_name(name: str) -> str:
+  normalized = "".join(
+    character.lower() if character.isalnum() or character in "._-" else "-" for character in name
+  ).strip("-._")
+  if not normalized:
+    raise CompilerError(f"MCP tool name cannot form a documentation path: {name}")
+  return validate_relative_output_path(normalized)
+
+
+def mcp_capabilities_version(capabilities: MCPCapabilities) -> str:
+  return sha256_json(
+    {
+      "server": capabilities.server,
+      "tools": [
+        {
+          "name": tool.name,
+          "description": tool.description,
+          "input_schema": tool.input_schema,
+        }
+        for tool in capabilities.tools
+      ],
+    }
+  )
+
+
+def mcp_metadata_reference(server: str, output_skill: str, path: str) -> str:
+  return json.dumps(
+    {"server": server, "output_skill": output_skill, "path": path},
+    sort_keys=True,
+    separators=(",", ":"),
+  )
+
+
+def mcp_capabilities_reference(server: str, output_skill: str) -> str:
+  return json.dumps(
+    {"server": server, "output_skill": output_skill},
+    sort_keys=True,
+    separators=(",", ":"),
+  )
+
+
+def mcp_source_identity(source: BuildSource) -> tuple[str, str]:
+  if source.kind == "mcp":
+    return parse_mcp_capabilities_reference(source.reference)
+  if source.kind == "mcp-metadata":
+    server, output_skill, _ = parse_mcp_metadata_reference(source.reference)
+    return server, output_skill
+  raise CompilerError(f"expected MCP source, got: {source.kind}")
+
+
+def parse_mcp_capabilities_reference(reference: str) -> tuple[str, str]:
+  """Return server and output skill from an MCP capability source reference.
+
+  Raises:
+    CompilerError: If the reference is invalid.
+  """
+  payload = parse_mcp_reference(reference)
+  server = payload.get("server")
+  output_skill = payload.get("output_skill")
+  if not isinstance(server, str) or not server:
+    raise CompilerError("MCP capability source reference requires server")
+  if not isinstance(output_skill, str) or not output_skill:
+    raise CompilerError("MCP capability source reference requires output_skill")
+  return server, output_skill
+
+
+def parse_mcp_metadata_reference(reference: str) -> tuple[str, str, str]:
+  """Return server, output skill, and repo-local path from an MCP metadata source reference.
+
+  Raises:
+    CompilerError: If the reference is invalid.
+  """
+  payload = parse_mcp_reference(reference)
+  server = payload.get("server")
+  output_skill = payload.get("output_skill")
+  path = payload.get("path")
+  if not isinstance(server, str) or not server:
+    raise CompilerError("MCP metadata source reference requires server")
+  if not isinstance(output_skill, str) or not output_skill:
+    raise CompilerError("MCP metadata source reference requires output_skill")
+  if not isinstance(path, str) or not path:
+    raise CompilerError("MCP metadata source reference requires path")
+  return server, output_skill, path
+
+
+def parse_mcp_reference(reference: str) -> dict[str, Any]:
+  try:
+    payload = json.loads(reference)
+  except json.JSONDecodeError as exc:
+    raise CompilerError("MCP source reference must be JSON") from exc
+  if not isinstance(payload, dict):
+    raise CompilerError("MCP source reference must be an object")
+  return payload
 
 
 def sha256_text(content: str) -> str:

@@ -12,6 +12,7 @@ from dotagents.compiler import (
   BuildManifest,
   BuildSource,
   CompilerError,
+  parse_mcp_metadata_reference,
   read_build_manifest,
   validate_relative_output_path,
 )
@@ -337,6 +338,7 @@ def sync_runtime(
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
   previous_lock = read_lock(lock_path) if lock_path.exists() else None
   compiled_assets = compiled_lock_entries(runtime_context.repo_root, previous_lock)
+  validate_compiled_assets_do_not_conflict(runtime_context, compiled_assets)
 
   ensure_dir(runtime_context.repo_root, runtime_context.runtime_dir, operation_log)
   copy_file(
@@ -461,6 +463,16 @@ def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) ->
   return locked_assets
 
 
+def validate_compiled_assets_do_not_conflict(
+  runtime_context: RuntimeContext, compiled_assets: list[LockedAsset]
+) -> None:
+  skill_prefixes = {skill: f".agents/skills/{skill}/" for skill in runtime_context.skills}
+  for asset in compiled_assets:
+    for skill, prefix in skill_prefixes.items():
+      if asset.destination.startswith(prefix):
+        raise DotagentsError(f"compiled artifact conflicts with managed skill: {skill}")
+
+
 def load_build_manifest_for_sync(
   repo_root: Path, previous_lock: RuntimeLock | None
 ) -> BuildManifest | None:
@@ -529,6 +541,24 @@ def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> s
       return "compiled artifacts stale: dotagents package changed"
     return None
   if source.kind == "variables":
+    return None
+  if source.kind == "mcp":
+    return None
+  if source.kind == "mcp-metadata":
+    try:
+      _, _, reference = parse_mcp_metadata_reference(source.reference)
+      reference = validate_relative_output_path(reference)
+    except CompilerError as exc:
+      return f"compiled artifacts stale: {exc}"
+    path = repo_root / reference
+    if not path.is_file():
+      return f"compiled artifacts stale: MCP metadata source missing: {reference}"
+    try:
+      current_version = sha256_file(path)
+    except OSError as exc:
+      return f"compiled artifacts stale: cannot hash MCP metadata source: {reference}: {exc}"
+    if current_version != source.version:
+      return f"compiled artifacts stale: MCP metadata source changed: {reference}"
     return None
   return f"compiled artifacts stale: unrecognized source kind: {source.kind}"
 

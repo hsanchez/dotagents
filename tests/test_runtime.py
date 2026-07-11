@@ -205,6 +205,20 @@ def test_sync_rejects_compiled_artifact_outside_agents(
     sync_existing(Path.cwd())
 
 
+def test_sync_rejects_compiled_artifact_conflicting_with_selected_skill(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/research/SKILL.md": "# generated\n"},
+  )
+
+  with pytest.raises(DotagentsError, match="compiled artifact conflicts with managed skill"):
+    sync_existing(Path.cwd())
+
+
 def test_uninstall_removes_locked_compiled_artifacts(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -370,9 +370,22 @@ synced into the lockfile. `uninstall` removes locked compiled artifacts through
 the same safe-removal path used for packaged runtime files.
 
 Build manifests can also record source lineage. Supported source records include
-repo-local files, the installed dotagents package version, and explicit variable
-sets. `doctor` checks local file and package source versions and reports stale
-compiled artifacts when they differ from the manifest.
+repo-local files, the installed dotagents package version, explicit variable
+sets, and MCP capability snapshots. `doctor` checks local file and package
+source versions and reports stale compiled artifacts when they differ from the
+manifest.
+
+The first MCP compiler pass consumes deterministic metadata from a repo-local
+JSON file:
+
+```bash
+uv run dotagents compile mcp --name github --metadata github-mcp.json
+uv run dotagents sync
+```
+
+It writes a managed skill directory such as `.agents/skills/github/` and updates
+`.agents/build/manifest.json`. The metadata file is recorded as a source, so
+`doctor` reports stale compiled artifacts when that file changes.
 
 ## Ownership
 

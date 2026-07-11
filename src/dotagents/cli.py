@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 
 from dotagents.assets import asset_root
+from dotagents.compiler import read_mcp_capabilities, write_mcp_skill
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
@@ -19,18 +20,34 @@ from dotagents.runtime import (
   uninstall_existing,
   update_existing,
 )
-from dotagents.skillfile import edit_skillfile, skillfile_path, write_preset_skillfile
+from dotagents.skillfile import (
+  available_skills,
+  edit_skillfile,
+  skillfile_path,
+  write_preset_skillfile,
+)
 from dotagents.version import package_version
 
 app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
+compile_app = typer.Typer(no_args_is_help=True)
 app.add_typer(providers_app, name="providers", help="Add or remove configured providers.")
+app.add_typer(compile_app, name="compile", help="Compile agentic environment artifacts.")
 console = Console()
 DEFAULT_PRESET = "dev"
 
 ProviderOption = Annotated[
   list[str] | None,
   typer.Option("--for", help="Provider to configure. Repeat for multiple providers."),
+]
+MetadataOption = Annotated[
+  Path,
+  typer.Option("--metadata", help="Path to deterministic MCP capability metadata JSON."),
+]
+NameOption = Annotated[str, typer.Option("--name", help="MCP server name.")]
+OutputSkillOption = Annotated[
+  str | None,
+  typer.Option("--output-skill", help="Generated skill directory name. Defaults to --name."),
 ]
 
 
@@ -169,6 +186,28 @@ def list_items(kind: str = typer.Argument("providers", help="providers or skills
     return
   console.print("[red]ERROR[/red] kind must be providers or skills")
   raise typer.Exit(code=1)
+
+
+@compile_app.command("mcp")
+def compile_mcp(
+  name: NameOption,
+  metadata: MetadataOption,
+  output_skill: OutputSkillOption = None,
+) -> None:
+  """Compile deterministic MCP metadata into a managed skill."""
+  try:
+    assets = asset_root()
+    capabilities = read_mcp_capabilities(metadata, server=name)
+    write_mcp_skill(
+      Path.cwd(),
+      capabilities,
+      output_skill or name,
+      metadata,
+      reserved_skill_names=set(available_skills(assets)),
+    )
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  console.print(f"[green]Compiled MCP skill: {output_skill or name}.[/green]")
 
 
 @providers_app.command("add")

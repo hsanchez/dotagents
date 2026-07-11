@@ -9,12 +9,18 @@ from dotagents.compiler import (
   BuildManifestEntry,
   BuildSource,
   CompilerError,
+  MCPCapabilities,
+  MCPTool,
   TemplateArtifact,
   compile_artifacts,
+  compile_mcp_skill_artifacts,
   compile_template_artifacts,
   file_build_source,
+  mcp_build_source,
+  mcp_capabilities_version,
   package_build_source,
   read_build_manifest,
+  read_mcp_capabilities,
   render_template,
   render_template_with_artifacts,
   required_template_variables,
@@ -22,6 +28,7 @@ from dotagents.compiler import (
   variables_build_source,
   write_artifacts,
   write_build_manifest,
+  write_mcp_skill,
 )
 
 
@@ -338,6 +345,175 @@ def test_build_source_helpers_create_stable_versions(tmp_path: Path) -> None:
   assert package_source.kind == "package"
   assert package_source.reference == "dotagents"
   assert package_source.version
+
+
+def test_read_mcp_capabilities_sorts_tools_and_hashes_stably(tmp_path: Path) -> None:
+  metadata = tmp_path / "mcp.json"
+  metadata.write_text(
+    json.dumps(
+      {
+        "server": "github",
+        "tools": [
+          {"name": "search", "description": "Search issues", "inputSchema": {"type": "object"}},
+          {"name": "create", "description": "Create issue", "input_schema": {"required": []}},
+        ],
+      }
+    ),
+    encoding="utf-8",
+  )
+
+  capabilities = read_mcp_capabilities(metadata)
+  source = mcp_build_source(capabilities, "github")
+
+  assert capabilities.server == "github"
+  assert [tool.name for tool in capabilities.tools] == ["create", "search"]
+  assert source == BuildSource(
+    kind="mcp",
+    reference='{"output_skill":"github","server":"github"}',
+    version=mcp_capabilities_version(capabilities),
+  )
+
+
+def test_compile_mcp_skill_artifacts_generates_skill_docs() -> None:
+  capabilities = MCPCapabilities(
+    server="github",
+    tools=(
+      MCPTool(
+        name="search_issues",
+        description="Search GitHub issues.",
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+      ),
+    ),
+  )
+
+  artifacts = compile_mcp_skill_artifacts(capabilities)
+
+  assert "# github MCP" in artifacts["SKILL.md"]
+  assert "[`search_issues`](tools/search_issues.md)" in artifacts["SKILL.md"]
+  assert "MCP server: `github`" in artifacts["tools/search_issues.md"]
+  assert '"query"' in artifacts["tools/search_issues.md"]
+
+
+def test_compile_mcp_skill_artifacts_rejects_doc_path_collisions() -> None:
+  capabilities = MCPCapabilities(
+    server="github",
+    tools=(
+      MCPTool(name="list issues", description="", input_schema={}),
+      MCPTool(name="list-issues", description="", input_schema={}),
+    ),
+  )
+
+  with pytest.raises(CompilerError, match="duplicate MCP tool documentation path"):
+    compile_mcp_skill_artifacts(capabilities)
+
+
+def test_write_mcp_skill_writes_prefixed_manifest(tmp_path: Path) -> None:
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(
+    json.dumps(
+      {
+        "tools": [
+          {"name": "search_issues", "description": "Search issues", "inputSchema": {}},
+        ],
+      }
+    ),
+    encoding="utf-8",
+  )
+  capabilities = read_mcp_capabilities(metadata, server="github")
+
+  manifest = write_mcp_skill(tmp_path, capabilities, "github", metadata)
+
+  assert (tmp_path / ".agents" / "skills" / "github" / "SKILL.md").is_file()
+  assert (tmp_path / ".agents" / "skills" / "github" / "tools" / "search_issues.md").is_file()
+  assert [entry.artifact for entry in manifest.artifacts] == [
+    ".agents/skills/github/SKILL.md",
+    ".agents/skills/github/tools/search_issues.md",
+  ]
+  assert all(entry.source == "mcp:github" for entry in manifest.artifacts)
+  assert [source.kind for source in manifest.sources] == ["mcp", "mcp-metadata", "package"]
+  assert read_build_manifest(tmp_path / ".agents" / "build" / "manifest.json") == manifest
+
+
+def test_write_mcp_skill_replaces_old_metadata_source_for_same_output_skill(
+  tmp_path: Path,
+) -> None:
+  first_metadata = tmp_path / "a.json"
+  first_metadata.write_text(
+    json.dumps({"tools": [{"name": "search", "description": "", "inputSchema": {}}]}),
+    encoding="utf-8",
+  )
+  second_metadata = tmp_path / "b.json"
+  second_metadata.write_text(
+    json.dumps({"tools": [{"name": "create", "description": "", "inputSchema": {}}]}),
+    encoding="utf-8",
+  )
+
+  first_capabilities = read_mcp_capabilities(first_metadata, server="github")
+  second_capabilities = read_mcp_capabilities(second_metadata, server="github")
+
+  write_mcp_skill(tmp_path, first_capabilities, "github", first_metadata)
+  manifest = write_mcp_skill(tmp_path, second_capabilities, "github", second_metadata)
+
+  metadata_sources = [source for source in manifest.sources if source.kind == "mcp-metadata"]
+  capability_sources = [source for source in manifest.sources if source.kind == "mcp"]
+  assert len(metadata_sources) == 1
+  assert len(capability_sources) == 1
+  assert "b.json" in metadata_sources[0].reference
+  assert "a.json" not in metadata_sources[0].reference
+  assert capability_sources[0].version == mcp_capabilities_version(second_capabilities)
+
+
+def test_write_mcp_skill_keeps_metadata_sources_for_distinct_output_skills(
+  tmp_path: Path,
+) -> None:
+  first_metadata = tmp_path / "read.json"
+  first_metadata.write_text(
+    json.dumps({"tools": [{"name": "read", "description": "", "inputSchema": {}}]}),
+    encoding="utf-8",
+  )
+  second_metadata = tmp_path / "write.json"
+  second_metadata.write_text(
+    json.dumps({"tools": [{"name": "write", "description": "", "inputSchema": {}}]}),
+    encoding="utf-8",
+  )
+
+  first_capabilities = read_mcp_capabilities(first_metadata, server="github")
+  second_capabilities = read_mcp_capabilities(second_metadata, server="github")
+
+  manifest = write_mcp_skill(tmp_path, first_capabilities, "github-read", first_metadata)
+  manifest = write_mcp_skill(tmp_path, second_capabilities, "github-write", second_metadata)
+
+  metadata_references = sorted(
+    source.reference for source in manifest.sources if source.kind == "mcp-metadata"
+  )
+  capability_sources = [source for source in manifest.sources if source.kind == "mcp"]
+  assert len(metadata_references) == 2
+  assert len(capability_sources) == 2
+  assert "github-read" in metadata_references[0]
+  assert "github-write" in metadata_references[1]
+  assert "read.json" in metadata_references[0]
+  assert "write.json" in metadata_references[1]
+  assert {source.version for source in capability_sources} == {
+    mcp_capabilities_version(first_capabilities),
+    mcp_capabilities_version(second_capabilities),
+  }
+
+
+def test_write_mcp_skill_rejects_reserved_skill_name(tmp_path: Path) -> None:
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
+  capabilities = read_mcp_capabilities(metadata, server="github")
+
+  with pytest.raises(CompilerError, match="compiled skill conflicts with bundled skill: research"):
+    write_mcp_skill(
+      tmp_path,
+      capabilities,
+      "research",
+      metadata,
+      reserved_skill_names={"research"},
+    )
+
+  assert not (tmp_path / ".agents" / "skills" / "research").exists()
 
 
 def test_write_build_manifest_preserves_existing_file_when_replace_fails(

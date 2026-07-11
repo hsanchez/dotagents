@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
-from dotagents.compiler import BuildSource, file_build_source
+from dotagents.compiler import (
+  BuildSource,
+  file_build_source,
+  mcp_metadata_build_source,
+)
 from dotagents.doctor import doctor
 from dotagents.runtime import init_runtime
 
@@ -86,6 +90,57 @@ def test_doctor_reports_stale_compiled_package_source(
   ) in result.lines
 
 
+def test_doctor_reports_stale_compiled_mcp_metadata_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "github-mcp.json"
+  source.write_text('{"tools": []}\n', encoding="utf-8")
+  write_compiled_manifest(
+    tmp_path,
+    sources=(mcp_metadata_build_source(tmp_path, "github", "github", source),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.write_text('{"tools": [{"name": "search"}]}\n', encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: MCP metadata source changed: github-mcp.json; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_tracks_mcp_metadata_for_multiple_output_skills(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  first_source = tmp_path / "read.json"
+  first_source.write_text('{"tools": [{"name": "read"}]}\n', encoding="utf-8")
+  second_source = tmp_path / "write.json"
+  second_source.write_text('{"tools": [{"name": "write"}]}\n', encoding="utf-8")
+  write_compiled_manifest(
+    tmp_path,
+    sources=(
+      mcp_metadata_build_source(tmp_path, "github", "github-read", first_source),
+      mcp_metadata_build_source(tmp_path, "github", "github-write", second_source),
+    ),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  first_source.write_text('{"tools": [{"name": "read_changed"}]}\n', encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: MCP metadata source changed: read.json; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
 def test_doctor_reports_unsafe_compiled_file_source(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -113,7 +168,7 @@ def test_doctor_reports_unrecognized_compiled_source_kind(
   init_runtime(Path.cwd(), ("claude",))
   write_compiled_manifest(
     tmp_path,
-    sources=(BuildSource(kind="mcp", reference="github", version="0"),),
+    sources=(BuildSource(kind="future", reference="github", version="0"),),
   )
   init_runtime(Path.cwd(), ("claude",))
 
@@ -121,7 +176,7 @@ def test_doctor_reports_unrecognized_compiled_source_kind(
 
   assert not result.passed
   assert (
-    "compiled artifacts stale: unrecognized source kind: mcp; rerun the compiler before sync"
+    "compiled artifacts stale: unrecognized source kind: future; rerun the compiler before sync"
   ) in result.lines
 
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ from helpers import make_lock_stale, make_manifest_stale
 from typer.testing import CliRunner
 
 from dotagents.cli import app
+from dotagents.lockfile import read_lock
 from dotagents.runtime import init_runtime
 
 
@@ -117,6 +119,65 @@ def test_list_command_rejects_invalid_kind() -> None:
 
   assert result.exit_code == 1
   assert "kind must be providers or skills" in result.output
+
+
+def test_compile_mcp_command_writes_skill_and_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(
+    json.dumps(
+      {
+        "tools": [
+          {"name": "search_issues", "description": "Search issues", "inputSchema": {}},
+        ],
+      }
+    ),
+    encoding="utf-8",
+  )
+
+  result = CliRunner().invoke(
+    app,
+    ["compile", "mcp", "--name", "github", "--metadata", str(metadata)],
+  )
+
+  assert result.exit_code == 0
+  assert "Compiled MCP skill: github." in result.output
+  assert (tmp_path / ".agents" / "skills" / "github" / "SKILL.md").is_file()
+  assert (tmp_path / ".agents" / "build" / "manifest.json").is_file()
+
+  sync_result = CliRunner().invoke(app, ["sync"])
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+
+  assert sync_result.exit_code == 0
+  assert ".agents/skills/github/SKILL.md" in {asset.destination for asset in lock.assets}
+
+
+def test_compile_mcp_command_rejects_bundled_skill_collision(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "mcp",
+      "--name",
+      "github",
+      "--metadata",
+      str(metadata),
+      "--output-skill",
+      "research",
+    ],
+  )
+
+  assert result.exit_code == 1
+  assert "compiled skill conflicts with bundled skill: research" in result.output
+  assert not (tmp_path / ".agents" / "skills" / "research").exists()
 
 
 def test_sync_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
