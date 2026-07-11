@@ -21,6 +21,7 @@ from dotagents.compiler import (
   package_build_source,
   read_build_manifest,
   read_mcp_capabilities,
+  read_template_variables,
   render_template,
   render_template_with_artifacts,
   required_template_variables,
@@ -29,6 +30,7 @@ from dotagents.compiler import (
   write_artifacts,
   write_build_manifest,
   write_mcp_skill,
+  write_template_skill,
 )
 
 
@@ -345,6 +347,88 @@ def test_build_source_helpers_create_stable_versions(tmp_path: Path) -> None:
   assert package_source.kind == "package"
   assert package_source.reference == "dotagents"
   assert package_source.version
+
+
+def test_read_template_variables_requires_json_object(tmp_path: Path) -> None:
+  variables_path = tmp_path / "variables.json"
+  variables_path.write_text('["demo"]\n', encoding="utf-8")
+
+  with pytest.raises(CompilerError, match="template variables must be a JSON object"):
+    read_template_variables(variables_path)
+
+
+def test_write_template_skill_writes_prefixed_manifest(tmp_path: Path) -> None:
+  templates = tmp_path / "templates"
+  templates.mkdir()
+  template = templates / "team.md.j2"
+  template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }}\n{% endartifact %}"
+    "{% artifact 'checklists/review.md' %}Review {{ name }}\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  variables = tmp_path / "team.json"
+  variables.write_text('{"name": "Team Policy"}\n', encoding="utf-8")
+
+  manifest = write_template_skill(
+    tmp_path,
+    template,
+    "team-policy",
+    read_template_variables(variables),
+    variables_path=variables,
+  )
+
+  assert (tmp_path / ".agents" / "skills" / "team-policy" / "SKILL.md").is_file()
+  assert (tmp_path / ".agents" / "skills" / "team-policy" / "checklists" / "review.md").is_file()
+  assert [entry.artifact for entry in manifest.artifacts] == [
+    ".agents/skills/team-policy/SKILL.md",
+    ".agents/skills/team-policy/checklists/review.md",
+  ]
+  assert all(entry.source == "template:team-policy" for entry in manifest.artifacts)
+  assert [source.kind for source in manifest.sources] == [
+    "template",
+    "template-variables",
+    "package",
+  ]
+
+
+def test_write_template_skill_replaces_old_sources_for_same_output_skill(tmp_path: Path) -> None:
+  templates = tmp_path / "templates"
+  templates.mkdir()
+  first_template = templates / "first.md.j2"
+  first_template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }}\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  second_template = templates / "second.md.j2"
+  second_template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }} v2\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  first_variables = tmp_path / "first.json"
+  first_variables.write_text('{"name": "Demo"}\n', encoding="utf-8")
+  second_variables = tmp_path / "second.json"
+  second_variables.write_text('{"name": "Demo"}\n', encoding="utf-8")
+
+  write_template_skill(
+    tmp_path,
+    first_template,
+    "demo",
+    read_template_variables(first_variables),
+    variables_path=first_variables,
+  )
+  manifest = write_template_skill(
+    tmp_path,
+    second_template,
+    "demo",
+    read_template_variables(second_variables),
+    variables_path=second_variables,
+  )
+
+  references = [source.reference for source in manifest.sources]
+  assert any("second.md.j2" in reference for reference in references)
+  assert any("second.json" in reference for reference in references)
+  assert all("first.md.j2" not in reference for reference in references)
+  assert all("first.json" not in reference for reference in references)
 
 
 def test_read_mcp_capabilities_sorts_tools_and_hashes_stably(tmp_path: Path) -> None:

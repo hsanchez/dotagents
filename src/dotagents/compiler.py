@@ -279,6 +279,23 @@ def compile_template_artifacts(
   return outputs
 
 
+def read_template_variables(path: Path) -> dict[str, Any]:
+  """Read template variables from JSON.
+
+  Raises:
+    CompilerError: If the variables file cannot be read or is invalid.
+  """
+  try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+  except OSError as exc:
+    raise CompilerError(f"cannot read template variables: {path}") from exc
+  except json.JSONDecodeError as exc:
+    raise CompilerError(f"cannot parse template variables: {path}") from exc
+  if not isinstance(payload, dict):
+    raise CompilerError("template variables must be a JSON object")
+  return payload
+
+
 def write_artifacts(output_root: Path, rendered_artifacts: dict[str, str]) -> BuildManifest:
   """Write rendered artifacts and return their build manifest.
 
@@ -447,6 +464,12 @@ def should_replace_build_source(source: BuildSource, source_keys: set[tuple[str,
     except CompilerError:
       return False
     return (f"mcp:{server}", f".agents/skills/{output_skill}") in source_keys
+  if source.kind in {"template", "template-variables"}:
+    try:
+      output_skill = template_source_output_skill(source)
+    except CompilerError:
+      return False
+    return ("template", f".agents/skills/{output_skill}") in source_keys
   return (source.kind, source.reference) in source_keys
 
 
@@ -554,6 +577,94 @@ def variables_build_source(name: str, variables: dict[str, Any]) -> BuildSource:
   return BuildSource(kind="variables", reference=name, version=sha256_json(variables))
 
 
+def template_build_source(repo_root: Path, output_skill: str, path: Path) -> BuildSource:
+  file_source = file_build_source(repo_root, path)
+  return BuildSource(
+    kind="template",
+    reference=template_source_reference(output_skill, file_source.reference),
+    version=file_source.version,
+  )
+
+
+def template_variables_build_source(
+  repo_root: Path,
+  output_skill: str,
+  variables: dict[str, Any],
+  variables_path: Path | None,
+) -> BuildSource:
+  if variables_path is not None:
+    file_source = file_build_source(repo_root, variables_path)
+    return BuildSource(
+      kind="template-variables",
+      reference=template_source_reference(output_skill, file_source.reference),
+      version=file_source.version,
+    )
+  return BuildSource(
+    kind="template-variables",
+    reference=template_source_reference(output_skill, "<inline>"),
+    version=sha256_json(variables),
+  )
+
+
+def write_template_skill(
+  repo_root: Path,
+  template_path: Path,
+  output_skill: str,
+  variables: dict[str, Any],
+  variables_path: Path | None = None,
+  reserved_skill_names: set[str] | None = None,
+) -> BuildManifest:
+  """Write a template-compiled skill and update the build manifest.
+
+  Raises:
+    CompilerError: If the skill cannot be compiled or written.
+  """
+  safe_output_skill = validate_skill_output_name(output_skill, reserved_skill_names)
+  template_root = template_path.parent
+  template_name = template_path.name
+  rendered_artifacts = compile_template_artifacts(template_root, template_name, variables)
+  if not rendered_artifacts:
+    raise CompilerError(f"template declares no artifacts: {template_path}")
+
+  template_source = template_build_source(repo_root, safe_output_skill, template_path)
+  variables_source = template_variables_build_source(
+    repo_root,
+    safe_output_skill,
+    variables,
+    variables_path,
+  )
+  sources = [template_source, variables_source, package_build_source()]
+  source_keys = {
+    ("template", f".agents/skills/{safe_output_skill}"),
+    ("package", "dotagents"),
+  }
+  return write_compiled_skill_artifacts(
+    repo_root,
+    safe_output_skill,
+    rendered_artifacts,
+    artifact_source=f"template:{safe_output_skill}",
+    sources=tuple(sources),
+    source_keys=source_keys,
+  )
+
+
+def validate_skill_output_name(
+  output_skill: str,
+  reserved_skill_names: set[str] | None = None,
+) -> str:
+  """Return a safe skill directory name.
+
+  Raises:
+    CompilerError: If the skill name is unsafe or reserved.
+  """
+  safe_output_skill = validate_relative_output_path(output_skill)
+  if "/" in safe_output_skill:
+    raise CompilerError(f"output skill must be a single directory name: {output_skill}")
+  if reserved_skill_names and safe_output_skill in reserved_skill_names:
+    raise CompilerError(f"compiled skill conflicts with bundled skill: {safe_output_skill}")
+  return safe_output_skill
+
+
 def read_mcp_capabilities(path: Path, server: str | None = None) -> MCPCapabilities:
   """Read deterministic MCP capability metadata from JSON.
 
@@ -620,13 +731,8 @@ def write_mcp_skill(
   Raises:
     CompilerError: If the skill cannot be compiled or written.
   """
-  safe_output_skill = validate_relative_output_path(output_skill)
-  if "/" in safe_output_skill:
-    raise CompilerError(f"output skill must be a single directory name: {output_skill}")
-  if reserved_skill_names and safe_output_skill in reserved_skill_names:
-    raise CompilerError(f"compiled skill conflicts with bundled skill: {safe_output_skill}")
+  safe_output_skill = validate_skill_output_name(output_skill, reserved_skill_names)
 
-  artifact_prefix = f".agents/skills/{safe_output_skill}"
   metadata_source = mcp_metadata_build_source(
     repo_root,
     capabilities.server,
@@ -638,17 +744,42 @@ def write_mcp_skill(
     metadata_source,
     package_build_source(),
   )
+  return write_compiled_skill_artifacts(
+    repo_root,
+    safe_output_skill,
+    compile_mcp_skill_artifacts(capabilities),
+    artifact_source=f"mcp:{capabilities.server}",
+    sources=sources,
+    source_keys={
+      ("mcp", mcp_capabilities_reference(capabilities.server, safe_output_skill)),
+      ("mcp-metadata", metadata_source.reference),
+      ("package", "dotagents"),
+    },
+  )
+
+
+def write_compiled_skill_artifacts(
+  repo_root: Path,
+  output_skill: str,
+  rendered_artifacts: dict[str, str],
+  artifact_source: str,
+  sources: tuple[BuildSource, ...],
+  source_keys: set[tuple[str, str]],
+) -> BuildManifest:
+  """Write compiled skill artifacts and update the build manifest.
+
+  Raises:
+    CompilerError: If artifacts or the build manifest cannot be written.
+  """
+  artifact_prefix = f".agents/skills/{output_skill}"
   manifest_path = repo_root / ".agents" / "build" / "manifest.json"
   existing_manifest = read_build_manifest(manifest_path) if manifest_path.exists() else None
-  skill_manifest = write_artifacts(
-    repo_root / artifact_prefix,
-    compile_mcp_skill_artifacts(capabilities),
-  )
+  skill_manifest = write_artifacts(repo_root / artifact_prefix, rendered_artifacts)
   prefixed_manifest = BuildManifest(
     artifacts=tuple(
       BuildManifestEntry(
         artifact=f"{artifact_prefix}/{entry.artifact}",
-        source=f"mcp:{capabilities.server}",
+        source=artifact_source,
         sha256=entry.sha256,
       )
       for entry in skill_manifest.artifacts
@@ -660,11 +791,7 @@ def write_mcp_skill(
     existing_manifest,
     prefixed_manifest,
     artifact_prefix,
-    {
-      ("mcp", mcp_capabilities_reference(capabilities.server, safe_output_skill)),
-      ("mcp-metadata", metadata_source.reference),
-      ("package", "dotagents"),
-    },
+    source_keys,
   )
   write_build_manifest(manifest_path, merged_manifest)
   return merged_manifest
@@ -804,6 +931,40 @@ def parse_mcp_reference(reference: str) -> dict[str, Any]:
   if not isinstance(payload, dict):
     raise CompilerError("MCP source reference must be an object")
   return payload
+
+
+def template_source_reference(output_skill: str, path: str) -> str:
+  return json.dumps(
+    {"output_skill": output_skill, "path": path},
+    sort_keys=True,
+    separators=(",", ":"),
+  )
+
+
+def template_source_output_skill(source: BuildSource) -> str:
+  output_skill, _ = parse_template_source_reference(source.reference)
+  return output_skill
+
+
+def parse_template_source_reference(reference: str) -> tuple[str, str]:
+  """Return output skill and source path from a template source reference.
+
+  Raises:
+    CompilerError: If the reference is invalid.
+  """
+  try:
+    payload = json.loads(reference)
+  except json.JSONDecodeError as exc:
+    raise CompilerError("template source reference must be JSON") from exc
+  if not isinstance(payload, dict):
+    raise CompilerError("template source reference must be an object")
+  output_skill = payload.get("output_skill")
+  path = payload.get("path")
+  if not isinstance(output_skill, str) or not output_skill:
+    raise CompilerError("template source reference requires output_skill")
+  if not isinstance(path, str) or not path:
+    raise CompilerError("template source reference requires path")
+  return output_skill, path
 
 
 def sha256_text(content: str) -> str:

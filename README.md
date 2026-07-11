@@ -386,6 +386,18 @@ uv run dotagents sync
 It writes a managed skill directory such as `.agents/skills/github/` and updates
 `.agents/build/manifest.json`. The metadata file is recorded as a source, so
 `doctor` reports stale compiled artifacts when that file changes.
+See `docs/workflows/compiler-mcp-example.md` for an end-to-end example.
+
+Templates can also compile directly into managed skills:
+
+```bash
+uv run dotagents compile template \
+  --template templates/team-policy.md.j2 \
+  --variables team-policy.json \
+  --output-skill team-policy
+```
+
+See `docs/workflows/compiler-template-example.md` for the template workflow.
 
 ## Ownership
 

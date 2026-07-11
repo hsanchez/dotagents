@@ -180,6 +180,74 @@ def test_compile_mcp_command_rejects_bundled_skill_collision(
   assert not (tmp_path / ".agents" / "skills" / "research").exists()
 
 
+def test_compile_template_command_writes_skill_and_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  templates = tmp_path / "templates"
+  templates.mkdir()
+  template = templates / "team.md.j2"
+  template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }}\n{% endartifact %}"
+    "{% artifact 'checklists/review.md' %}Review {{ name }}\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  variables = tmp_path / "team.json"
+  variables.write_text('{"name": "Team Policy"}\n', encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "template",
+      "--template",
+      str(template),
+      "--variables",
+      str(variables),
+      "--output-skill",
+      "team-policy",
+    ],
+  )
+
+  assert result.exit_code == 0
+  assert "Compiled template skill: team-policy." in result.output
+  assert (tmp_path / ".agents" / "skills" / "team-policy" / "SKILL.md").is_file()
+
+  sync_result = CliRunner().invoke(app, ["sync"])
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+
+  assert sync_result.exit_code == 0
+  assert ".agents/skills/team-policy/SKILL.md" in {asset.destination for asset in lock.assets}
+
+
+def test_compile_template_command_rejects_bundled_skill_collision(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  template = tmp_path / "team.md.j2"
+  template.write_text("{% artifact 'SKILL.md' %}# Demo\n{% endartifact %}", encoding="utf-8")
+  variables = tmp_path / "team.json"
+  variables.write_text("{}\n", encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "template",
+      "--template",
+      str(template),
+      "--variables",
+      str(variables),
+      "--output-skill",
+      "research",
+    ],
+  )
+
+  assert result.exit_code == 1
+  assert "compiled skill conflicts with bundled skill: research" in result.output
+  assert not (tmp_path / ".agents" / "skills" / "research").exists()
+
+
 def test_sync_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.chdir(tmp_path)
   init_runtime(Path.cwd(), ("claude",))

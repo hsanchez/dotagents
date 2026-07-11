@@ -13,6 +13,7 @@ from dotagents.compiler import (
   BuildSource,
   CompilerError,
   parse_mcp_metadata_reference,
+  parse_template_source_reference,
   read_build_manifest,
   validate_relative_output_path,
 )
@@ -526,16 +527,14 @@ def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> s
       reference = validate_relative_output_path(source.reference)
     except CompilerError as exc:
       return f"compiled artifacts stale: {exc}"
-    path = repo_root / reference
-    if not path.is_file():
-      return f"compiled artifacts stale: file source missing: {reference}"
-    try:
-      current_version = sha256_file(path)
-    except OSError as exc:
-      return f"compiled artifacts stale: cannot hash file: {reference}: {exc}"
-    if current_version != source.version:
-      return f"compiled artifacts stale: file source changed: {reference}"
-    return None
+    return compiled_path_staleness(
+      repo_root,
+      reference,
+      source.version,
+      missing_label="file source",
+      hash_label="file",
+      changed_label="file source",
+    )
   if source.kind == "package":
     if source.reference == "dotagents" and source.version != package_version():
       return "compiled artifacts stale: dotagents package changed"
@@ -550,17 +549,61 @@ def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> s
       reference = validate_relative_output_path(reference)
     except CompilerError as exc:
       return f"compiled artifacts stale: {exc}"
-    path = repo_root / reference
-    if not path.is_file():
-      return f"compiled artifacts stale: MCP metadata source missing: {reference}"
-    try:
-      current_version = sha256_file(path)
-    except OSError as exc:
-      return f"compiled artifacts stale: cannot hash MCP metadata source: {reference}: {exc}"
-    if current_version != source.version:
-      return f"compiled artifacts stale: MCP metadata source changed: {reference}"
-    return None
+    return compiled_path_staleness(
+      repo_root,
+      reference,
+      source.version,
+      missing_label="MCP metadata source",
+      hash_label="MCP metadata source",
+      changed_label="MCP metadata source",
+    )
+  if source.kind == "template":
+    return compiled_file_like_source_staleness(repo_root, source, "template source")
+  if source.kind == "template-variables":
+    return compiled_file_like_source_staleness(repo_root, source, "template variables")
   return f"compiled artifacts stale: unrecognized source kind: {source.kind}"
+
+
+def compiled_file_like_source_staleness(
+  repo_root: Path,
+  source: BuildSource,
+  label: str,
+) -> str | None:
+  try:
+    _, reference = parse_template_source_reference(source.reference)
+    if reference == "<inline>":
+      return None
+    reference = validate_relative_output_path(reference)
+  except CompilerError as exc:
+    return f"compiled artifacts stale: {exc}"
+  return compiled_path_staleness(
+    repo_root,
+    reference,
+    source.version,
+    missing_label=label,
+    hash_label=label,
+    changed_label=label,
+  )
+
+
+def compiled_path_staleness(
+  repo_root: Path,
+  reference: str,
+  expected_version: str,
+  missing_label: str,
+  hash_label: str,
+  changed_label: str,
+) -> str | None:
+  path = repo_root / reference
+  if not path.is_file():
+    return f"compiled artifacts stale: {missing_label} missing: {reference}"
+  try:
+    current_version = sha256_file(path)
+  except OSError as exc:
+    return f"compiled artifacts stale: cannot hash {hash_label}: {reference}: {exc}"
+  if current_version != expected_version:
+    return f"compiled artifacts stale: {changed_label} changed: {reference}"
+  return None
 
 
 def remove_stale_links(

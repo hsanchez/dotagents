@@ -7,6 +7,7 @@ from dotagents.compiler import (
   BuildSource,
   file_build_source,
   mcp_metadata_build_source,
+  template_build_source,
 )
 from dotagents.doctor import doctor
 from dotagents.runtime import init_runtime
@@ -137,6 +138,30 @@ def test_doctor_tracks_mcp_metadata_for_multiple_output_skills(
   assert not result.passed
   assert (
     "compiled artifacts stale: MCP metadata source changed: read.json; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_stale_compiled_template_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "templates" / "team.md.j2"
+  source.parent.mkdir()
+  source.write_text("{% artifact 'SKILL.md' %}# Demo\n{% endartifact %}", encoding="utf-8")
+  write_compiled_manifest(
+    tmp_path,
+    sources=(template_build_source(tmp_path, "team-policy", source),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.write_text("{% artifact 'SKILL.md' %}# Changed\n{% endartifact %}", encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: template source changed: templates/team.md.j2; "
     "rerun the compiler before sync"
   ) in result.lines
 

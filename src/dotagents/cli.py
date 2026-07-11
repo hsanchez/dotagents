@@ -7,7 +7,12 @@ import typer
 from rich.console import Console
 
 from dotagents.assets import asset_root
-from dotagents.compiler import read_mcp_capabilities, write_mcp_skill
+from dotagents.compiler import (
+  read_mcp_capabilities,
+  read_template_variables,
+  write_mcp_skill,
+  write_template_skill,
+)
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
@@ -48,6 +53,15 @@ NameOption = Annotated[str, typer.Option("--name", help="MCP server name.")]
 OutputSkillOption = Annotated[
   str | None,
   typer.Option("--output-skill", help="Generated skill directory name. Defaults to --name."),
+]
+TemplateOption = Annotated[Path, typer.Option("--template", help="Path to a Jinja template.")]
+VariablesOption = Annotated[
+  Path,
+  typer.Option("--variables", help="Path to template variables JSON."),
+]
+TemplateOutputSkillOption = Annotated[
+  str,
+  typer.Option("--output-skill", help="Generated skill directory name."),
 ]
 
 
@@ -196,18 +210,43 @@ def compile_mcp(
 ) -> None:
   """Compile deterministic MCP metadata into a managed skill."""
   try:
-    assets = asset_root()
     capabilities = read_mcp_capabilities(metadata, server=name)
     write_mcp_skill(
       Path.cwd(),
       capabilities,
       output_skill or name,
       metadata,
-      reserved_skill_names=set(available_skills(assets)),
+      reserved_skill_names=bundled_skill_names(),
     )
   except DotagentsError as exc:
     _exit_with_error(exc)
   console.print(f"[green]Compiled MCP skill: {output_skill or name}.[/green]")
+
+
+@compile_app.command("template")
+def compile_template(
+  template: TemplateOption,
+  variables: VariablesOption,
+  output_skill: TemplateOutputSkillOption,
+) -> None:
+  """Compile a deterministic template into a managed skill."""
+  try:
+    loaded_variables = read_template_variables(variables)
+    write_template_skill(
+      Path.cwd(),
+      template,
+      output_skill,
+      loaded_variables,
+      variables_path=variables,
+      reserved_skill_names=bundled_skill_names(),
+    )
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  console.print(f"[green]Compiled template skill: {output_skill}.[/green]")
+
+
+def bundled_skill_names() -> set[str]:
+  return set(available_skills(asset_root()))
 
 
 @providers_app.command("add")
