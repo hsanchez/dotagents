@@ -917,7 +917,7 @@ def test_fetch_github_archive_times_out_without_waiting_for_child_exit(
     "sys.stdout.buffer.write(b'a')\n"
     "sys.stdout.buffer.flush()\n"
     "sys.stdout.buffer.close()\n"
-    "time.sleep(5)\n"
+    "time.sleep(1)\n"
   )
 
   def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
@@ -931,10 +931,10 @@ def test_fetch_github_archive_times_out_without_waiting_for_child_exit(
 
   started = time.monotonic()
   with pytest.raises(CompilerError, match="GitHub archive fetch timed out"):
-    fetch_test_github_archive(1)
+    fetch_test_github_archive(0.1)
   elapsed = time.monotonic() - started
 
-  assert elapsed < 3
+  assert elapsed < 0.8
 
 
 def test_fetch_github_archive_timeout_kills_descendant_with_inherited_pipes(
@@ -942,8 +942,8 @@ def test_fetch_github_archive_timeout_kills_descendant_with_inherited_pipes(
 ) -> None:
   script = (
     "import subprocess, sys, time\n"
-    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
-    "time.sleep(5)\n"
+    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1)'])\n"
+    "time.sleep(1)\n"
   )
 
   def fake_open_process(endpoint: str) -> subprocess.Popen[bytes]:
@@ -961,7 +961,7 @@ def test_fetch_github_archive_timeout_kills_descendant_with_inherited_pipes(
     fetch_test_github_archive(0.1)
   elapsed = time.monotonic() - started
 
-  assert elapsed < 1
+  assert elapsed < 0.8
 
 
 def test_fetch_github_archive_bounds_stderr_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:

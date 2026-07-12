@@ -10,7 +10,7 @@ from dotagents.compiler import (
   template_build_source,
 )
 from dotagents.doctor import doctor
-from dotagents.runtime import init_runtime
+from dotagents.runtime import init_runtime, sync_existing
 
 
 def init_prek_bootstrap_runtime(repo_root: Path) -> None:
@@ -51,6 +51,20 @@ def test_doctor_reports_unlocked_compiled_build_manifest(
   assert "compiled artifacts: not locked; run: uv run dotagents sync" in result.lines
 
 
+def test_doctor_reports_compiled_group_status(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(tmp_path)
+  sync_existing(Path.cwd())
+
+  result = doctor(Path.cwd())
+
+  assert result.passed
+  assert "compiled: compiled artifacts ok" in result.lines
+
+
 def test_doctor_reports_stale_compiled_file_source(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -66,10 +80,12 @@ def test_doctor_reports_stale_compiled_file_source(
   result = doctor(Path.cwd())
 
   assert not result.passed
-  assert (
+  expected = (
     "compiled artifacts stale: file source changed: templates/skill.md.j2; "
     "rerun the compiler before sync"
-  ) in result.lines
+  )
+  assert expected in result.lines
+  assert result.lines.count(expected) == 1
 
 
 def test_doctor_reports_stale_compiled_package_source(

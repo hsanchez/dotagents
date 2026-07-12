@@ -120,13 +120,15 @@ def test_sync_locks_compiled_build_manifest_and_artifacts(
     {".agents/skills/generated/SKILL.md": "# generated\n"},
   )
 
-  sync_existing(Path.cwd())
+  operation_log = sync_existing(Path.cwd())
 
   lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   assets = {asset.destination: asset for asset in lock.assets}
   assert ".agents/build/manifest.json" in assets
   assert ".agents/skills/generated/SKILL.md" in assets
   assert assets[".agents/skills/generated/SKILL.md"].source.startswith("compiled:")
+  assert "ok .agents/build/manifest.json" in operation_log.lines
+  assert "ok .agents/skills/generated/SKILL.md" in operation_log.lines
   assert doctor(Path.cwd()).passed
 
 

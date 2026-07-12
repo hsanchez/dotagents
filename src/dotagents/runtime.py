@@ -385,6 +385,7 @@ def sync_runtime(
 
   render_rules(runtime_context, operation_log)
   locked_assets.extend(compiled_assets)
+  log_compiled_assets(compiled_assets, operation_log)
   validate_locked_asset_destinations_unique(locked_assets)
 
   for entry in selected_entries(
@@ -473,6 +474,12 @@ def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) ->
       LockedAsset(source=f"compiled:{destination}", destination=destination, sha256=entry.sha256)
     )
   return locked_assets
+
+
+def log_compiled_assets(compiled_assets: list[LockedAsset], operation_log: OperationLog) -> None:
+  verb = "would lock" if operation_log.dry_run else "ok"
+  for asset in compiled_assets:
+    operation_log.add(f"{verb} {asset.destination}")
 
 
 def validate_compiled_assets_do_not_conflict(
