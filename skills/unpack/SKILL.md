@@ -123,4 +123,4 @@ Only exit the loop on an explicit confirmation. If the user pushes back, treat i
 | Needs codebase facts to answer a question | `research` |
 | Judgment-heavy technical decision after alignment | `council` or `cross-critique` |
 | Long-running task needing context handoff | `handoff` |
-| Executing an already-agreed plan | `saga` |
+| Executing an already-agreed plan | `saga` when explicitly enabled |
