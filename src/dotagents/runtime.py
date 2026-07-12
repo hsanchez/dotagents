@@ -40,6 +40,8 @@ from dotagents.version import package_version
 
 OPT_IN_SKILLS = frozenset({"prek-bootstrap"})
 BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
+CAPABILITY_INDEX_SCHEMA_VERSION = 1
+CapabilityStatus = Literal["ok", "stale", "missing", "invalid"]
 
 
 @dataclass
@@ -80,7 +82,7 @@ class RuntimeDrift:
 @dataclass(frozen=True)
 class CompiledGroupStatus:
   id: str
-  status: Literal["ok", "stale", "missing", "invalid"]
+  status: CapabilityStatus
   messages: tuple[str, ...] = ()
 
 
@@ -89,7 +91,7 @@ class CapabilitySkill:
   name: str
   kind: Literal["packaged", "compiled"]
   path: str
-  status: Literal["ok", "stale", "missing", "invalid"]
+  status: CapabilityStatus
   group_id: str | None = None
   compiler: str | None = None
   messages: tuple[str, ...] = ()
@@ -100,7 +102,7 @@ class CapabilityGroup:
   id: str
   compiler: str
   output_prefix: str
-  status: Literal["ok", "stale", "missing", "invalid"]
+  status: CapabilityStatus
   messages: tuple[str, ...] = ()
 
 
@@ -594,20 +596,20 @@ def compiled_group_statuses(repo_root: Path) -> tuple[CompiledGroupStatus, ...]:
 
 
 def capability_index(repo_root: Path) -> CapabilityIndex:
-  lock_path = repo_root / ".agents" / "dotagents.lock"
-  packaged_skills = packaged_capability_skills(repo_root, lock_path)
+  packaged_skills = packaged_capability_skills(repo_root)
   compiled_groups = capability_compiled_groups(repo_root)
   compiled_skills = tuple(
     compiled_capability_skill(group) for group in compiled_groups if group.id.startswith("skill:")
   )
   return CapabilityIndex(
-    schema_version=1,
+    schema_version=CAPABILITY_INDEX_SCHEMA_VERSION,
     skills=packaged_skills + compiled_skills,
     compiled_groups=compiled_groups,
   )
 
 
-def packaged_capability_skills(repo_root: Path, lock_path: Path) -> tuple[CapabilitySkill, ...]:
+def packaged_capability_skills(repo_root: Path) -> tuple[CapabilitySkill, ...]:
+  lock_path = repo_root / ".agents" / "dotagents.lock"
   if not lock_path.exists():
     return ()
   runtime_lock = read_lock(lock_path)
@@ -632,27 +634,12 @@ def packaged_capability_skills(repo_root: Path, lock_path: Path) -> tuple[Capabi
 def capability_compiled_groups(repo_root: Path) -> tuple[CapabilityGroup, ...]:
   manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
   if not manifest_path.exists():
-    return (
-      CapabilityGroup(
-        id="compiled artifacts",
-        compiler="unknown",
-        output_prefix="",
-        status="ok",
-        messages=("no compiled artifacts",),
-      ),
-    )
+    return (compiled_artifacts_capability_group("ok", "no compiled artifacts"),)
   try:
     build_manifest = read_build_manifest(manifest_path)
   except CompilerError as exc:
-    return (
-      CapabilityGroup(
-        id="compiled artifacts",
-        compiler="unknown",
-        output_prefix="",
-        status="invalid",
-        messages=(f"compiled artifacts: build manifest error: {exc}",),
-      ),
-    )
+    message = f"compiled artifacts: build manifest error: {exc}"
+    return (compiled_artifacts_capability_group("invalid", message),)
   groups = build_manifest.groups or (
     BuildGroup(
       id="compiled artifacts",
@@ -662,19 +649,31 @@ def capability_compiled_groups(repo_root: Path) -> tuple[CapabilityGroup, ...]:
       sources=build_manifest.sources,
     ),
   )
-  capability_groups: list[CapabilityGroup] = []
-  for group in groups:
-    status = compiled_group_status(repo_root, group)
-    capability_groups.append(
-      CapabilityGroup(
-        id=group.id,
-        compiler=group.compiler,
-        output_prefix=group.output_prefix,
-        status=status.status,
-        messages=status.messages,
-      )
-    )
-  return tuple(capability_groups)
+  return tuple(compiled_capability_group(repo_root, group) for group in groups)
+
+
+def compiled_artifacts_capability_group(
+  status: CapabilityStatus,
+  message: str,
+) -> CapabilityGroup:
+  return CapabilityGroup(
+    id="compiled artifacts",
+    compiler="unknown",
+    output_prefix="",
+    status=status,
+    messages=(message,),
+  )
+
+
+def compiled_capability_group(repo_root: Path, group: BuildGroup) -> CapabilityGroup:
+  status = compiled_group_status(repo_root, group)
+  return CapabilityGroup(
+    id=group.id,
+    compiler=group.compiler,
+    output_prefix=group.output_prefix,
+    status=status.status,
+    messages=status.messages,
+  )
 
 
 def compiled_capability_skill(group: CapabilityGroup) -> CapabilitySkill:
@@ -756,7 +755,7 @@ def compiled_artifact_status_message(
 
 def compiled_status_from_messages(
   messages: list[str],
-) -> Literal["ok", "stale", "missing", "invalid"]:
+) -> CapabilityStatus:
   if not messages:
     return "ok"
   if any("invalid" in message or "error" in message for message in messages):

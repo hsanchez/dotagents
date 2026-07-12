@@ -3,6 +3,7 @@ import sys
 import tarfile
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pytest
 from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
@@ -520,10 +521,8 @@ def test_compile_status_json_reports_packaged_skills(
   (tmp_path / "Skillfile").write_text("skill research\n", encoding="utf-8")
   init_runtime(Path.cwd(), ("claude",))
 
-  result = CliRunner().invoke(app, ["compile", "status", "--json"])
-  payload = json.loads(result.output)
+  payload = compile_status_json_payload()
 
-  assert result.exit_code == 0
   assert payload["schema_version"] == 1
   assert payload["skills"] == [
     {
@@ -550,10 +549,8 @@ def test_compile_status_json_reports_compiled_skill(
   monkeypatch.chdir(tmp_path)
   compile_template_for_status(tmp_path)
 
-  result = CliRunner().invoke(app, ["compile", "status", "--json"])
-  payload = json.loads(result.output)
+  payload = compile_status_json_payload()
 
-  assert result.exit_code == 0
   assert {
     "name": "team-policy",
     "kind": "compiled",
@@ -580,10 +577,8 @@ def test_compile_status_json_reports_stale_compiled_group(
   template = compile_template_for_status(tmp_path)
   template.write_text("{% artifact 'SKILL.md' %}# Changed\n{% endartifact %}", encoding="utf-8")
 
-  result = CliRunner().invoke(app, ["compile", "status", "--json"])
-  payload = json.loads(result.output)
+  payload = compile_status_json_payload()
 
-  assert result.exit_code == 0
   assert payload["compiled_groups"][0]["status"] == "stale"
   assert payload["skills"][0]["status"] == "stale"
   assert payload["compiled_groups"][0]["messages"] == [
@@ -600,13 +595,17 @@ def test_compile_status_json_preserves_markup_literals(
     sources=(compiler.BuildSource(kind="[bold]future[/bold]", reference="source", version="0"),),
   )
 
-  result = CliRunner().invoke(app, ["compile", "status", "--json"])
-  payload = json.loads(result.output)
+  payload = compile_status_json_payload()
 
-  assert result.exit_code == 0
   assert payload["compiled_groups"][0]["messages"] == [
     "compiled artifacts stale: unrecognized source kind: [bold]future[/bold]"
   ]
+
+
+def compile_status_json_payload() -> dict[str, Any]:
+  result = CliRunner().invoke(app, ["compile", "status", "--json"])
+  assert result.exit_code == 0
+  return json.loads(result.output)
 
 
 def compile_template_for_status(tmp_path: Path) -> Path:

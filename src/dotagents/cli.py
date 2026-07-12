@@ -384,8 +384,7 @@ def compile_status(
 def print_compile_status(json_output: bool) -> None:
   if json_output:
     payload = capability_index_payload(capability_index(Path.cwd()))
-    sys.stdout.write(json.dumps(payload, indent=2, sort_keys=True))
-    sys.stdout.write("\n")
+    sys.stdout.write(f"{json.dumps(payload, indent=2, sort_keys=True)}\n")
     return
   print_compile_statuses(compiled_group_statuses(Path.cwd()))
 
