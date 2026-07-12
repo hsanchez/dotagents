@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from helpers import make_lock_stale, make_manifest_stale
+from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 from typer.testing import CliRunner
 
 import dotagents.compiler as compiler
@@ -511,6 +511,127 @@ def test_compile_status_reports_no_compiled_artifacts(
   assert result.exit_code == 0
   assert "compiled artifacts: ok" in result.output
   assert "no compiled artifacts" in result.output
+
+
+def test_compile_status_json_reports_packaged_skills(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  (tmp_path / "Skillfile").write_text("skill research\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["compile", "status", "--json"])
+  payload = json.loads(result.output)
+
+  assert result.exit_code == 0
+  assert payload["schema_version"] == 1
+  assert payload["skills"] == [
+    {
+      "name": "research",
+      "kind": "packaged",
+      "path": ".agents/skills/research",
+      "status": "ok",
+    }
+  ]
+  assert payload["compiled_groups"] == [
+    {
+      "id": "compiled artifacts",
+      "compiler": "unknown",
+      "output_prefix": "",
+      "status": "ok",
+      "messages": ["no compiled artifacts"],
+    }
+  ]
+
+
+def test_compile_status_json_reports_compiled_skill(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  compile_template_for_status(tmp_path)
+
+  result = CliRunner().invoke(app, ["compile", "status", "--json"])
+  payload = json.loads(result.output)
+
+  assert result.exit_code == 0
+  assert {
+    "name": "team-policy",
+    "kind": "compiled",
+    "path": ".agents/skills/team-policy",
+    "status": "ok",
+    "group_id": "skill:team-policy",
+    "compiler": "template",
+  } in payload["skills"]
+  assert payload["compiled_groups"] == [
+    {
+      "id": "skill:team-policy",
+      "compiler": "template",
+      "output_prefix": ".agents/skills/team-policy",
+      "status": "ok",
+      "messages": [],
+    }
+  ]
+
+
+def test_compile_status_json_reports_stale_compiled_group(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  template = compile_template_for_status(tmp_path)
+  template.write_text("{% artifact 'SKILL.md' %}# Changed\n{% endartifact %}", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["compile", "status", "--json"])
+  payload = json.loads(result.output)
+
+  assert result.exit_code == 0
+  assert payload["compiled_groups"][0]["status"] == "stale"
+  assert payload["skills"][0]["status"] == "stale"
+  assert payload["compiled_groups"][0]["messages"] == [
+    "compiled artifacts stale: template source changed: team.md.j2"
+  ]
+
+
+def test_compile_status_json_preserves_markup_literals(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  write_compiled_manifest(
+    tmp_path,
+    sources=(compiler.BuildSource(kind="[bold]future[/bold]", reference="source", version="0"),),
+  )
+
+  result = CliRunner().invoke(app, ["compile", "status", "--json"])
+  payload = json.loads(result.output)
+
+  assert result.exit_code == 0
+  assert payload["compiled_groups"][0]["messages"] == [
+    "compiled artifacts stale: unrecognized source kind: [bold]future[/bold]"
+  ]
+
+
+def compile_template_for_status(tmp_path: Path) -> Path:
+  template = tmp_path / "team.md.j2"
+  template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }}\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  variables = tmp_path / "team.json"
+  variables.write_text('{"name": "Team Policy"}\n', encoding="utf-8")
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "template",
+      "--template",
+      str(template),
+      "--variables",
+      str(variables),
+      "--output-skill",
+      "team-policy",
+    ],
+  )
+  assert result.exit_code == 0
+  return template
 
 
 def test_compile_check_passes_for_valid_compiled_artifacts(

@@ -84,6 +84,33 @@ class CompiledGroupStatus:
   messages: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class CapabilitySkill:
+  name: str
+  kind: Literal["packaged", "compiled"]
+  path: str
+  status: Literal["ok", "stale", "missing", "invalid"]
+  group_id: str | None = None
+  compiler: str | None = None
+  messages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CapabilityGroup:
+  id: str
+  compiler: str
+  output_prefix: str
+  status: Literal["ok", "stale", "missing", "invalid"]
+  messages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CapabilityIndex:
+  schema_version: int
+  skills: tuple[CapabilitySkill, ...]
+  compiled_groups: tuple[CapabilityGroup, ...]
+
+
 def check_drift(
   kind: Literal["version", "manifest"], runtime_value: str, package_value: str
 ) -> RuntimeDrift | None:
@@ -564,6 +591,137 @@ def compiled_group_statuses(repo_root: Path) -> tuple[CompiledGroupStatus, ...]:
     ),
   )
   return tuple(compiled_group_status(repo_root, group) for group in groups)
+
+
+def capability_index(repo_root: Path) -> CapabilityIndex:
+  lock_path = repo_root / ".agents" / "dotagents.lock"
+  packaged_skills = packaged_capability_skills(repo_root, lock_path)
+  compiled_groups = capability_compiled_groups(repo_root)
+  compiled_skills = tuple(
+    compiled_capability_skill(group) for group in compiled_groups if group.id.startswith("skill:")
+  )
+  return CapabilityIndex(
+    schema_version=1,
+    skills=packaged_skills + compiled_skills,
+    compiled_groups=compiled_groups,
+  )
+
+
+def packaged_capability_skills(repo_root: Path, lock_path: Path) -> tuple[CapabilitySkill, ...]:
+  if not lock_path.exists():
+    return ()
+  runtime_lock = read_lock(lock_path)
+  skills = runtime_lock.skills or ()
+  capability_skills: list[CapabilitySkill] = []
+  for skill in skills:
+    path = f".agents/skills/{skill}"
+    status: Literal["ok", "missing"] = "ok" if (repo_root / path).is_dir() else "missing"
+    messages = () if status == "ok" else (f"skill missing: {path}",)
+    capability_skills.append(
+      CapabilitySkill(
+        name=skill,
+        kind="packaged",
+        path=path,
+        status=status,
+        messages=messages,
+      )
+    )
+  return tuple(capability_skills)
+
+
+def capability_compiled_groups(repo_root: Path) -> tuple[CapabilityGroup, ...]:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    return (
+      CapabilityGroup(
+        id="compiled artifacts",
+        compiler="unknown",
+        output_prefix="",
+        status="ok",
+        messages=("no compiled artifacts",),
+      ),
+    )
+  try:
+    build_manifest = read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    return (
+      CapabilityGroup(
+        id="compiled artifacts",
+        compiler="unknown",
+        output_prefix="",
+        status="invalid",
+        messages=(f"compiled artifacts: build manifest error: {exc}",),
+      ),
+    )
+  groups = build_manifest.groups or (
+    BuildGroup(
+      id="compiled artifacts",
+      compiler="unknown",
+      output_prefix=".agents",
+      artifacts=build_manifest.artifacts,
+      sources=build_manifest.sources,
+    ),
+  )
+  capability_groups: list[CapabilityGroup] = []
+  for group in groups:
+    status = compiled_group_status(repo_root, group)
+    capability_groups.append(
+      CapabilityGroup(
+        id=group.id,
+        compiler=group.compiler,
+        output_prefix=group.output_prefix,
+        status=status.status,
+        messages=status.messages,
+      )
+    )
+  return tuple(capability_groups)
+
+
+def compiled_capability_skill(group: CapabilityGroup) -> CapabilitySkill:
+  name = group.id.removeprefix("skill:")
+  return CapabilitySkill(
+    name=name,
+    kind="compiled",
+    path=group.output_prefix,
+    status=group.status,
+    group_id=group.id,
+    compiler=group.compiler,
+    messages=group.messages,
+  )
+
+
+def capability_index_payload(index: CapabilityIndex) -> dict[str, object]:
+  return {
+    "schema_version": index.schema_version,
+    "skills": [capability_skill_payload(skill) for skill in index.skills],
+    "compiled_groups": [capability_group_payload(group) for group in index.compiled_groups],
+  }
+
+
+def capability_skill_payload(skill: CapabilitySkill) -> dict[str, object]:
+  payload: dict[str, object] = {
+    "name": skill.name,
+    "kind": skill.kind,
+    "path": skill.path,
+    "status": skill.status,
+  }
+  if skill.group_id is not None:
+    payload["group_id"] = skill.group_id
+  if skill.compiler is not None:
+    payload["compiler"] = skill.compiler
+  if skill.messages:
+    payload["messages"] = list(skill.messages)
+  return payload
+
+
+def capability_group_payload(group: CapabilityGroup) -> dict[str, object]:
+  return {
+    "id": group.id,
+    "compiler": group.compiler,
+    "output_prefix": group.output_prefix,
+    "status": group.status,
+    "messages": list(group.messages),
+  }
 
 
 def compiled_group_status(repo_root: Path, group: BuildGroup) -> CompiledGroupStatus:

@@ -3,12 +3,15 @@ from pathlib import Path
 import pytest
 from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
+import dotagents.runtime as runtime_module
+from dotagents.compiler import BuildGroup, BuildManifest
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import LockedLink, read_lock, write_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
   add_provider,
+  capability_compiled_groups,
   init_runtime,
   remove_provider,
   runtime_destination,
@@ -68,6 +71,39 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert ".claude/skills" in link_destinations
   assert "skills" not in link_destinations
   assert ".github/copilot-instructions.md" in link_destinations
+
+
+def test_capability_compiled_groups_uses_single_manifest_snapshot(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  manifest_path = tmp_path / ".agents" / "build" / "manifest.json"
+  manifest_path.parent.mkdir(parents=True)
+  manifest_path.write_text("{}", encoding="utf-8")
+  build_group = BuildGroup(
+    id="skill:generated",
+    compiler="template",
+    output_prefix=".agents/skills/generated",
+    artifacts=(),
+    sources=(),
+  )
+  build_manifest = BuildManifest(artifacts=(), sources=(), groups=(build_group,))
+  calls = 0
+
+  def read_build_manifest_once(path: Path) -> BuildManifest:
+    nonlocal calls
+    calls += 1
+    if calls > 1:
+      raise AssertionError("build manifest read more than once")
+    return build_manifest
+
+  monkeypatch.setattr(runtime_module, "read_build_manifest", read_build_manifest_once)
+
+  groups = capability_compiled_groups(tmp_path)
+
+  assert calls == 1
+  assert groups[0].id == "skill:generated"
+  assert groups[0].compiler == "template"
+  assert groups[0].output_prefix == ".agents/skills/generated"
 
 
 def test_init_materializes_only_skillfile_selection(
