@@ -1,10 +1,16 @@
 from pathlib import Path
 
 import pytest
-from helpers import make_lock_stale, make_manifest_stale
+from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
+from dotagents.compiler import (
+  BuildSource,
+  file_build_source,
+  mcp_metadata_build_source,
+  template_build_source,
+)
 from dotagents.doctor import doctor
-from dotagents.runtime import init_runtime
+from dotagents.runtime import init_runtime, sync_existing
 
 
 def init_prek_bootstrap_runtime(repo_root: Path) -> None:
@@ -30,6 +36,229 @@ def test_doctor_reports_missing_managed_asset(
 
   assert not result.passed
   assert "missing: .agents/scripts/review-code" in result.lines
+
+
+def test_doctor_reports_unlocked_compiled_build_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(tmp_path)
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert "compiled artifacts: not locked; run: uv run dotagents sync" in result.lines
+
+
+def test_doctor_reports_compiled_group_status(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(tmp_path)
+  sync_existing(Path.cwd())
+
+  result = doctor(Path.cwd())
+
+  assert result.passed
+  assert "compiled: compiled artifacts ok" in result.lines
+
+
+def test_doctor_reports_stale_compiled_file_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "templates" / "skill.md.j2"
+  source.parent.mkdir()
+  source.write_text("# {{ name }}\n", encoding="utf-8")
+  write_compiled_manifest(tmp_path, sources=(file_build_source(tmp_path, source),))
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.write_text("# changed\n", encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  expected = (
+    "compiled artifacts stale: file source changed: templates/skill.md.j2; "
+    "rerun the compiler before sync"
+  )
+  assert expected in result.lines
+  assert result.lines.count(expected) == 1
+
+
+def test_doctor_reports_stale_compiled_package_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    sources=(BuildSource(kind="package", reference="dotagents", version="0.0.0"),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: dotagents package changed; rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_stale_compiled_mcp_metadata_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "github-mcp.json"
+  source.write_text('{"tools": []}\n', encoding="utf-8")
+  write_compiled_manifest(
+    tmp_path,
+    sources=(mcp_metadata_build_source(tmp_path, "github", "github", source),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.write_text('{"tools": [{"name": "search"}]}\n', encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: MCP metadata source changed: github-mcp.json; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_tracks_mcp_metadata_for_multiple_output_skills(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  first_source = tmp_path / "read.json"
+  first_source.write_text('{"tools": [{"name": "read"}]}\n', encoding="utf-8")
+  second_source = tmp_path / "write.json"
+  second_source.write_text('{"tools": [{"name": "write"}]}\n', encoding="utf-8")
+  write_compiled_manifest(
+    tmp_path,
+    sources=(
+      mcp_metadata_build_source(tmp_path, "github", "github-read", first_source),
+      mcp_metadata_build_source(tmp_path, "github", "github-write", second_source),
+    ),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  first_source.write_text('{"tools": [{"name": "read_changed"}]}\n', encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: MCP metadata source changed: read.json; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_stale_compiled_template_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "templates" / "team.md.j2"
+  source.parent.mkdir()
+  source.write_text("{% artifact 'SKILL.md' %}# Demo\n{% endartifact %}", encoding="utf-8")
+  write_compiled_manifest(
+    tmp_path,
+    sources=(template_build_source(tmp_path, "team-policy", source),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.write_text("{% artifact 'SKILL.md' %}# Changed\n{% endartifact %}", encoding="utf-8")
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: template source changed: templates/team.md.j2; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_unsafe_compiled_file_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    sources=(BuildSource(kind="file", reference="../outside.md", version="sha"),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: artifact path must stay within output root: ../outside.md; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_unrecognized_compiled_source_kind(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    sources=(BuildSource(kind="future", reference="github", version="0"),),
+  )
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: unrecognized source kind: future; rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_missing_compiled_file_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  source = tmp_path / "templates" / "skill.md.j2"
+  source.parent.mkdir()
+  source.write_text("# {{ name }}\n", encoding="utf-8")
+  write_compiled_manifest(tmp_path, sources=(file_build_source(tmp_path, source),))
+  init_runtime(Path.cwd(), ("claude",))
+
+  source.unlink()
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert (
+    "compiled artifacts stale: file source missing: templates/skill.md.j2; "
+    "rerun the compiler before sync"
+  ) in result.lines
+
+
+def test_doctor_reports_invalid_build_manifest_json(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  manifest_path = tmp_path / ".agents" / "build" / "manifest.json"
+  manifest_path.parent.mkdir(parents=True, exist_ok=True)
+  manifest_path.write_text("not json", encoding="utf-8")
+
+  result = doctor(Path.cwd())
+
+  assert not result.passed
+  assert any(
+    line.startswith("compiled artifacts: build manifest error: cannot parse build manifest")
+    and line.endswith("; rerun the compiler before sync")
+    for line in result.lines
+  )
 
 
 def test_doctor_reports_version_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

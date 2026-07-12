@@ -7,30 +7,89 @@ import typer
 from rich.console import Console
 
 from dotagents.assets import asset_root
+from dotagents.compiler import (
+  CompiledSkill,
+  compile_github_skill,
+  compile_mcp_command_skill,
+  compile_mcp_skill,
+  compile_template_skill,
+  compiled_skill_build_manifest,
+  read_mcp_capabilities,
+  read_mcp_capabilities_from_command,
+  read_template_variables,
+  write_compiled_skill,
+)
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
 from dotagents.runtime import (
+  CompiledGroupStatus,
   OperationLog,
   add_provider,
+  compiled_group_statuses,
   init_runtime,
   remove_provider,
   sync_existing,
   uninstall_existing,
   update_existing,
 )
-from dotagents.skillfile import edit_skillfile, skillfile_path, write_preset_skillfile
+from dotagents.skillfile import (
+  available_skills,
+  edit_skillfile,
+  skillfile_path,
+  write_preset_skillfile,
+)
 from dotagents.version import package_version
 
 app = typer.Typer(no_args_is_help=True)
 providers_app = typer.Typer(no_args_is_help=True)
+compile_app = typer.Typer(no_args_is_help=True)
+compile_skill_app = typer.Typer(no_args_is_help=True)
 app.add_typer(providers_app, name="providers", help="Add or remove configured providers.")
+app.add_typer(compile_app, name="compile", help="Compile agentic environment artifacts.")
+compile_app.add_typer(compile_skill_app, name="skill", help="Compile skills from external sources.")
 console = Console()
 DEFAULT_PRESET = "dev"
 
 ProviderOption = Annotated[
   list[str] | None,
   typer.Option("--for", help="Provider to configure. Repeat for multiple providers."),
+]
+MetadataOption = Annotated[
+  Path | None,
+  typer.Option("--metadata", help="Path to deterministic MCP capability metadata JSON."),
+]
+FromCommandOption = Annotated[
+  str | None,
+  typer.Option("--from-command", help="Command that prints MCP capability metadata JSON."),
+]
+CommandArgOption = Annotated[
+  list[str] | None,
+  typer.Option("--arg", help="Argument passed to --from-command. Repeat for multiple args."),
+]
+NameOption = Annotated[str, typer.Option("--name", help="MCP server name.")]
+OutputSkillOption = Annotated[
+  str | None,
+  typer.Option("--output-skill", help="Generated skill directory name. Defaults to --name."),
+]
+TemplateOption = Annotated[Path, typer.Option("--template", help="Path to a Jinja template.")]
+VariablesOption = Annotated[
+  Path,
+  typer.Option("--variables", help="Path to template variables JSON."),
+]
+TemplateOutputSkillOption = Annotated[
+  str,
+  typer.Option("--output-skill", help="Generated skill directory name."),
+]
+CompileDryRunOption = Annotated[
+  bool,
+  typer.Option("--dry-run", help="Show planned compiler output without writing."),
+]
+GitHubRepoOption = Annotated[str, typer.Option("--repo", help="GitHub repository as owner/name.")]
+GitHubPathOption = Annotated[str, typer.Option("--path", help="Repo path containing SKILL.md.")]
+GitHubRefOption = Annotated[
+  str,
+  typer.Option("--ref", help="Full 40-character commit SHA to vendor."),
 ]
 
 
@@ -169,6 +228,162 @@ def list_items(kind: str = typer.Argument("providers", help="providers or skills
     return
   console.print("[red]ERROR[/red] kind must be providers or skills")
   raise typer.Exit(code=1)
+
+
+@compile_app.command("mcp")
+def compile_mcp(
+  name: NameOption,
+  metadata: MetadataOption = None,
+  from_command: FromCommandOption = None,
+  command_args: CommandArgOption = None,
+  output_skill: OutputSkillOption = None,
+  dry_run: CompileDryRunOption = False,
+) -> None:
+  """Compile deterministic MCP metadata into a managed skill."""
+  skill_name = output_skill or name
+  try:
+    compiled_skill = build_mcp_compiled_skill(
+      name,
+      skill_name,
+      metadata,
+      from_command,
+      tuple(command_args or ()),
+    )
+    if dry_run:
+      print_compile_preview(compiled_skill)
+      console.print("[yellow]Dry run complete.[/yellow]")
+      return
+    write_compiled_skill(Path.cwd(), compiled_skill)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  print_compile_success("MCP", skill_name)
+
+
+def build_mcp_compiled_skill(
+  name: str,
+  output_skill: str,
+  metadata: Path | None,
+  from_command: str | None,
+  command_args: tuple[str, ...],
+) -> CompiledSkill:
+  if (metadata is None) == (from_command is None):
+    raise DotagentsError("compile mcp requires exactly one of --metadata or --from-command")
+  if metadata is not None:
+    return compile_mcp_skill(
+      Path.cwd(),
+      read_mcp_capabilities(metadata, server=name),
+      output_skill,
+      metadata,
+      reserved_skill_names=bundled_skill_names(),
+    )
+  if from_command is None:
+    raise DotagentsError("compile mcp requires --from-command")
+  capabilities = read_mcp_capabilities_from_command(from_command, command_args, server=name)
+  return compile_mcp_command_skill(
+    Path.cwd(),
+    capabilities,
+    output_skill,
+    from_command,
+    command_args,
+    reserved_skill_names=bundled_skill_names(),
+  )
+
+
+@compile_app.command("template")
+def compile_template(
+  template: TemplateOption,
+  variables: VariablesOption,
+  output_skill: TemplateOutputSkillOption,
+  dry_run: CompileDryRunOption = False,
+) -> None:
+  """Compile a deterministic template into a managed skill."""
+  try:
+    loaded_variables = read_template_variables(variables)
+    compiled_skill = compile_template_skill(
+      Path.cwd(),
+      template,
+      output_skill,
+      loaded_variables,
+      variables_path=variables,
+      reserved_skill_names=bundled_skill_names(),
+    )
+    if dry_run:
+      print_compile_preview(compiled_skill)
+      console.print("[yellow]Dry run complete.[/yellow]")
+      return
+    write_compiled_skill(Path.cwd(), compiled_skill)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  print_compile_success("template", output_skill)
+
+
+@compile_skill_app.command("github")
+def compile_skill_github(
+  repo: GitHubRepoOption,
+  source_path: GitHubPathOption,
+  ref: GitHubRefOption,
+  output_skill: TemplateOutputSkillOption,
+  dry_run: CompileDryRunOption = False,
+) -> None:
+  """Vendor a pinned GitHub repository skill into managed output."""
+  try:
+    compiled_skill = compile_github_skill(
+      repo,
+      source_path,
+      ref,
+      output_skill,
+      reserved_skill_names=bundled_skill_names(),
+    )
+    if dry_run:
+      print_compile_preview(compiled_skill)
+      console.print("[yellow]Dry run complete.[/yellow]")
+      return
+    write_compiled_skill(Path.cwd(), compiled_skill)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  print_compile_success("GitHub", output_skill)
+
+
+def print_compile_success(kind: str, output_skill: str) -> None:
+  console.print(f"[green]Compiled {kind} skill: {output_skill}.[/green]")
+  console.print("next: uv run dotagents sync")
+
+
+def print_compile_preview(compiled_skill: CompiledSkill) -> None:
+  manifest = compiled_skill_build_manifest(compiled_skill)
+  console.print(f"would compile skill: {compiled_skill.output_skill}")
+  for artifact in manifest.artifacts:
+    console.print(f"would write {artifact.artifact}")
+  console.print("would update .agents/build/manifest.json")
+  for source in manifest.sources:
+    console.print(f"source: {source.kind} {source.reference}")
+  console.print("next: uv run dotagents sync")
+
+
+@compile_app.command("check")
+def compile_check() -> None:
+  """Validate compiler-owned artifacts and sources."""
+  statuses = compiled_group_statuses(Path.cwd())
+  print_compile_statuses(statuses)
+  if any(status.status != "ok" for status in statuses):
+    raise typer.Exit(code=1)
+
+
+@compile_app.command("status")
+def compile_status() -> None:
+  """Show compiler-owned artifact status."""
+  print_compile_statuses(compiled_group_statuses(Path.cwd()))
+
+
+def print_compile_statuses(statuses: tuple[CompiledGroupStatus, ...]) -> None:
+  for status in statuses:
+    console.print(f"{status.id}: {status.status}")
+    for message in status.messages:
+      console.print(f"  {message}")
+
+
+def bundled_skill_names() -> set[str]:
+  return set(available_skills(asset_root()))
 
 
 @providers_app.command("add")

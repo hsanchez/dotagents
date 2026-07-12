@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from helpers import make_lock_stale, make_manifest_stale
+from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
@@ -108,6 +108,147 @@ def test_sync_reconciles_manual_skillfile_edit(
   assert not (tmp_path / ".agents" / "skills" / "research").exists()
   assert (tmp_path / ".agents" / "skills" / "git-guardrails").is_dir()
   assert doctor(Path.cwd()).passed
+
+
+def test_sync_locks_compiled_build_manifest_and_artifacts(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/generated/SKILL.md": "# generated\n"},
+  )
+
+  operation_log = sync_existing(Path.cwd())
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assets = {asset.destination: asset for asset in lock.assets}
+  assert ".agents/build/manifest.json" in assets
+  assert ".agents/skills/generated/SKILL.md" in assets
+  assert assets[".agents/skills/generated/SKILL.md"].source.startswith("compiled:")
+  assert "ok .agents/build/manifest.json" in operation_log.lines
+  assert "ok .agents/skills/generated/SKILL.md" in operation_log.lines
+  assert doctor(Path.cwd()).passed
+
+
+def test_sync_rejects_changed_compiled_artifact(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/generated/SKILL.md": "# generated\n"},
+  )
+  (tmp_path / ".agents" / "skills" / "generated" / "SKILL.md").write_text(
+    "changed\n", encoding="utf-8"
+  )
+
+  with pytest.raises(DotagentsError, match="compiled artifact changed since build manifest"):
+    sync_existing(Path.cwd())
+
+
+def test_sync_rejects_missing_manifest_when_lock_has_compiled_artifacts(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/generated/SKILL.md": "# generated\n"},
+  )
+  sync_existing(Path.cwd())
+
+  (tmp_path / ".agents" / "build" / "manifest.json").unlink()
+
+  with pytest.raises(DotagentsError, match="compiled build manifest missing"):
+    sync_existing(Path.cwd())
+
+  assert (tmp_path / ".agents" / "skills" / "generated" / "SKILL.md").exists()
+
+
+def test_sync_does_not_mutate_runtime_when_compiled_artifact_changed(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/generated/SKILL.md": "# generated\n"},
+  )
+  sync_existing(Path.cwd())
+  lock_before = read_lock(tmp_path / ".agents" / "dotagents.lock")
+
+  (tmp_path / ".agents" / "agents.toml").unlink()
+  (tmp_path / ".agents" / "skills" / "generated" / "SKILL.md").write_text(
+    "changed\n", encoding="utf-8"
+  )
+
+  with pytest.raises(DotagentsError, match="compiled artifact changed since build manifest"):
+    sync_existing(Path.cwd())
+
+  assert not (tmp_path / ".agents" / "agents.toml").exists()
+  lock_after = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock_after.generated_at == lock_before.generated_at
+
+
+def test_sync_rejects_compiled_artifact_outside_agents(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {"README.md": "# generated\n"},
+  )
+
+  with pytest.raises(DotagentsError, match="compiled artifact must be under .agents"):
+    sync_existing(Path.cwd())
+
+
+def test_sync_rejects_compiled_artifact_conflicting_with_selected_skill(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/research/SKILL.md": "# generated\n"},
+  )
+
+  with pytest.raises(DotagentsError, match="compiled artifact conflicts with managed skill"):
+    sync_existing(Path.cwd())
+
+
+def test_sync_rejects_compiled_artifact_destination_collision(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/agents.toml": "# generated\n"},
+  )
+
+  with pytest.raises(DotagentsError, match="managed asset destination collision"):
+    sync_existing(Path.cwd())
+
+
+def test_uninstall_removes_locked_compiled_artifacts(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  write_compiled_manifest(
+    tmp_path,
+    {".agents/skills/generated/SKILL.md": "# generated\n"},
+  )
+  sync_existing(Path.cwd())
+
+  uninstall_existing(Path.cwd())
+
+  assert not (tmp_path / ".agents").exists()
 
 
 def test_doctor_reports_skillfile_hash_drift(

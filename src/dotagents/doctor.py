@@ -8,7 +8,9 @@ from pathlib import Path
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import read_lock, sha256_file
 from dotagents.runtime import (
+  BUILD_MANIFEST_DESTINATION,
   build_context,
+  compiled_group_statuses,
   compute_skillfile_sha256,
   manifest_drift,
   relative,
@@ -74,7 +76,22 @@ def doctor(repo_root: Path) -> DoctorResult:
       lines.append("Skillfile: changed since lockfile; run: uv run dotagents sync")
       passed = False
 
+  lock_asset_destinations = {asset.destination for asset in lock.assets}
+  build_manifest_path = runtime_context.repo_root / BUILD_MANIFEST_DESTINATION
+  if build_manifest_path.exists():
+    if BUILD_MANIFEST_DESTINATION not in lock_asset_destinations:
+      lines.append("compiled artifacts: not locked; run: uv run dotagents sync")
+      passed = False
+    for status in compiled_group_statuses(runtime_context.repo_root):
+      lines.append(f"compiled: {status.id} {status.status}")
+      if status.status != "ok":
+        passed = False
+      for message in status.messages:
+        lines.append(f"{message}; rerun the compiler before sync")
+
   for asset in lock.assets:
+    if asset.source.startswith("compiled:"):
+      continue
     path = repo_root / asset.destination
     if not path.exists():
       lines.append(f"missing: {asset.destination}")

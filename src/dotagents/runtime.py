@@ -8,6 +8,17 @@ from pathlib import Path
 from typing import Literal
 
 from dotagents.assets import asset_root
+from dotagents.compiler import (
+  BuildGroup,
+  BuildManifest,
+  BuildManifestEntry,
+  BuildSource,
+  CompilerError,
+  parse_mcp_metadata_reference,
+  parse_template_source_reference,
+  read_build_manifest,
+  validate_relative_output_path,
+)
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import (
   LockedAsset,
@@ -28,6 +39,7 @@ from dotagents.skillfile import available_skills, resolve_skillfile, skillfile_p
 from dotagents.version import package_version
 
 OPT_IN_SKILLS = frozenset({"prek-bootstrap"})
+BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
 
 
 @dataclass
@@ -63,6 +75,13 @@ class RuntimeDrift:
         f"package is {self.package_value}. Run: uv run dotagents update"
       )
     return "agents.toml manifest changed. Run: uv run dotagents update"
+
+
+@dataclass(frozen=True)
+class CompiledGroupStatus:
+  id: str
+  status: Literal["ok", "stale", "missing", "invalid"]
+  messages: tuple[str, ...] = ()
 
 
 def check_drift(
@@ -328,6 +347,8 @@ def sync_runtime(
   locked_links: list[LockedLink] = []
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
   previous_lock = read_lock(lock_path) if lock_path.exists() else None
+  compiled_assets = compiled_lock_entries(runtime_context.repo_root, previous_lock)
+  validate_compiled_assets_do_not_conflict(runtime_context, compiled_assets)
 
   ensure_dir(runtime_context.repo_root, runtime_context.runtime_dir, operation_log)
   copy_file(
@@ -363,6 +384,9 @@ def sync_runtime(
     )
 
   render_rules(runtime_context, operation_log)
+  locked_assets.extend(compiled_assets)
+  log_compiled_assets(compiled_assets, operation_log)
+  validate_locked_asset_destinations_unique(locked_assets)
 
   for entry in selected_entries(
     runtime_context.manifest, runtime_context.providers, runtime_context.skills
@@ -397,6 +421,7 @@ def sync_runtime(
     runtime_context.repo_root, previous_lock, locked_assets, operation_log
   )
   locked_assets.extend(skipped_stale_assets)
+  validate_locked_asset_destinations_unique(locked_assets)
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
@@ -415,6 +440,257 @@ def sync_runtime(
     operation_log.add("wrote .agents/dotagents.lock")
 
   return operation_log
+
+
+def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) -> list[LockedAsset]:
+  build_manifest = load_build_manifest_for_sync(repo_root, previous_lock)
+  if build_manifest is None:
+    return []
+
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  locked_assets = [
+    LockedAsset(
+      source=BUILD_MANIFEST_DESTINATION,
+      destination=BUILD_MANIFEST_DESTINATION,
+      sha256=sha256_file(manifest_path),
+    )
+  ]
+  seen_destinations = {BUILD_MANIFEST_DESTINATION}
+  for entry in build_manifest.artifacts:
+    destination = validate_compiled_artifact_destination(entry.artifact)
+    if destination in seen_destinations:
+      raise DotagentsError(f"duplicate compiled artifact: {destination}")
+    seen_destinations.add(destination)
+    artifact_path = repo_root / destination
+    if not artifact_path.is_file():
+      raise DotagentsError(f"compiled artifact missing: {destination}")
+    actual_sha256 = sha256_file(artifact_path)
+    if actual_sha256 != entry.sha256:
+      raise DotagentsError(
+        f"compiled artifact changed since build manifest: {destination}; "
+        "rerun the compiler before sync"
+      )
+    locked_assets.append(
+      LockedAsset(source=f"compiled:{destination}", destination=destination, sha256=entry.sha256)
+    )
+  return locked_assets
+
+
+def log_compiled_assets(compiled_assets: list[LockedAsset], operation_log: OperationLog) -> None:
+  verb = "would lock" if operation_log.dry_run else "ok"
+  for asset in compiled_assets:
+    operation_log.add(f"{verb} {asset.destination}")
+
+
+def validate_compiled_assets_do_not_conflict(
+  runtime_context: RuntimeContext, compiled_assets: list[LockedAsset]
+) -> None:
+  skill_prefixes = {skill: f".agents/skills/{skill}/" for skill in runtime_context.skills}
+  for asset in compiled_assets:
+    for skill, prefix in skill_prefixes.items():
+      if asset.destination.startswith(prefix):
+        raise DotagentsError(f"compiled artifact conflicts with managed skill: {skill}")
+
+
+def load_build_manifest_for_sync(
+  repo_root: Path, previous_lock: RuntimeLock | None
+) -> BuildManifest | None:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    if previous_lock is not None and any(
+      asset.destination == BUILD_MANIFEST_DESTINATION for asset in previous_lock.assets
+    ):
+      raise DotagentsError(
+        "compiled build manifest missing; restore .agents/build/manifest.json "
+        "or run the compiler before sync"
+      )
+    return None
+
+  try:
+    return read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    raise DotagentsError(str(exc)) from exc
+
+
+def validate_compiled_artifact_destination(destination: str) -> str:
+  try:
+    safe_destination = validate_relative_output_path(destination)
+  except CompilerError as exc:
+    raise DotagentsError(str(exc)) from exc
+  if not safe_destination.startswith(".agents/"):
+    raise DotagentsError(f"compiled artifact must be under .agents: {safe_destination}")
+  return safe_destination
+
+
+def compiled_staleness_messages(repo_root: Path) -> list[str]:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    return []
+  try:
+    build_manifest = read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    return [f"compiled artifacts: build manifest error: {exc}"]
+
+  messages: list[str] = []
+  for source in build_manifest.sources:
+    message = compiled_source_staleness_message(repo_root, source)
+    if message:
+      messages.append(message)
+  return messages
+
+
+def compiled_group_statuses(repo_root: Path) -> tuple[CompiledGroupStatus, ...]:
+  manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
+  if not manifest_path.exists():
+    return (CompiledGroupStatus("compiled artifacts", "ok", ("no compiled artifacts",)),)
+  try:
+    build_manifest = read_build_manifest(manifest_path)
+  except CompilerError as exc:
+    return (
+      CompiledGroupStatus(
+        "compiled artifacts",
+        "invalid",
+        (f"compiled artifacts: build manifest error: {exc}",),
+      ),
+    )
+
+  groups = build_manifest.groups or (
+    BuildGroup(
+      id="compiled artifacts",
+      compiler="unknown",
+      output_prefix=".agents",
+      artifacts=build_manifest.artifacts,
+      sources=build_manifest.sources,
+    ),
+  )
+  return tuple(compiled_group_status(repo_root, group) for group in groups)
+
+
+def compiled_group_status(repo_root: Path, group: BuildGroup) -> CompiledGroupStatus:
+  messages: list[str] = []
+  for artifact in group.artifacts:
+    message = compiled_artifact_status_message(repo_root, artifact)
+    if message:
+      messages.append(message)
+  for source in group.sources:
+    message = compiled_source_staleness_message(repo_root, source)
+    if message:
+      messages.append(message)
+  return CompiledGroupStatus(group.id, compiled_status_from_messages(messages), tuple(messages))
+
+
+def compiled_artifact_status_message(
+  repo_root: Path,
+  artifact: BuildManifestEntry,
+) -> str | None:
+  try:
+    destination = validate_compiled_artifact_destination(artifact.artifact)
+  except DotagentsError as exc:
+    return f"compiled artifacts invalid: {exc}"
+  path = repo_root / destination
+  if not path.is_file():
+    return f"compiled artifact missing: {destination}"
+  actual_sha256 = sha256_file(path)
+  if actual_sha256 != artifact.sha256:
+    return f"compiled artifact changed since build manifest: {destination}"
+  return None
+
+
+def compiled_status_from_messages(
+  messages: list[str],
+) -> Literal["ok", "stale", "missing", "invalid"]:
+  if not messages:
+    return "ok"
+  if any("invalid" in message or "error" in message for message in messages):
+    return "invalid"
+  if any("missing" in message for message in messages):
+    return "missing"
+  return "stale"
+
+
+def compiled_source_staleness_message(repo_root: Path, source: BuildSource) -> str | None:
+  if source.kind == "file":
+    try:
+      reference = validate_relative_output_path(source.reference)
+    except CompilerError as exc:
+      return f"compiled artifacts stale: {exc}"
+    return compiled_path_staleness(
+      repo_root,
+      reference,
+      source.version,
+      missing_label="file source",
+      hash_label="file",
+      changed_label="file source",
+    )
+  if source.kind == "package":
+    if source.reference == "dotagents" and source.version != package_version():
+      return "compiled artifacts stale: dotagents package changed"
+    return None
+  if source.kind == "variables":
+    return None
+  if source.kind in {"mcp", "mcp-command", "github-skill"}:
+    return None
+  if source.kind == "mcp-metadata":
+    try:
+      _, _, reference = parse_mcp_metadata_reference(source.reference)
+      reference = validate_relative_output_path(reference)
+    except CompilerError as exc:
+      return f"compiled artifacts stale: {exc}"
+    return compiled_path_staleness(
+      repo_root,
+      reference,
+      source.version,
+      missing_label="MCP metadata source",
+      hash_label="MCP metadata source",
+      changed_label="MCP metadata source",
+    )
+  if source.kind == "template":
+    return compiled_file_like_source_staleness(repo_root, source, "template source")
+  if source.kind == "template-variables":
+    return compiled_file_like_source_staleness(repo_root, source, "template variables")
+  return f"compiled artifacts stale: unrecognized source kind: {source.kind}"
+
+
+def compiled_file_like_source_staleness(
+  repo_root: Path,
+  source: BuildSource,
+  label: str,
+) -> str | None:
+  try:
+    _, reference = parse_template_source_reference(source.reference)
+    if reference == "<inline>":
+      return None
+    reference = validate_relative_output_path(reference)
+  except CompilerError as exc:
+    return f"compiled artifacts stale: {exc}"
+  return compiled_path_staleness(
+    repo_root,
+    reference,
+    source.version,
+    missing_label=label,
+    hash_label=label,
+    changed_label=label,
+  )
+
+
+def compiled_path_staleness(
+  repo_root: Path,
+  reference: str,
+  expected_version: str,
+  missing_label: str,
+  hash_label: str,
+  changed_label: str,
+) -> str | None:
+  path = repo_root / reference
+  if not path.is_file():
+    return f"compiled artifacts stale: {missing_label} missing: {reference}"
+  try:
+    current_version = sha256_file(path)
+  except OSError as exc:
+    return f"compiled artifacts stale: cannot hash {hash_label}: {reference}: {exc}"
+  if current_version != expected_version:
+    return f"compiled artifacts stale: {changed_label} changed: {reference}"
+  return None
 
 
 def remove_stale_links(
@@ -529,6 +805,18 @@ def unique_locked_assets(locked_assets: list[LockedAsset]) -> list[LockedAsset]:
   for asset in locked_assets:
     unique[(asset.source, asset.destination)] = asset
   return list(unique.values())
+
+
+def validate_locked_asset_destinations_unique(locked_assets: list[LockedAsset]) -> None:
+  assets_by_destination: dict[str, LockedAsset] = {}
+  for asset in locked_assets:
+    existing = assets_by_destination.get(asset.destination)
+    if existing is not None and existing.source != asset.source:
+      raise DotagentsError(
+        "managed asset destination collision: "
+        f"{asset.destination} from {existing.source} and {asset.source}"
+      )
+    assets_by_destination[asset.destination] = asset
 
 
 def unique_locked_links(locked_links: list[LockedLink]) -> list[LockedLink]:

@@ -356,6 +356,83 @@ Shared skills are canonical under `.agents/skills`. Claude receives them through
 Repo-root `scripts/*` links are intentional convenience commands backed by
 `.agents/scripts`.
 
+## Compiled Artifacts
+
+dotagents can track compiler-produced artifacts under the same runtime ownership
+model as packaged assets. A compiler writes artifact files and records them in
+`.agents/build/manifest.json`. Manifest `artifact` paths are relative to the
+repo root and must stay under `.agents/`.
+
+During `sync` and `update`, dotagents validates the manifest, verifies each
+listed artifact hash, and records the manifest plus artifacts in
+`.agents/dotagents.lock`. `doctor` reports a build manifest that has not been
+synced into the lockfile. `uninstall` removes locked compiled artifacts through
+the same safe-removal path used for packaged runtime files.
+
+Build manifests can also record source lineage. Supported source records include
+repo-local files, the installed dotagents package version, explicit variable
+sets, MCP capability snapshots, explicit MCP snapshot commands, and pinned
+GitHub skill sources. `doctor` checks local file and package source versions and
+reports stale compiled artifacts when they differ from the manifest.
+New compiler output is grouped by generated unit, such as `skill:github-mcp`,
+with a schema version, compiler name, output prefix, artifacts, and sources.
+Older flat manifests are still readable during the transition.
+
+The MCP compiler consumes deterministic metadata from a repo-local JSON file or
+an explicit command that prints the same JSON shape:
+
+```bash
+uv run dotagents compile mcp --name github --metadata github-mcp.json
+uv run dotagents compile mcp --name github --from-command ./scripts/export-mcp-tools --arg github
+uv run dotagents sync
+```
+
+It writes a managed skill directory such as `.agents/skills/github/` and updates
+`.agents/build/manifest.json`. The metadata file is recorded as a source, so
+`doctor` reports stale compiled artifacts when that file changes.
+`--from-command` is run only during `compile`; `sync`, `doctor`, `compile status`,
+and `compile check` do not rerun commands or poll MCP servers.
+See `docs/workflows/compiler-mcp-example.md` for an end-to-end example.
+Add `--dry-run` to preview generated artifacts and source records without
+writing `.agents/`.
+
+Pinned GitHub repository skills can be vendored through the GitHub CLI:
+
+```bash
+uv run dotagents compile skill github \
+  --repo owner/repo \
+  --path skills/review \
+  --ref 0123456789abcdef0123456789abcdef01234567 \
+  --output-skill review
+```
+
+The GitHub compiler requires a full commit SHA, copies only the requested skill
+directory as UTF-8 text, requires `SKILL.md`, and does not execute remote
+content. GitHub skill compilation currently requires POSIX process-group
+cleanup, so it is not enabled on Windows. See
+`docs/workflows/compiler-github-skill-example.md`.
+
+Templates can also compile directly into managed skills:
+
+```bash
+uv run dotagents compile template \
+  --template templates/team-policy.md.j2 \
+  --variables team-policy.json \
+  --output-skill team-policy
+```
+
+See `docs/workflows/compiler-template-example.md` for the template workflow.
+Add `--dry-run` to preview generated artifacts and source records without
+writing `.agents/`.
+
+Compiler-specific validation is available without running the full runtime
+doctor path:
+
+```bash
+uv run dotagents compile status
+uv run dotagents compile check
+```
+
 ## Ownership
 
 ```text

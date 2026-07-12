@@ -1,11 +1,28 @@
+import json
+import sys
+import tarfile
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from helpers import make_lock_stale, make_manifest_stale
 from typer.testing import CliRunner
 
+import dotagents.compiler as compiler
 from dotagents.cli import app
+from dotagents.lockfile import read_lock
 from dotagents.runtime import init_runtime
+
+
+def github_tarball(files: dict[str, str]) -> bytes:
+  archive = BytesIO()
+  with tarfile.open(fileobj=archive, mode="w") as tar:
+    for path, content in files.items():
+      data = content.encode("utf-8")
+      item = tarfile.TarInfo(f"repo-root/{path}")
+      item.size = len(data)
+      tar.addfile(item, BytesIO(data))
+  return archive.getvalue()
 
 
 def test_list_providers_command_outputs_supported_providers() -> None:
@@ -117,6 +134,421 @@ def test_list_command_rejects_invalid_kind() -> None:
 
   assert result.exit_code == 1
   assert "kind must be providers or skills" in result.output
+
+
+def test_compile_mcp_command_writes_skill_and_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(
+    json.dumps(
+      {
+        "tools": [
+          {"name": "search_issues", "description": "Search issues", "inputSchema": {}},
+        ],
+      }
+    ),
+    encoding="utf-8",
+  )
+
+  result = CliRunner().invoke(
+    app,
+    ["compile", "mcp", "--name", "github", "--metadata", str(metadata)],
+  )
+
+  assert result.exit_code == 0
+  assert "Compiled MCP skill: github." in result.output
+  assert "next: uv run dotagents sync" in result.output
+  assert (tmp_path / ".agents" / "skills" / "github" / "SKILL.md").is_file()
+  assert (tmp_path / ".agents" / "build" / "manifest.json").is_file()
+
+  sync_result = CliRunner().invoke(app, ["sync"])
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+
+  assert sync_result.exit_code == 0
+  assert ".agents/skills/github/SKILL.md" in {asset.destination for asset in lock.assets}
+
+
+def test_compile_mcp_command_dry_run_does_not_write(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(
+    json.dumps(
+      {
+        "tools": [
+          {"name": "search_issues", "description": "Search issues", "inputSchema": {}},
+        ],
+      }
+    ),
+    encoding="utf-8",
+  )
+
+  result = CliRunner().invoke(
+    app,
+    ["compile", "mcp", "--name", "github", "--metadata", str(metadata), "--dry-run"],
+  )
+
+  assert result.exit_code == 0
+  assert "would compile skill: github" in result.output
+  assert "would write .agents/skills/github/SKILL.md" in result.output
+  assert "source: mcp " in result.output
+  assert "Dry run complete." in result.output
+  assert not (tmp_path / ".agents").exists()
+
+
+def test_compile_mcp_from_command_writes_skill_and_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  command = tmp_path / "mcp_metadata.py"
+  command.write_text(
+    "import json\nprint(json.dumps({'tools': [{'name': 'search', 'description': 'Search'}]}))\n",
+    encoding="utf-8",
+  )
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "mcp",
+      "--name",
+      "github",
+      "--from-command",
+      sys.executable,
+      "--arg",
+      str(command),
+    ],
+  )
+
+  assert result.exit_code == 0
+  assert "Compiled MCP skill: github." in result.output
+  assert (tmp_path / ".agents" / "skills" / "github" / "SKILL.md").is_file()
+  manifest = json.loads((tmp_path / ".agents" / "build" / "manifest.json").read_text())
+  sources = manifest["groups"][0]["sources"]
+  assert [source["kind"] for source in sources] == ["mcp", "mcp-command", "package"]
+
+
+def test_compile_mcp_rejects_missing_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["compile", "mcp", "--name", "github"])
+
+  assert result.exit_code == 1
+  assert "requires exactly one of --metadata or --from-command" in result.output
+
+
+def test_compile_mcp_rejects_multiple_sources(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "mcp",
+      "--name",
+      "github",
+      "--metadata",
+      str(metadata),
+      "--from-command",
+      sys.executable,
+    ],
+  )
+
+  assert result.exit_code == 1
+  assert "requires exactly one of --metadata or --from-command" in result.output
+
+
+def test_compile_mcp_command_rejects_bundled_skill_collision(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "mcp",
+      "--name",
+      "github",
+      "--metadata",
+      str(metadata),
+      "--output-skill",
+      "research",
+    ],
+  )
+
+  assert result.exit_code == 1
+  assert "compiled skill conflicts with bundled skill: research" in result.output
+  assert not (tmp_path / ".agents" / "skills" / "research").exists()
+
+
+def test_compile_skill_github_writes_skill_and_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  archive = github_tarball(
+    {
+      "skills/review/SKILL.md": "# Review\n",
+      "skills/review/tools/check.md": "Check\n",
+    }
+  )
+
+  def fake_fetch(repo: str, ref: str, timeout_seconds: float) -> bytes:
+    return archive
+
+  monkeypatch.setattr(compiler, "fetch_github_archive", fake_fetch)
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "skill",
+      "github",
+      "--repo",
+      "owner/repo",
+      "--path",
+      "skills/review",
+      "--ref",
+      "0123456789abcdef0123456789abcdef01234567",
+      "--output-skill",
+      "review",
+    ],
+  )
+
+  assert result.exit_code == 0
+  assert "Compiled GitHub skill: review." in result.output
+  assert "next: uv run dotagents sync" in result.output
+  assert (tmp_path / ".agents" / "skills" / "review" / "SKILL.md").read_text() == "# Review\n"
+  manifest = json.loads((tmp_path / ".agents" / "build" / "manifest.json").read_text())
+  assert manifest["groups"][0]["compiler"] == "github-skill"
+  assert manifest["groups"][0]["sources"][0]["kind"] == "github-skill"
+
+
+def test_compile_skill_github_dry_run_does_not_write(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  archive = github_tarball({"skills/review/SKILL.md": "# Review\n"})
+
+  def fake_fetch(repo: str, ref: str, timeout_seconds: float) -> bytes:
+    return archive
+
+  monkeypatch.setattr(compiler, "fetch_github_archive", fake_fetch)
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "skill",
+      "github",
+      "--repo",
+      "owner/repo",
+      "--path",
+      "skills/review",
+      "--ref",
+      "0123456789abcdef0123456789abcdef01234567",
+      "--output-skill",
+      "review",
+      "--dry-run",
+    ],
+  )
+
+  assert result.exit_code == 0
+  assert "would compile skill: review" in result.output
+  assert "source: github-skill " in result.output
+  assert "Dry run complete." in result.output
+  assert not (tmp_path / ".agents").exists()
+
+
+def test_compile_skill_github_rejects_ambiguous_ref(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "skill",
+      "github",
+      "--repo",
+      "owner/repo",
+      "--path",
+      "skills/review",
+      "--ref",
+      "main",
+      "--output-skill",
+      "review",
+    ],
+  )
+
+  assert result.exit_code == 1
+  assert "full 40-character commit SHA" in result.output
+
+
+def test_compile_template_command_writes_skill_and_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  templates = tmp_path / "templates"
+  templates.mkdir()
+  template = templates / "team.md.j2"
+  template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }}\n{% endartifact %}"
+    "{% artifact 'checklists/review.md' %}Review {{ name }}\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  variables = tmp_path / "team.json"
+  variables.write_text('{"name": "Team Policy"}\n', encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "template",
+      "--template",
+      str(template),
+      "--variables",
+      str(variables),
+      "--output-skill",
+      "team-policy",
+    ],
+  )
+
+  assert result.exit_code == 0
+  assert "Compiled template skill: team-policy." in result.output
+  assert "next: uv run dotagents sync" in result.output
+  assert (tmp_path / ".agents" / "skills" / "team-policy" / "SKILL.md").is_file()
+
+  sync_result = CliRunner().invoke(app, ["sync"])
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+
+  assert sync_result.exit_code == 0
+  assert ".agents/skills/team-policy/SKILL.md" in {asset.destination for asset in lock.assets}
+
+
+def test_compile_template_command_dry_run_does_not_write(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  template = tmp_path / "team.md.j2"
+  template.write_text(
+    "{% artifact 'SKILL.md' %}# {{ name }}\n{% endartifact %}",
+    encoding="utf-8",
+  )
+  variables = tmp_path / "team.json"
+  variables.write_text('{"name": "Team Policy"}\n', encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "template",
+      "--template",
+      str(template),
+      "--variables",
+      str(variables),
+      "--output-skill",
+      "team-policy",
+      "--dry-run",
+    ],
+  )
+
+  assert result.exit_code == 0
+  assert "would compile skill: team-policy" in result.output
+  assert "would write .agents/skills/team-policy/SKILL.md" in result.output
+  assert "source: template " in result.output
+  assert "Dry run complete." in result.output
+  assert not (tmp_path / ".agents").exists()
+
+
+def test_compile_template_command_rejects_bundled_skill_collision(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  template = tmp_path / "team.md.j2"
+  template.write_text("{% artifact 'SKILL.md' %}# Demo\n{% endartifact %}", encoding="utf-8")
+  variables = tmp_path / "team.json"
+  variables.write_text("{}\n", encoding="utf-8")
+
+  result = CliRunner().invoke(
+    app,
+    [
+      "compile",
+      "template",
+      "--template",
+      str(template),
+      "--variables",
+      str(variables),
+      "--output-skill",
+      "research",
+    ],
+  )
+
+  assert result.exit_code == 1
+  assert "compiled skill conflicts with bundled skill: research" in result.output
+  assert not (tmp_path / ".agents" / "skills" / "research").exists()
+
+
+def test_compile_status_reports_no_compiled_artifacts(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["compile", "status"])
+
+  assert result.exit_code == 0
+  assert "compiled artifacts: ok" in result.output
+  assert "no compiled artifacts" in result.output
+
+
+def test_compile_check_passes_for_valid_compiled_artifacts(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
+  compile_result = CliRunner().invoke(
+    app,
+    ["compile", "mcp", "--name", "github", "--metadata", str(metadata)],
+  )
+
+  result = CliRunner().invoke(app, ["compile", "check"])
+
+  assert compile_result.exit_code == 0
+  assert result.exit_code == 0
+  assert "skill:github: ok" in result.output
+
+
+def test_compile_check_fails_for_stale_source(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  metadata = tmp_path / "github-mcp.json"
+  metadata.write_text(json.dumps({"tools": []}), encoding="utf-8")
+  compile_result = CliRunner().invoke(
+    app,
+    ["compile", "mcp", "--name", "github", "--metadata", str(metadata)],
+  )
+  metadata.write_text(json.dumps({"tools": [{"name": "search"}]}), encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["compile", "check"])
+
+  assert compile_result.exit_code == 0
+  assert result.exit_code == 1
+  assert "skill:github: stale" in result.output
+  assert "MCP metadata source changed" in result.output
 
 
 def test_sync_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
