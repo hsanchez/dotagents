@@ -602,6 +602,23 @@ def test_compile_status_json_preserves_markup_literals(
   ]
 
 
+def test_compile_status_json_reports_invalid_build_manifest(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  manifest = tmp_path / ".agents" / "build" / "manifest.json"
+  manifest.parent.mkdir(parents=True)
+  manifest.write_text("{", encoding="utf-8")
+
+  payload = compile_status_json_payload()
+
+  assert payload["compiled_groups"][0]["id"] == "compiled artifacts"
+  assert payload["compiled_groups"][0]["status"] == "invalid"
+  assert payload["compiled_groups"][0]["messages"][0].startswith(
+    "compiled artifacts: build manifest error:"
+  )
+
+
 def compile_status_json_payload() -> dict[str, Any]:
   result = CliRunner().invoke(app, ["compile", "status", "--json"])
   assert result.exit_code == 0
