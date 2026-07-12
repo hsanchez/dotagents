@@ -433,6 +433,15 @@ uv run dotagents compile status
 uv run dotagents compile check
 ```
 
+A compiled skill has two lifecycle steps: `compile` writes the skill files and
+records them in `.agents/build/manifest.json`; `sync` records those files in
+`.agents/dotagents.lock` as managed runtime output.
+
+`compile status --json` reads both files because they answer different
+questions: the lockfile lists packaged skills already installed by `init` or
+`sync`, while the build manifest lists compiled skills, including newly compiled
+skills that have not been synced yet.
+
 ## Ownership
 
 ```text

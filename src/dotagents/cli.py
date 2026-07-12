@@ -1,5 +1,7 @@
 """dotagents CLI."""
 
+import json
+import sys
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -26,6 +28,8 @@ from dotagents.runtime import (
   CompiledGroupStatus,
   OperationLog,
   add_provider,
+  capability_index,
+  capability_index_payload,
   compiled_group_statuses,
   init_runtime,
   remove_provider,
@@ -370,8 +374,22 @@ def compile_check() -> None:
 
 
 @compile_app.command("status")
-def compile_status() -> None:
+def compile_status(
+  json_output: bool = typer.Option(False, "--json", help="Print capability index JSON."),
+) -> None:
   """Show compiler-owned artifact status."""
+  print_compile_status(json_output)
+
+
+def print_compile_status(json_output: bool) -> None:
+  if json_output:
+    try:
+      payload = capability_index_payload(capability_index(Path.cwd()))
+    except DotagentsError as exc:
+      sys.stderr.write(f"ERROR {exc}\n")
+      raise typer.Exit(code=1) from None
+    sys.stdout.write(f"{json.dumps(payload, indent=2, sort_keys=True)}\n")
+    return
   print_compile_statuses(compiled_group_statuses(Path.cwd()))
 
 
