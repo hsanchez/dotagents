@@ -59,7 +59,6 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
     "handoff",
     "research",
     "resume-handoff",
-    "saga",
     "startup",
     "unpack",
   )
@@ -67,10 +66,12 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
 
 def test_full_preset_resolves_all_skills() -> None:
   selected = resolve_preset("full", asset_root())
-  opt_in_skills = {"prek-bootstrap"}
+  opt_in_skills = {"prek-bootstrap", "review-saga", "saga"}
 
   assert set(selected) == set(available_skills(asset_root())) - opt_in_skills
   assert "prek-bootstrap" not in selected
+  assert "review-saga" not in selected
+  assert "saga" not in selected
 
 
 def test_write_preset_skillfile_creates_use_line(tmp_path: Path) -> None:
@@ -93,7 +94,6 @@ def test_review_preset_resolves_review_pr() -> None:
   assert "pr-comments" in selected
   assert selected == (
     "audit",
-    "review-saga",
     "review-pr",
     "pr-comments",
     "pr-walkthrough",

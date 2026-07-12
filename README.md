@@ -119,8 +119,9 @@ use dev
 ```
 
 The `dev` preset contains skills for everyday development work. The `full`
-preset installs every available skill. Use `init --with` to choose a custom
-selection interactively.
+preset installs every default skill. Opt-in skills are installed only when named
+explicitly in `Skillfile`. Use `init --with` to choose a custom selection
+interactively.
 
 For noninteractive bootstrap with one packaged preset, pass the preset name:
 
@@ -141,6 +142,7 @@ individual skills, commit `Skillfile` at the consuming repo root:
 use review
 use safety
 skill clarify
+skill saga
 ```
 
 After committing `Skillfile`, automation can run plain `init` without opening
