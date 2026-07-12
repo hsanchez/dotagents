@@ -619,6 +619,21 @@ def test_compile_status_json_reports_invalid_build_manifest(
   )
 
 
+def test_compile_status_json_reports_lockfile_errors_on_stderr(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  lockfile = tmp_path / ".agents" / "dotagents.lock"
+  lockfile.parent.mkdir(parents=True)
+  lockfile.write_text("{", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["compile", "status", "--json"])
+
+  assert result.exit_code == 1
+  assert result.stdout == ""
+  assert "ERROR cannot parse lockfile:" in result.stderr
+
+
 def compile_status_json_payload() -> dict[str, Any]:
   result = CliRunner().invoke(app, ["compile", "status", "--json"])
   assert result.exit_code == 0
