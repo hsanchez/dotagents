@@ -51,6 +51,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".agents" / "skills" / "resume-handoff").is_dir()
   assert not (tmp_path / ".agents" / "skills" / "review-saga").exists()
   assert not (tmp_path / ".agents" / "skills" / "saga").exists()
+  assert not (tmp_path / ".agents" / "skills" / "unbot").exists()
   assert (tmp_path / ".agents" / "skills" / "startup").is_dir()
   assert (tmp_path / ".agents" / "skills" / "unpack").is_dir()
   assert (tmp_path / ".agents" / "providers" / "copilot" / "review.prompt.md").exists()
@@ -78,12 +79,15 @@ def test_init_materializes_explicit_opt_in_skills(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   monkeypatch.chdir(tmp_path)
-  (tmp_path / "Skillfile").write_text("skill saga\nskill review-saga\n", encoding="utf-8")
+  (tmp_path / "Skillfile").write_text(
+    "skill saga\nskill review-saga\nskill unbot\n", encoding="utf-8"
+  )
 
   init_runtime(Path.cwd(), ("claude",))
 
   assert (tmp_path / ".agents" / "skills" / "saga").is_dir()
   assert (tmp_path / ".agents" / "skills" / "review-saga").is_dir()
+  assert (tmp_path / ".agents" / "skills" / "unbot").is_dir()
 
 
 def test_capability_compiled_groups_uses_single_manifest_snapshot(

@@ -38,7 +38,7 @@ from dotagents.manifest import (
 from dotagents.skillfile import available_skills, resolve_skillfile, skillfile_path
 from dotagents.version import package_version
 
-OPT_IN_SKILLS = frozenset({"prek-bootstrap", "review-saga", "saga"})
+OPT_IN_SKILLS = frozenset({"prek-bootstrap", "review-saga", "saga", "unbot"})
 BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
 CAPABILITY_INDEX_SCHEMA_VERSION = 1
 CapabilityStatus = Literal["ok", "stale", "missing", "invalid"]
