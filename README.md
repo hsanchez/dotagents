@@ -123,6 +123,9 @@ preset installs every default skill. Opt-in skills are installed only when named
 explicitly in `Skillfile`. Use `init --with` to choose a custom selection
 interactively.
 
+The `unbot` skill is opt-in and is installed by adding `skill unbot` to
+`Skillfile`.
+
 For noninteractive bootstrap with one packaged preset, pass the preset name:
 
 ```bash
