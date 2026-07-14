@@ -18,6 +18,7 @@ class SyncEntry:
   provider: str | None = None
   skill: str | None = None
   scope: str = "repo"
+  always_copy: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,9 @@ def _parse_entries(section: str, entries: object, provider: str | None) -> list[
     scope = entry.get("scope", "repo")
     if not isinstance(scope, str) or scope not in SCOPES:
       raise DotagentsError(f"agents.toml: {section}.scope must be one of {', '.join(SCOPES)}")
+    always_copy = entry.get("always_copy", False)
+    if not isinstance(always_copy, bool):
+      raise DotagentsError(f"agents.toml: {section}.always_copy must be a boolean")
     parsed.append(
       SyncEntry(
         source=source,
@@ -121,6 +125,7 @@ def _parse_entries(section: str, entries: object, provider: str | None) -> list[
         provider=provider,
         skill=skill,
         scope=scope,
+        always_copy=always_copy,
       )
     )
   return parsed

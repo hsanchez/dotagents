@@ -3,22 +3,27 @@ version = 1
 [[sync]]
 source = "scripts/simplify-code"
 destination = "scripts/simplify-code"
+always_copy = true
 
 [[sync]]
 source = "scripts/gh-issue"
 destination = "scripts/gh-issue"
+always_copy = true
 
 [[sync]]
 source = "scripts/memlog"
 destination = "scripts/memlog"
+always_copy = true
 
 [[sync]]
 source = "scripts/review-branch"
 destination = "scripts/review-branch"
+always_copy = true
 
 [[sync]]
 source = "scripts/review-code"
 destination = "scripts/review-code"
+always_copy = true
 
 [[sync]]
 source = ".rules"

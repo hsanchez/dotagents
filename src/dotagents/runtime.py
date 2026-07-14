@@ -62,6 +62,7 @@ class RuntimeContext:
   manifest: Manifest
   providers: tuple[str, ...]
   skills: tuple[str, ...]
+  is_global: bool
 
 
 @dataclass(frozen=True)
@@ -162,7 +163,14 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
     manifest=manifest,
     providers=providers,
     skills=skills,
+    is_global=root == Path.home().resolve(),
   )
+
+
+def scope_applies(scope: str, is_global: bool) -> bool:
+  if scope == "both":
+    return True
+  return scope == "global" if is_global else scope == "repo"
 
 
 def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]:
@@ -394,11 +402,18 @@ def sync_runtime(
     )
   )
 
-  for entry in selected_entries(
+  entries = selected_entries(
     runtime_context.manifest, runtime_context.providers, runtime_context.skills
-  ):
+  )
+  copied_runnable_scripts = False
+  for entry in entries:
     if entry.source in {".rules", "skills"}:
       continue
+    applies = scope_applies(entry.scope, runtime_context.is_global)
+    if not applies and not entry.always_copy:
+      continue
+    if entry.always_copy and not applies:
+      copied_runnable_scripts = True
     source = runtime_context.asset_root / entry.source
     destination = runtime_destination(runtime_context.runtime_dir, entry)
     copy_path(runtime_context.repo_root, source, destination, operation_log)
@@ -417,10 +432,10 @@ def sync_runtime(
   log_compiled_assets(compiled_assets, operation_log)
   validate_locked_asset_destinations_unique(locked_assets)
 
-  for entry in selected_entries(
-    runtime_context.manifest, runtime_context.providers, runtime_context.skills
-  ):
+  for entry in entries:
     if not entry.link:
+      continue
+    if not scope_applies(entry.scope, runtime_context.is_global):
       continue
     source = (
       runtime_context.repo_root / ".rules"
@@ -451,6 +466,9 @@ def sync_runtime(
   )
   locked_assets.extend(skipped_stale_assets)
   validate_locked_asset_destinations_unique(locked_assets)
+
+  if copied_runnable_scripts:
+    operation_log.add(f"add to PATH: {runtime_context.runtime_dir / 'scripts'}")
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")

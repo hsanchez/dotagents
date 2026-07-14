@@ -74,6 +74,64 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert ".github/copilot-instructions.md" in link_destinations
 
 
+def test_init_at_global_root_skips_repo_only_provider_entries(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  init_runtime(tmp_path, ("copilot",))
+
+  assert not (tmp_path / ".github").exists()
+
+
+def test_init_at_global_root_applies_global_scope_entries(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  init_runtime(tmp_path, ("claude",))
+
+  assert (tmp_path / ".claude" / "CLAUDE.md").is_symlink()
+  assert not (tmp_path / "CLAUDE.md").exists()
+  runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  link_destinations = {link.destination for link in runtime_lock.links}
+  assert ".claude/CLAUDE.md" in link_destinations
+  assert "CLAUDE.md" not in link_destinations
+
+
+def test_init_at_global_root_copies_scripts_without_symlinking_out(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  init_runtime(tmp_path, ("claude",))
+
+  assert (tmp_path / ".agents" / "scripts" / "review-code").exists()
+  assert not (tmp_path / "scripts").exists()
+
+
+def test_init_at_global_root_logs_path_guidance(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  operation_log = init_runtime(tmp_path, ("claude",))
+
+  assert f"add to PATH: {tmp_path / '.agents' / 'scripts'}" in operation_log.lines
+
+
+def test_init_at_repo_root_does_not_apply_global_only_entries(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  operation_log = init_runtime(Path.cwd(), ("claude",))
+
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+  assert not (tmp_path / ".claude" / "CLAUDE.md").exists()
+  assert not any("add to PATH" in line for line in operation_log.lines)
+
+
 def test_init_materializes_explicit_opt_in_skills(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
