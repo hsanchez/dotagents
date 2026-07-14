@@ -41,6 +41,7 @@ from dotagents.version import package_version
 OPT_IN_SKILLS = frozenset({"prek-bootstrap", "review-saga", "saga"})
 BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
 CAPABILITY_INDEX_SCHEMA_VERSION = 1
+WOULD_BACK_UP_PREFIX = "would back up "
 CapabilityStatus = Literal["ok", "stale", "missing", "invalid"]
 
 
@@ -409,17 +410,17 @@ def sync_runtime(
   entries = selected_entries(
     runtime_context.manifest, runtime_context.providers, runtime_context.skills
   )
-  copied_runnable_scripts = False
+  forced_copy_dirs: set[Path] = set()
   for entry in entries:
     if entry.source in {".rules", "skills"}:
       continue
     applies = scope_applies(entry.scope, runtime_context.is_global)
     if not applies and not entry.always_copy:
       continue
-    if entry.always_copy and not applies:
-      copied_runnable_scripts = True
     source = runtime_context.asset_root / entry.source
     destination = runtime_destination(runtime_context.runtime_dir, entry)
+    if not applies:
+      forced_copy_dirs.add(destination.parent)
     copy_path(runtime_context.repo_root, source, destination, operation_log)
     locked_assets.extend(lock_entries(runtime_context.repo_root, source, destination, entry.source))
 
@@ -471,8 +472,8 @@ def sync_runtime(
   locked_assets.extend(skipped_stale_assets)
   validate_locked_asset_destinations_unique(locked_assets)
 
-  if copied_runnable_scripts:
-    operation_log.add(f"add to PATH: {runtime_context.runtime_dir / 'scripts'}")
+  for forced_copy_dir in sorted(forced_copy_dirs):
+    operation_log.add(f"add to PATH: {forced_copy_dir}")
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
@@ -1076,7 +1077,7 @@ def link_path(
       )
     if operation_log.dry_run:
       operation_log.add(
-        f"would back up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+        f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
     else:
       destination.rename(backup)

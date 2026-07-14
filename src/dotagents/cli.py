@@ -25,6 +25,7 @@ from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
 from dotagents.runtime import (
+  WOULD_BACK_UP_PREFIX,
   CompiledGroupStatus,
   OperationLog,
   add_provider,
@@ -122,13 +123,20 @@ def _resolve_root(root: Path | None, global_scope: bool) -> Path:
   return root if root is not None else Path.cwd()
 
 
+def _resolve_root_or_exit(root: Path | None, global_scope: bool) -> Path:
+  try:
+    return _resolve_root(root, global_scope)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+
+
 def _confirm_global_replacements(
   repo_root: Path, providers: tuple[str, ...], locked: bool, assume_yes: bool
 ) -> None:
   if assume_yes:
     return
   preview = init_runtime(repo_root, providers, dry_run=True, locked=locked)
-  backups = [line for line in preview.lines if line.startswith("would back up ")]
+  backups = [line for line in preview.lines if line.startswith(WOULD_BACK_UP_PREFIX)]
   if not backups:
     return
   console.print(
@@ -156,8 +164,8 @@ def init(
   assume_yes: YesOption = False,
 ) -> None:
   """Initialize the managed .agents runtime."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    repo_root = _resolve_root(root, global_scope)
     if with_preset and not with_skills:
       raise DotagentsError("preset selection requires --with")
     if locked and with_skills:
@@ -193,10 +201,7 @@ def init(
 @app.command()
 def doctor(root: RootOption = None, global_scope: GlobalOption = False) -> None:
   """Validate the dotagents runtime."""
-  try:
-    repo_root = _resolve_root(root, global_scope)
-  except DotagentsError as exc:
-    _exit_with_error(exc)
+  repo_root = _resolve_root_or_exit(root, global_scope)
   result = run_doctor(repo_root)
   for line in result.lines:
     console.print(line)
@@ -212,8 +217,8 @@ def sync(
   global_scope: GlobalOption = False,
 ) -> None:
   """Repair generated runtime state from current configuration."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    repo_root = _resolve_root(root, global_scope)
     operation_log = sync_existing(repo_root, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
@@ -232,8 +237,8 @@ def update(
   global_scope: GlobalOption = False,
 ) -> None:
   """Refresh runtime assets after a dotagents dependency update."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    repo_root = _resolve_root(root, global_scope)
     operation_log = update_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
@@ -252,8 +257,8 @@ def uninstall(
   global_scope: GlobalOption = False,
 ) -> None:
   """Remove managed dotagents runtime output."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    repo_root = _resolve_root(root, global_scope)
     operation_log = uninstall_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
@@ -268,10 +273,7 @@ def uninstall(
 @app.command()
 def status(root: RootOption = None, global_scope: GlobalOption = False) -> None:
   """Show a short runtime summary."""
-  try:
-    repo_root = _resolve_root(root, global_scope)
-  except DotagentsError as exc:
-    _exit_with_error(exc)
+  repo_root = _resolve_root_or_exit(root, global_scope)
   runtime = repo_root / ".agents"
   console.print(f"dotagents package: {package_version()}")
   console.print(f"runtime: {'present' if runtime.exists() else 'missing'}")

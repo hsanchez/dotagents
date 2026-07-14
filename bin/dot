@@ -1,0 +1,66 @@
+#!/usr/bin/env sh
+set -eu
+
+script_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+private_uv_dir="$script_root/.uv"
+private_uv_bin="$private_uv_dir/uv"
+
+usage() {
+  cat <<'EOF'
+usage: dot <command>
+
+commands:
+  install   dotagents init --global
+  update    git pull, then dotagents update --global
+
+dot is a thin bootstrap shim; run uv run dotagents <command> --global
+directly (from this directory) for anything beyond install/update.
+EOF
+}
+
+resolve_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    command -v uv
+    return
+  fi
+  if [ -x "$private_uv_bin" ]; then
+    printf '%s\n' "$private_uv_bin"
+    return
+  fi
+  echo "dot: uv not found on PATH; installing a private copy into $private_uv_dir" >&2
+  UV_INSTALL_DIR="$private_uv_dir" UV_NO_MODIFY_PATH=1 \
+    sh -c "curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  if [ ! -x "$private_uv_bin" ]; then
+    echo "dot: uv install failed; expected binary at $private_uv_bin" >&2
+    exit 1
+  fi
+  printf '%s\n' "$private_uv_bin"
+}
+
+run_dotagents() {
+  uv_bin="$(resolve_uv)"
+  "$uv_bin" run --project "$script_root" dotagents "$@"
+}
+
+command="${1:-}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$command" in
+  install)
+    run_dotagents init --global "$@"
+    ;;
+  update)
+    git -C "$script_root" pull --ff-only
+    run_dotagents update --global "$@"
+    ;;
+  ""|help|-h|--help)
+    usage
+    ;;
+  *)
+    echo "dot: unknown command: $command" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
