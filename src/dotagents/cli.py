@@ -32,6 +32,7 @@ from dotagents.runtime import (
   capability_index_payload,
   compiled_group_statuses,
   init_runtime,
+  is_global_root,
   remove_provider,
   sync_existing,
   uninstall_existing,
@@ -105,6 +106,12 @@ GlobalOption = Annotated[
   bool,
   typer.Option("--global", help='Shorthand for --root "$HOME".'),
 ]
+YesOption = Annotated[
+  bool,
+  typer.Option(
+    "--yes", "-y", help="Skip confirmation before replacing existing files at global scope."
+  ),
+]
 
 
 def _resolve_root(root: Path | None, global_scope: bool) -> Path:
@@ -113,6 +120,24 @@ def _resolve_root(root: Path | None, global_scope: bool) -> Path:
   if global_scope:
     return Path.home()
   return root if root is not None else Path.cwd()
+
+
+def _confirm_global_replacements(
+  repo_root: Path, providers: tuple[str, ...], locked: bool, assume_yes: bool
+) -> None:
+  if assume_yes:
+    return
+  preview = init_runtime(repo_root, providers, dry_run=True, locked=locked)
+  backups = [line for line in preview.lines if line.startswith("would back up ")]
+  if not backups:
+    return
+  console.print(
+    "[yellow]The following existing files will be backed up (.bak) and replaced:[/yellow]"
+  )
+  for line in backups:
+    console.print(f"  {line}")
+  if not typer.confirm("Proceed with backup and replace at global scope?"):
+    raise DotagentsError("aborted: confirmation declined for global install")
 
 
 @app.command()
@@ -128,6 +153,7 @@ def init(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
   root: RootOption = None,
   global_scope: GlobalOption = False,
+  assume_yes: YesOption = False,
 ) -> None:
   """Initialize the managed .agents runtime."""
   try:
@@ -150,7 +176,10 @@ def init(
       if dry_run:
         raise DotagentsError("cannot select skills during a dry run")
       write_preset_skillfile(repo_root, asset_root(), DEFAULT_PRESET)
-    operation_log = init_runtime(repo_root, tuple(providers or ()), dry_run=dry_run, locked=locked)
+    resolved_providers = tuple(providers or ())
+    if not dry_run and is_global_root(repo_root):
+      _confirm_global_replacements(repo_root, resolved_providers, locked, assume_yes)
+    operation_log = init_runtime(repo_root, resolved_providers, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)

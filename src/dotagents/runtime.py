@@ -147,6 +147,10 @@ def default_skills(asset_root: Path) -> tuple[str, ...]:
   return tuple(skill for skill in available_skills(asset_root) if skill not in OPT_IN_SKILLS)
 
 
+def is_global_root(root: Path) -> bool:
+  return root.resolve() == Path.home().resolve()
+
+
 def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) -> RuntimeContext:
   root = repo_root.resolve()
   assets = asset_root()
@@ -163,7 +167,7 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
     manifest=manifest,
     providers=providers,
     skills=skills,
-    is_global=root == Path.home().resolve(),
+    is_global=is_global_root(root),
   )
 
 

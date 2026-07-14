@@ -155,6 +155,66 @@ def test_init_with_global_option_targets_home_directory(
   assert (tmp_path / ".agents" / "dotagents.lock").exists()
 
 
+def test_init_global_prompts_before_replacing_existing_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.write_text("my hand-written config", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"], input="n\n")
+
+  assert result.exit_code == 1
+  assert "will be backed up (.bak) and replaced" in result.output
+  assert "aborted: confirmation declined" in result.output
+  assert existing.read_text(encoding="utf-8") == "my hand-written config"
+  assert not (tmp_path / ".agents").exists()
+
+
+def test_init_global_proceeds_when_confirmation_accepted(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.write_text("my hand-written config", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"], input="y\n")
+
+  assert result.exit_code == 0
+  assert (tmp_path / ".claude" / "CLAUDE.md.bak").read_text(encoding="utf-8") == (
+    "my hand-written config"
+  )
+  assert (tmp_path / ".claude" / "CLAUDE.md").is_symlink()
+
+
+def test_init_global_with_yes_skips_confirmation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.write_text("my hand-written config", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude", "--yes"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+  assert (tmp_path / ".claude" / "CLAUDE.md.bak").exists()
+
+
+def test_init_global_skips_confirmation_when_nothing_to_replace(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+
+
 def test_doctor_with_root_option_validates_specified_directory(tmp_path: Path) -> None:
   init_runtime(tmp_path, ("claude",))
 
