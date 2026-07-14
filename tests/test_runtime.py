@@ -11,6 +11,7 @@ from dotagents.lockfile import LockedLink, read_lock, write_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
   add_provider,
+  build_context,
   capability_compiled_groups,
   init_runtime,
   remove_provider,
@@ -19,6 +20,35 @@ from dotagents.runtime import (
   uninstall_existing,
   update_existing,
 )
+
+
+def write_fixture_asset_root(root: Path) -> Path:
+  """A minimal asset root with one provider entry that is scope="global" only.
+
+  Unlike every real provider entry, this fixture has no repo-scope sibling at
+  all for the same destination, proving scope filtering handles that shape
+  without depending on a real provider (e.g. Antigravity) ever using it.
+  """
+  root.mkdir()
+  (root / "rules").mkdir()
+  (root / "rules" / "rules.md").write_text("shared rules\n", encoding="utf-8")
+  (root / "skills").mkdir()
+  (root / "fixture").mkdir()
+  (root / "fixture" / "fixture-global-only.txt").write_text("fixture content", encoding="utf-8")
+  (root / "agents.toml").write_text(
+    """
+version = 1
+
+[providers]
+
+[providers.fixture]
+sync = [
+  { source = "fixture/fixture-global-only.txt", destination = ".fixture/only-global.txt", scope = "global" }
+]
+""",
+    encoding="utf-8",
+  )
+  return root
 
 
 def test_init_dry_run_does_not_write_runtime(
@@ -130,6 +160,89 @@ def test_init_at_repo_root_does_not_apply_global_only_entries(
   assert (tmp_path / "CLAUDE.md").is_symlink()
   assert not (tmp_path / ".claude" / "CLAUDE.md").exists()
   assert not any("add to PATH" in line for line in operation_log.lines)
+
+
+def test_build_context_is_global_for_home_root(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  context = build_context(tmp_path, ("claude",))
+
+  assert context.is_global
+  assert context.repo_root == tmp_path.resolve()
+  assert context.runtime_dir == tmp_path.resolve() / ".agents"
+
+
+def test_build_context_is_not_global_for_arbitrary_root(tmp_path: Path) -> None:
+  context = build_context(tmp_path, ("claude",))
+
+  assert not context.is_global
+
+
+def test_init_applies_both_scope_entries_at_global_scope(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  init_runtime(tmp_path, ("claude",))
+
+  assert (tmp_path / ".claude" / "commands").readlink() == Path("../.agents/scripts")
+  assert (tmp_path / ".claude" / "skills").readlink() == Path("../.agents/skills")
+  assert (tmp_path / ".claude" / "settings.json").is_symlink()
+
+
+def test_sync_applies_synthetic_global_only_entry_with_no_repo_sibling(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  fixture_assets = write_fixture_asset_root(tmp_path / "fixture-assets")
+  monkeypatch.setattr("dotagents.runtime.asset_root", lambda: fixture_assets)
+
+  init_runtime(tmp_path, ("fixture",))
+
+  destination = tmp_path / ".fixture" / "only-global.txt"
+  assert destination.is_symlink()
+  assert destination.read_text(encoding="utf-8") == "fixture content"
+
+
+def test_sync_skips_synthetic_global_only_entry_at_repo_scope(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  fixture_assets = write_fixture_asset_root(tmp_path / "fixture-assets")
+  monkeypatch.setattr("dotagents.runtime.asset_root", lambda: fixture_assets)
+
+  init_runtime(Path.cwd(), ("fixture",))
+
+  assert not (tmp_path / ".fixture").exists()
+
+
+def test_repo_scoped_and_global_scoped_runs_do_not_cross_contaminate_lockfiles(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  home_root = tmp_path / "home"
+  home_root.mkdir()
+  repo_root = tmp_path / "repo"
+  repo_root.mkdir()
+  monkeypatch.setenv("HOME", str(home_root))
+
+  init_runtime(home_root, ("claude",))
+  init_runtime(repo_root, ("claude", "copilot"))
+
+  home_lock = read_lock(home_root / ".agents" / "dotagents.lock")
+  repo_lock = read_lock(repo_root / ".agents" / "dotagents.lock")
+
+  assert home_lock.providers == ("claude",)
+  assert repo_lock.providers == ("claude", "copilot")
+  assert not (home_root / ".github").exists()
+  assert (repo_root / ".github" / "copilot-instructions.md").is_symlink()
+
+  uninstall_existing(home_root)
+
+  assert not (home_root / ".agents").exists()
+  assert (repo_root / ".agents" / "dotagents.lock").exists()
+  assert (repo_root / "CLAUDE.md").is_symlink()
 
 
 def test_init_materializes_explicit_opt_in_skills(
