@@ -52,6 +52,93 @@ uv run dotagents doctor
 
 `dotagents init` initializes the harness for the specified providers, writes a `Skillfile` with the default skill preset, and creates the `.agents/` runtime directory.
 
+## Install Globally
+
+In addition to the per-repo dev-dependency flow above, dotagents supports a
+dotfiles-style global install against `$HOME`, coexisting independently with
+any per-repo installs on the same machine.
+
+Bootstrap on a fresh machine with only `git` installed:
+
+```bash
+git clone --depth 1 https://github.com/hsanchez/dotagents ~/.config/dotagents
+~/.config/dotagents/bin/dot install
+```
+
+`bin/dot` is a thin shell shim: it reuses `uv` if already on `$PATH`, otherwise
+bootstraps a private copy scoped to `~/.config/dotagents/.uv` (no shell-profile
+mutation), then delegates to `dotagents init --global`. To pick up later
+changes:
+
+```bash
+~/.config/dotagents/bin/dot update
+```
+
+That runs `git pull --ff-only` in `~/.config/dotagents`, then
+`dotagents update --global`.
+
+If dotagents is already installed some other way (`uv tool install`, a
+per-repo checkout), the same global behavior is available directly through
+`--root`/`--global`, which every command accepts:
+
+```bash
+uv run dotagents init --global --for claude
+uv run dotagents doctor --global
+uv run dotagents status --root ~
+```
+
+`--root <path>` targets an arbitrary directory; `--global` is shorthand for
+`--root "$HOME"`. The two cannot be combined.
+
+### Per-provider global support
+
+Not every provider has a real user-level config location, so global scope only
+applies where one is confirmed:
+
+```text
+claude    full support: rules, commands, skills, settings all apply globally
+gemini    rules file applies globally (~/.gemini/GEMINI.md); settings.json
+          stays repo-only pending a confirmed global path
+codex     repo-only pending a confirmed global config path
+copilot   repo-only — no known global/personal-instructions mechanism
+```
+
+A provider with nothing valid at global scope produces no output there rather
+than writing a meaningless file into `$HOME`.
+
+### Scripts at global scope
+
+Repo-root `scripts/*` convenience symlinks (see Managed Output below) are
+repo-scope only — `~/scripts` isn't a `$PATH` convention, and symlinking
+generic names like `review-code` into a shared `~/bin` or `~/.local/bin` risks
+collisions dotagents can't safely resolve. At global scope, the scripts still
+materialize under `~/.agents/scripts`, and `init`/`update` print:
+
+```text
+add to PATH: /Users/you/.agents/scripts
+```
+
+Add that directory to `$PATH` yourself (or from a dotfiles bootstrap script)
+to run them from anywhere.
+
+### Confirmation before replacing existing files
+
+A first global `init` can encounter real, hand-maintained files at paths like
+`~/.claude/CLAUDE.md` — unlike a fresh repo, `$HOME` is exactly where such
+files are likely to already exist with content you care about. Before
+backing up and replacing anything, `init --global` prints the plan and asks
+for confirmation:
+
+```text
+The following existing files will be backed up (.bak) and replaced:
+  would back up .claude/CLAUDE.md -> .claude/CLAUDE.md.bak
+Proceed with backup and replace at global scope? [y/N]:
+```
+
+Pass `--yes` to skip the prompt for scripted bootstraps. Repo-scope `init` is
+unchanged — it keeps the existing backup-and-hard-error-on-conflict behavior
+without prompting, since repo scaffolding rarely pre-exists with real content.
+
 ## Commands
 
 ```bash
