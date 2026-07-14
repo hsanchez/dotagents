@@ -130,6 +130,48 @@ def test_status_command_reports_runtime_state(
   assert "lockfile: present" in result.output
 
 
+def test_init_with_root_option_targets_specified_directory(tmp_path: Path) -> None:
+  result = CliRunner().invoke(app, ["init", "--root", str(tmp_path), "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert (tmp_path / ".agents" / "dotagents.lock").exists()
+
+
+def test_root_and_global_options_conflict(tmp_path: Path) -> None:
+  result = CliRunner().invoke(app, ["init", "--root", str(tmp_path), "--global", "--for", "claude"])
+
+  assert result.exit_code == 1
+  assert "cannot combine --root and --global" in result.output
+
+
+def test_init_with_global_option_targets_home_directory(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert (tmp_path / ".agents" / "dotagents.lock").exists()
+
+
+def test_doctor_with_root_option_validates_specified_directory(tmp_path: Path) -> None:
+  init_runtime(tmp_path, ("claude",))
+
+  result = CliRunner().invoke(app, ["doctor", "--root", str(tmp_path)])
+
+  assert result.exit_code == 0
+
+
+def test_status_with_root_option_reports_specified_directory(tmp_path: Path) -> None:
+  init_runtime(tmp_path, ("claude",))
+
+  result = CliRunner().invoke(app, ["status", "--root", str(tmp_path)])
+
+  assert result.exit_code == 0
+  assert "runtime: present" in result.output
+
+
 def test_list_command_rejects_invalid_kind() -> None:
   result = CliRunner().invoke(app, ["list", "unknown"])
 
