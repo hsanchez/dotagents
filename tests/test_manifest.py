@@ -167,3 +167,111 @@ def test_selected_providers_rejects_unknown_provider(tmp_path: Path) -> None:
 
   with pytest.raises(DotagentsError, match="provider not approved: cursor"):
     selected_providers(manifest, ("cursor",))
+
+
+def test_load_manifest_defaults_scope_to_repo(tmp_path: Path) -> None:
+  (tmp_path / "scripts").mkdir()
+  (tmp_path / "scripts" / "review").write_text("", encoding="utf-8")
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "scripts/review"
+destination = "scripts/review"
+
+[providers]
+""",
+  )
+
+  manifest = load_manifest(tmp_path)
+
+  assert manifest.global_sync[0].scope == "repo"
+
+
+def test_load_manifest_reads_explicit_scope(tmp_path: Path) -> None:
+  (tmp_path / "scripts").mkdir()
+  (tmp_path / "scripts" / "review").write_text("", encoding="utf-8")
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "scripts/review"
+destination = "scripts/review"
+scope = "global"
+
+[providers]
+""",
+  )
+
+  manifest = load_manifest(tmp_path)
+
+  assert manifest.global_sync[0].scope == "global"
+
+
+def test_load_manifest_rejects_invalid_scope(tmp_path: Path) -> None:
+  (tmp_path / "scripts").mkdir()
+  (tmp_path / "scripts" / "review").write_text("", encoding="utf-8")
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "scripts/review"
+destination = "scripts/review"
+scope = "workspace"
+
+[providers]
+""",
+  )
+
+  with pytest.raises(DotagentsError, match="sync.scope must be one of repo, global, both"):
+    load_manifest(tmp_path)
+
+
+@pytest.mark.parametrize(
+  ("first_scope", "second_scope", "should_conflict"),
+  [
+    ("repo", "repo", True),
+    ("global", "global", True),
+    ("both", "both", True),
+    ("repo", "both", True),
+    ("global", "both", True),
+    ("repo", "global", False),
+  ],
+)
+def test_load_manifest_duplicate_destination_respects_scope(
+  tmp_path: Path, first_scope: str, second_scope: str, should_conflict: bool
+) -> None:
+  (tmp_path / "scripts").mkdir()
+  (tmp_path / "scripts" / "one").write_text("", encoding="utf-8")
+  (tmp_path / "scripts" / "two").write_text("", encoding="utf-8")
+  write_manifest(
+    tmp_path,
+    f"""
+version = 1
+
+[[sync]]
+source = "scripts/one"
+destination = "scripts/tool"
+scope = "{first_scope}"
+
+[[sync]]
+source = "scripts/two"
+destination = "scripts/tool"
+scope = "{second_scope}"
+
+[providers]
+""",
+  )
+
+  if should_conflict:
+    with pytest.raises(DotagentsError, match="duplicate destination scripts/tool"):
+      load_manifest(tmp_path)
+  else:
+    manifest = load_manifest(tmp_path)
+    assert [entry.scope for entry in manifest.global_sync] == [first_scope, second_scope]
