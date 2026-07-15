@@ -215,6 +215,38 @@ def test_init_global_skips_confirmation_when_nothing_to_replace(
   assert "Proceed with backup and replace" not in result.output
 
 
+def test_init_global_copilot_prompts_before_replacing_root_rules(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  existing = tmp_path / ".rules"
+  existing.write_text("my hand-written rules", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "copilot"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".rules -> .rules.bak" in result.output
+  assert existing.read_text(encoding="utf-8") == "my hand-written rules"
+  assert not (tmp_path / ".rules.bak").exists()
+
+
+def test_init_global_confirmation_survives_unresolved_home_symlink(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  real_home = tmp_path / "real-home"
+  real_home.mkdir()
+  home_symlink = tmp_path / "home-symlink"
+  home_symlink.symlink_to(real_home)
+  (real_home / ".rules").write_text("my hand-written rules", encoding="utf-8")
+  monkeypatch.setenv("HOME", str(home_symlink))
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "copilot"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".rules -> .rules.bak" in result.output
+  assert (real_home / ".rules").read_text(encoding="utf-8") == "my hand-written rules"
+
+
 def test_doctor_with_root_option_validates_specified_directory(tmp_path: Path) -> None:
   init_runtime(tmp_path, ("claude",))
 

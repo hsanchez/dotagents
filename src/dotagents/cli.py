@@ -25,7 +25,6 @@ from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.manifest import load_manifest
 from dotagents.runtime import (
-  WOULD_BACK_UP_PREFIX,
   CompiledGroupStatus,
   OperationLog,
   add_provider,
@@ -125,7 +124,7 @@ def _resolve_root(root: Path | None, global_scope: bool) -> Path:
 
 def _resolve_root_or_exit(root: Path | None, global_scope: bool) -> Path:
   try:
-    return _resolve_root(root, global_scope)
+    return _resolve_root(root, global_scope).resolve()
   except DotagentsError as exc:
     _exit_with_error(exc)
 
@@ -136,14 +135,16 @@ def _confirm_global_replacements(
   if assume_yes:
     return
   preview = init_runtime(repo_root, providers, dry_run=True, locked=locked)
-  backups = [line for line in preview.lines if line.startswith(WOULD_BACK_UP_PREFIX)]
+  backups = preview.planned_backups
   if not backups:
     return
   console.print(
     "[yellow]The following existing files will be backed up (.bak) and replaced:[/yellow]"
   )
-  for line in backups:
-    console.print(f"  {line}")
+  for destination, backup in backups:
+    console.print(
+      f"  would back up {destination.relative_to(repo_root)} -> {backup.relative_to(repo_root)}"
+    )
   if not typer.confirm("Proceed with backup and replace at global scope?"):
     raise DotagentsError("aborted: confirmation declined for global install")
 

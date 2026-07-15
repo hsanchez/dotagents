@@ -4,6 +4,8 @@ set -eu
 script_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 private_uv_dir="$script_root/.uv"
 private_uv_bin="$private_uv_dir/uv"
+uv_installer_url="https://releases.astral.sh/github/uv/releases/download/0.11.16/uv-installer.sh"
+uv_installer_sha256="b9f925505899533f36a3acfdf8684c661ff2d5c8735f759fca768367b5996123"
 
 usage() {
   cat <<'EOF'
@@ -28,8 +30,22 @@ resolve_uv() {
     return
   fi
   echo "dot: uv not found on PATH; installing a private copy into $private_uv_dir" >&2
-  UV_INSTALL_DIR="$private_uv_dir" UV_NO_MODIFY_PATH=1 \
-    sh -c "curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+  installer_file="$(mktemp "${TMPDIR:-/tmp}/dotagents-uv-installer.XXXXXX")"
+  trap 'rm -f "$installer_file"' EXIT HUP INT TERM
+  curl --proto '=https' --tlsv1.2 -LsSf "$uv_installer_url" -o "$installer_file"
+  if command -v shasum >/dev/null 2>&1; then
+    actual_sha256="$(shasum -a 256 "$installer_file" | awk '{print $1}')"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    actual_sha256="$(sha256sum "$installer_file" | awk '{print $1}')"
+  else
+    echo "dot: no SHA-256 utility found; cannot verify uv installer" >&2
+    exit 1
+  fi
+  if [ "$actual_sha256" != "$uv_installer_sha256" ]; then
+    echo "dot: uv installer checksum verification failed" >&2
+    exit 1
+  fi
+  UV_INSTALL_DIR="$private_uv_dir" UV_NO_MODIFY_PATH=1 sh "$installer_file" >&2
   if [ ! -x "$private_uv_bin" ]; then
     echo "dot: uv install failed; expected binary at $private_uv_bin" >&2
     exit 1

@@ -126,9 +126,11 @@ Overrides are limited to these documented backends. Each backend has a fixed per
 |------------------|--------------|------------------------------------------------------|
 | `claude`         | `claude`     | System prompt (`--system-prompt`)                    |
 | `codex`          | `codex`      | Instruction prompt (positional argument to `codex exec`) |
-| `copilot-gemini` | `gh copilot` | Combined prompt (no separate system-prompt channel)   |
+| `copilot-gemini` | `gh copilot` extension, or standalone `copilot` binary | Combined prompt (no separate system-prompt channel) |
 
 Any persona can run on any backend in this table. A persona is not tied to its default backend.
+
+If `gh copilot` is missing, fall back to the standalone `copilot` binary (same flags, no `gh copilot --` wrapper); if neither is present, treat it as missing per [Error Handling](#error-handling) — do not auto-install.
 
 If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `codex` and run the same persona there. This is a backend fallback, not a persona failure. If `codex` is unavailable or fails to start, try `claude`. Only mark the persona failed after all non-Copilot fallback backends have failed.
 

@@ -163,10 +163,17 @@ def validate_manifest(manifest: Manifest, asset_root: Path) -> None:
     raise DotagentsError(f"agents.toml validation failed:\n{lines}")
 
 
-def _scopes_overlap(first: str, second: str) -> bool:
-  if "both" in (first, second):
+def scope_applies(scope: str, is_global: bool) -> bool:
+  if scope == "both":
     return True
-  return first == second
+  return scope == "global" if is_global else scope == "repo"
+
+
+def _scopes_overlap(first: str, second: str) -> bool:
+  return any(
+    scope_applies(first, is_global) and scope_applies(second, is_global)
+    for is_global in (True, False)
+  )
 
 
 def _validate_path(field: str, value: str, errors: list[str]) -> None:

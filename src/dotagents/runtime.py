@@ -32,6 +32,7 @@ from dotagents.manifest import (
   Manifest,
   SyncEntry,
   load_manifest,
+  scope_applies,
   selected_entries,
   selected_providers,
 )
@@ -50,6 +51,7 @@ class OperationLog:
   dry_run: bool = False
   lines: list[str] = field(default_factory=list)
   pending_removals: set[Path] = field(default_factory=set)
+  planned_backups: list[tuple[Path, Path]] = field(default_factory=list)
 
   def add(self, message: str) -> None:
     self.lines.append(message)
@@ -170,12 +172,6 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
     skills=skills,
     is_global=is_global_root(root),
   )
-
-
-def scope_applies(scope: str, is_global: bool) -> bool:
-  if scope == "both":
-    return True
-  return scope == "global" if is_global else scope == "repo"
 
 
 def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]:
@@ -957,6 +953,7 @@ def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -
     runtime_context.repo_root / ".rules",
     "\n".join(chunks) + "\n",
     operation_log,
+    backup_existing=runtime_context.is_global,
   )
 
 
@@ -1040,7 +1037,11 @@ def copy_file(
 
 
 def write_text(
-  repo_root: Path, destination: Path, content: str, operation_log: OperationLog
+  repo_root: Path,
+  destination: Path,
+  content: str,
+  operation_log: OperationLog,
+  backup_existing: bool = False,
 ) -> None:
   if (
     destination.exists()
@@ -1053,6 +1054,22 @@ def write_text(
     raise DotagentsError(
       f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
     )
+  backup = destination.parent / (destination.name + ".bak")
+  if backup_existing and destination.exists():
+    if backup.exists():
+      raise DotagentsError(
+        f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
+      )
+    if operation_log.dry_run:
+      operation_log.add(
+        f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+      )
+      operation_log.planned_backups.append((destination, backup))
+    else:
+      destination.rename(backup)
+      operation_log.add(
+        f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+      )
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
     return
@@ -1079,6 +1096,7 @@ def link_path(
       operation_log.add(
         f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
+      operation_log.planned_backups.append((destination, backup))
     else:
       destination.rename(backup)
       operation_log.add(
