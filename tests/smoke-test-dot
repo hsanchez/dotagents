@@ -1,0 +1,67 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+fake_home="$(mktemp -d)"
+tmp_clone="$(mktemp -d)"
+trap 'rm -rf "$fake_home" "$tmp_clone"' EXIT INT TERM
+
+git clone --quiet "$repo_root" "$tmp_clone"
+
+HOME="$fake_home" "$tmp_clone/bin/dot" install
+HOME="$fake_home" "$tmp_clone/bin/dot" update
+
+test -f "$fake_home/.rules"
+test -f "$fake_home/.agents/dotagents.lock"
+test -f "$fake_home/.agents/agents.toml"
+test -f "$fake_home/.agents/skills/audit/SKILL.md"
+test -f "$fake_home/.agents/scripts/review-code"
+test -L "$fake_home/.claude/CLAUDE.md"
+test -L "$fake_home/.claude/commands"
+test -L "$fake_home/.claude/skills"
+test -L "$fake_home/.claude/settings.json"
+test -L "$fake_home/.gemini/GEMINI.md"
+
+echo "bin/dot smoke test passed"
+
+if [ "${DOTAGENTS_SMOKE_TEST_UV_DOWNLOAD:-0}" != "1" ]; then
+  echo "skipping private-uv-download branch (set DOTAGENTS_SMOKE_TEST_UV_DOWNLOAD=1 to exercise it)"
+  exit 0
+fi
+
+echo "exercising private uv-download branch..."
+
+download_home="$(mktemp -d)"
+download_clone="$(mktemp -d)"
+trap 'rm -rf "$fake_home" "$tmp_clone" "$download_home" "$download_clone"' EXIT INT TERM
+git clone --quiet "$repo_root" "$download_clone"
+
+uv_dir="$(dirname "$(command -v uv)")"
+filtered_path="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v -F -x "$uv_dir" | tr '\n' ':')"
+filtered_path="${filtered_path%:}"
+
+PATH="$filtered_path" HOME="$download_home" "$download_clone/bin/dot" install
+
+test -x "$download_clone/.uv/uv"
+"$download_clone/.uv/uv" --version >/dev/null
+test -f "$download_home/.rules"
+
+echo "uv-download branch passed"
+
+echo "exercising checksum-mismatch negative check..."
+
+bad_home="$(mktemp -d)"
+bad_clone="$(mktemp -d)"
+trap 'rm -rf "$fake_home" "$tmp_clone" "$download_home" "$download_clone" "$bad_home" "$bad_clone"' EXIT INT TERM
+git clone --quiet "$repo_root" "$bad_clone"
+bad_dot="$bad_clone/bin/dot"
+sed -i.bak 's/^uv_installer_sha256=.*/uv_installer_sha256="0000000000000000000000000000000000000000000000000000000000000000000000"/' "$bad_dot"
+
+set +e
+PATH="$filtered_path" HOME="$bad_home" "$bad_dot" install >"$bad_clone/checksum-fail.out" 2>&1
+status=$?
+set -e
+test "$status" -eq 1
+grep -q "checksum verification failed" "$bad_clone/checksum-fail.out"
+
+echo "checksum-mismatch negative check passed"

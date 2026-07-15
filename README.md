@@ -621,6 +621,25 @@ The smoke test creates a temporary consuming repo, installs this checkout as a
 dev dependency, initializes selected providers, runs `doctor`, and verifies the
 shared dangerous-git guardrail.
 
+`bin/dot` (the global-install bootstrap) has its own smoke test:
+
+```bash
+sh tests/smoke-test-dot
+```
+
+It clones the repo into a scratch directory and runs `dot install` / `dot
+update` against a fake `$HOME`, so it never touches your real home directory
+or pulls into your working checkout. By default it only exercises the fast
+path (`uv` already on `PATH`). To also exercise the private-uv-download branch
+and the installer checksum-mismatch failure path — both of which hit the real
+network — run:
+
+```bash
+DOTAGENTS_SMOKE_TEST_UV_DOWNLOAD=1 sh tests/smoke-test-dot
+```
+
+Run this variant before a release or after touching `resolve_uv` in `bin/dot`.
+
 ## Contributing
 
 Open an issue before sending a pull request for non-trivial changes. All
