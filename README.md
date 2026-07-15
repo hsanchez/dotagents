@@ -58,7 +58,7 @@ In addition to the per-repo dev-dependency flow above, dotagents supports a
 dotfiles-style global install against `$HOME`, coexisting independently with
 any per-repo installs on the same machine.
 
-Bootstrap on a fresh machine with only `git` installed:
+Bootstrap on a fresh machine with `git` installed:
 
 ```bash
 git clone --depth 1 https://github.com/hsanchez/dotagents ~/.config/dotagents
@@ -66,8 +66,10 @@ git clone --depth 1 https://github.com/hsanchez/dotagents ~/.config/dotagents
 ```
 
 `bin/dot` is a thin shell shim: it reuses `uv` if already on `$PATH`, otherwise
-bootstraps a private copy scoped to `~/.config/dotagents/.uv` (no shell-profile
-mutation), then delegates to `dotagents init --global`. To pick up later
+downloads and checksum-verifies a pinned `uv` release into a private copy
+scoped to `~/.config/dotagents/.uv` (no shell-profile mutation) — this fallback
+path additionally requires `curl` and a SHA-256 utility (`shasum` or
+`sha256sum`) — then delegates to `dotagents init --global`. To pick up later
 changes:
 
 ```bash
@@ -75,11 +77,17 @@ changes:
 ```
 
 That runs `git pull --ff-only` in `~/.config/dotagents`, then
-`dotagents update --global`.
+`dotagents update --global`. As with other `git clone`-based dotfiles tools
+(Doom Emacs, oh-my-zsh, and similar), `dot update` trusts the upstream repo
+it was cloned from — the fast-forward-only pull guards against a rewritten
+history, but not against a legitimate new commit on a compromised upstream
+account. There's no additional signature or checksum verification of pulled
+commits beyond that.
 
 If dotagents is already installed some other way (`uv tool install`, a
 per-repo checkout), the same global behavior is available directly through
-`--root`/`--global`, which every command accepts:
+`--root`/`--global`, accepted by `init`, `sync`, `update`, `doctor`, `status`,
+and `uninstall` (not by `list`, `compile`, or `providers add`/`remove`):
 
 ```bash
 uv run dotagents init --global --for claude
@@ -123,11 +131,13 @@ to run them from anywhere.
 
 ### Confirmation before replacing existing files
 
-A first global `init` can encounter real, hand-maintained files at paths like
-`~/.claude/CLAUDE.md` — unlike a fresh repo, `$HOME` is exactly where such
-files are likely to already exist with content you care about. Before
-backing up and replacing anything, `init --global` prints the plan and asks
-for confirmation:
+Global `init`, `sync`, and `update` can encounter real, hand-maintained files
+at paths like `~/.claude/CLAUDE.md` — unlike a fresh repo, `$HOME` is exactly
+where such files are likely to already exist with content you care about, and
+a later `sync`/`update` can hit this just as easily as the first `init` (for
+example, after a newer dotagents version adds a file at a path that wasn't
+managed before). Before backing up and replacing anything, each of these
+three commands prints the plan and asks for confirmation at global scope:
 
 ```text
 The following existing files will be backed up (.bak) and replaced:
@@ -135,9 +145,13 @@ The following existing files will be backed up (.bak) and replaced:
 Proceed with backup and replace at global scope? [y/N]:
 ```
 
-Pass `--yes` to skip the prompt for scripted bootstraps. Repo-scope `init` is
-unchanged — it keeps the existing backup-and-hard-error-on-conflict behavior
-without prompting, since repo scaffolding rarely pre-exists with real content.
+Pass `--yes` on any of the three to skip the prompt for scripted bootstraps
+(`bin/dot install`/`bin/dot update` forward it the same way). The prompt only
+ever appears when there is something to actually back up — a routine
+`sync --global`/`update --global` with nothing new to replace stays silent.
+Repo-scope `init`/`sync`/`update` are unchanged — they keep the existing
+backup-and-hard-error-on-conflict behavior without prompting, since repo
+scaffolding rarely pre-exists with real content.
 
 ## Commands
 

@@ -33,6 +33,7 @@ from dotagents.runtime import (
   compiled_group_statuses,
   init_runtime,
   is_global_root,
+  relative,
   remove_provider,
   sync_existing,
   uninstall_existing,
@@ -129,12 +130,9 @@ def _resolve_root_or_exit(root: Path | None, global_scope: bool) -> Path:
     _exit_with_error(exc)
 
 
-def _confirm_global_replacements(
-  repo_root: Path, providers: tuple[str, ...], locked: bool, assume_yes: bool
-) -> None:
+def _confirm_global_replacements(repo_root: Path, preview: OperationLog, assume_yes: bool) -> None:
   if assume_yes:
     return
-  preview = init_runtime(repo_root, providers, dry_run=True, locked=locked)
   backups = preview.planned_backups
   if not backups:
     return
@@ -143,7 +141,7 @@ def _confirm_global_replacements(
   )
   for destination, backup in backups:
     console.print(
-      f"  would back up {destination.relative_to(repo_root)} -> {backup.relative_to(repo_root)}"
+      f"  would back up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
     )
   if not typer.confirm("Proceed with backup and replace at global scope?"):
     raise DotagentsError("aborted: confirmation declined for global install")
@@ -187,7 +185,8 @@ def init(
       write_preset_skillfile(repo_root, asset_root(), DEFAULT_PRESET)
     resolved_providers = tuple(providers or ())
     if not dry_run and is_global_root(repo_root):
-      _confirm_global_replacements(repo_root, resolved_providers, locked, assume_yes)
+      preview = init_runtime(repo_root, resolved_providers, dry_run=True, locked=locked)
+      _confirm_global_replacements(repo_root, preview, assume_yes)
     operation_log = init_runtime(repo_root, resolved_providers, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
@@ -216,10 +215,14 @@ def sync(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
   root: RootOption = None,
   global_scope: GlobalOption = False,
+  assume_yes: YesOption = False,
 ) -> None:
   """Repair generated runtime state from current configuration."""
   repo_root = _resolve_root_or_exit(root, global_scope)
   try:
+    if not dry_run and is_global_root(repo_root):
+      preview = sync_existing(repo_root, dry_run=True, locked=locked)
+      _confirm_global_replacements(repo_root, preview, assume_yes)
     operation_log = sync_existing(repo_root, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
@@ -236,10 +239,14 @@ def update(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
   root: RootOption = None,
   global_scope: GlobalOption = False,
+  assume_yes: YesOption = False,
 ) -> None:
   """Refresh runtime assets after a dotagents dependency update."""
   repo_root = _resolve_root_or_exit(root, global_scope)
   try:
+    if not dry_run and is_global_root(repo_root):
+      preview = update_existing(repo_root, dry_run=True)
+      _confirm_global_replacements(repo_root, preview, assume_yes)
     operation_log = update_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)

@@ -247,6 +247,83 @@ def test_init_global_confirmation_survives_unresolved_home_symlink(
   assert (real_home / ".rules").read_text(encoding="utf-8") == "my hand-written rules"
 
 
+def test_sync_global_prompts_before_replacing_existing_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["sync", "--global"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".claude/settings.json -> .claude/settings.json.bak" in result.output
+  assert settings.read_text(encoding="utf-8") == "hand-edited, not managed"
+  assert not (tmp_path / ".claude" / "settings.json.bak").exists()
+
+
+def test_sync_global_with_yes_skips_confirmation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["sync", "--global", "--yes"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+  assert (tmp_path / ".claude" / "settings.json.bak").exists()
+
+
+def test_sync_global_skips_confirmation_when_nothing_to_replace(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+
+  result = CliRunner().invoke(app, ["sync", "--global"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+
+
+def test_update_global_prompts_before_replacing_existing_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["update", "--global"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".claude/settings.json -> .claude/settings.json.bak" in result.output
+  assert settings.read_text(encoding="utf-8") == "hand-edited, not managed"
+
+
+def test_update_global_with_yes_skips_confirmation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["update", "--global", "--yes"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+  assert (tmp_path / ".claude" / "settings.json.bak").exists()
+
+
 def test_doctor_with_root_option_validates_specified_directory(tmp_path: Path) -> None:
   init_runtime(tmp_path, ("claude",))
 
