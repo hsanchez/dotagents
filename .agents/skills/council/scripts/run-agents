@@ -191,12 +191,14 @@ def run_claude [
   prompt: string
   output_file: string
 ] {
-  try {
-    $prompt | claude --print | save --force $output_file
-    { success: true, error: "" }
-  } catch {|err|
-    { success: false, error: ($err.msg | default "claude failed") }
-  }
+  run_timed_backend $prompt $output_file "claude" [
+    "--print"
+    "--no-session-persistence"
+    "--output-format"
+    "text"
+    "--permission-mode"
+    "plan"
+  ]
 }
 
 def run_codex [
@@ -220,12 +222,86 @@ def run_agy [
   prompt: string
   output_file: string
 ] {
+  let log_file = ($output_file | path dirname | path join "agy.log")
+  run_timed_backend $prompt $output_file "agy" [
+    "--sandbox"
+    "--print"
+    "--print-timeout"
+    (council_timeout_seconds | into string)
+    "--log-file"
+    $log_file
+  ]
+}
+
+def council_timeout_seconds [] {
+  let configured = ($env.COUNCIL_AGENT_TIMEOUT_SECONDS? | default "600")
   try {
-    agy --sandbox --print $prompt | save --force $output_file
-    { success: true, error: "" }
-  } catch {|err|
-    { success: false, error: ($err.msg | default "agy failed") }
+    let seconds = ($configured | into int)
+    if $seconds < 1 {
+      600
+    } else {
+      $seconds
+    }
+  } catch {
+    600
   }
+}
+
+def timeout_executable [] {
+  let configured = ($env.COUNCIL_TIMEOUT_COMMAND? | default "")
+  if ($configured | is-not-empty) {
+    return $configured
+  }
+  if ((which timeout | length) > 0) {
+    return "timeout"
+  }
+  if ((which gtimeout | length) > 0) {
+    return "gtimeout"
+  }
+  ""
+}
+
+def run_timed_backend [
+  prompt: string
+  output_file: string
+  backend: string
+  arguments: list<string>
+] {
+  let timeout_command = (timeout_executable)
+  if ($timeout_command | is-empty) {
+    return {
+      success: false,
+      error: "no timeout command found; install timeout/gtimeout or set COUNCIL_TIMEOUT_COMMAND"
+    }
+  }
+
+  let timeout_seconds = (council_timeout_seconds | into string)
+  let command_arguments = [
+    "--signal=TERM"
+    "--kill-after=10s"
+    $timeout_seconds
+    $backend
+    ...$arguments
+  ]
+  let completed = (
+    $prompt
+    | run-external $timeout_command ...$command_arguments
+    | complete
+  )
+  if $completed.exit_code == 0 {
+    $completed.stdout | save --force $output_file
+    return { success: true, error: "" }
+  }
+
+  let detail = ($completed.stderr | str trim)
+  let error = if $completed.exit_code == 124 {
+    $"($backend) timed out after ($timeout_seconds)s"
+  } else if ($detail | is-empty) {
+    $"($backend) exited with status ($completed.exit_code)"
+  } else {
+    $"($backend) exited with status ($completed.exit_code): ($detail)"
+  }
+  { success: false, error: $error }
 }
 
 def calculate_copilot_prompt_limit [] {

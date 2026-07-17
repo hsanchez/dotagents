@@ -140,6 +140,12 @@ Example:
   agy:contrarian
 ```
 
+The launcher applies a 600-second timeout to Claude and Agy by default and
+continues after a member failure or timeout. Set
+`COUNCIL_AGENT_TIMEOUT_SECONDS` to change the limit. It uses `timeout` or
+`gtimeout`; set `COUNCIL_TIMEOUT_COMMAND` when the executable has another name
+or location.
+
 The launcher should produce a per-run output directory containing report files, a manifest, and any failure logs. Treat the manifest as the source of truth for mapping council members to reports.
 
 When the active launcher applies model selection per run rather than per child, launch separate runs for different models.
