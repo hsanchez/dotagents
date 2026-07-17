@@ -963,6 +963,12 @@ def render_rules(
   operation_log: OperationLog,
   known_backup: BackupRecord | None = None,
 ) -> BackupRecord | None:
+  """Write `.rules` and return the backup record from `write_text`, if any.
+
+  Raises:
+    DotagentsError: if the bundled `rules/rules.md` can't be read, or (via `write_text`)
+      if `.rules` is a symlink or a `.rules.bak` conflict already exists.
+  """
   shared_rules = runtime_context.asset_root / "rules" / "rules.md"
   try:
     shared = shared_rules.read_text(encoding="utf-8").rstrip()
@@ -1082,6 +1088,10 @@ def write_text(
   `known_backup` is the backup previously recorded in the lock, if any. A `.bak` file found
   on disk is only ever reported back if it was created by this call or was already tracked —
   an unrelated pre-existing `.bak` file is never adopted as dotagents-owned.
+
+  Raises:
+    DotagentsError: if `destination` is a symlink, or if a `.bak` file already exists at the
+      backup path (conflict must be resolved manually).
   """
   backup = destination.parent / (destination.name + ".bak")
   if (
@@ -1212,6 +1222,11 @@ def resolve_within_root(repo_root: Path, path: Path) -> Path:
 def remove_locked_link(
   repo_root: Path, destination: Path, expected_target: str, operation_log: OperationLog
 ) -> bool:
+  """Return True if the link was removed (or would be in dry-run), False if skipped.
+
+  Raises:
+    DotagentsError: if `destination` resolves outside `repo_root`.
+  """
   resolve_within_root(repo_root, destination)
   display = relative(repo_root, destination)
   if not destination.exists() and not destination.is_symlink():
@@ -1242,6 +1257,14 @@ def restore_backup(
   operation_log: OperationLog,
   expected_fingerprint: str | None = None,
 ) -> None:
+  """Rename `backup_path` onto `destination`.
+
+  Skips (with a log entry, no exception) if the backup is missing, not a regular file or
+  symlink, or its fingerprint doesn't match `expected_fingerprint`.
+
+  Raises:
+    DotagentsError: if `backup_path` or `destination` resolves outside `repo_root`.
+  """
   resolve_within_root(repo_root, backup_path)
   resolve_within_root(repo_root, destination)
   if not backup_path.exists(follow_symlinks=False):
@@ -1277,7 +1300,11 @@ def restore_backup(
 def remove_link_with_backup(
   repo_root: Path, link: LockedLink, destination: Path, operation_log: OperationLog
 ) -> bool:
-  """Remove a locked link and restore its backup on success. Return whether it was removed."""
+  """Remove a locked link and restore its backup on success. Return whether it was removed.
+
+  Raises:
+    DotagentsError: if `destination` or the link's backup resolves outside `repo_root`.
+  """
   removed = remove_locked_link(repo_root, destination, link.target, operation_log)
   if removed and link.backup:
     restore_backup(
@@ -1289,7 +1316,11 @@ def remove_link_with_backup(
 def remove_locked_asset(
   repo_root: Path, path: Path, expected_sha256: str, operation_log: OperationLog
 ) -> bool:
-  """Return True if the asset was removed (or would be in dry-run), False if skipped."""
+  """Return True if the asset was removed (or would be in dry-run), False if skipped.
+
+  Raises:
+    DotagentsError: if `path` resolves outside `repo_root`.
+  """
   resolve_within_root(repo_root, path)
   display = relative(repo_root, path)
   if not path.exists() and not path.is_symlink():
@@ -1317,6 +1348,14 @@ def remove_generated_rules(
   rules_backup: str | None,
   rules_backup_fingerprint: str | None = None,
 ) -> None:
+  """Remove a dotagents-generated `.rules` and restore `rules_backup`, if any.
+
+  Skips (with a log entry, no exception) if `.rules` is missing, unexpected, unreadable, or
+  user-owned (no dotagents marker comment).
+
+  Raises:
+    DotagentsError: if (via `restore_backup`) `rules_backup` resolves outside `repo_root`.
+  """
   rules = repo_root / ".rules"
   display = relative(repo_root, rules)
   if not rules.exists() and not rules.is_symlink():
