@@ -43,6 +43,21 @@ class RuntimeLock:
   rules_backup: str | None
 
 
+def validate_contained_relative_path(value: str, description: str) -> None:
+  """Reject a lockfile-supplied path that isn't relative and contained within the root.
+
+  Raises:
+    DotagentsError: if `value` is absolute or contains a `..` segment, either of which
+      would let a corrupted or tampered lockfile write/remove files outside the root
+      when later joined with it (e.g. `root / destination`).
+  """
+  path = Path(value)
+  if path.is_absolute() or ".." in path.parts:
+    raise DotagentsError(
+      f"lockfile {description} must be a relative path with no '..' segments: {value}"
+    )
+
+
 def sha256_file(path: Path) -> str:
   digest = hashlib.sha256()
   with path.open("rb") as file_handle:
@@ -141,6 +156,7 @@ def read_lock(path: Path) -> RuntimeLock:
       raise DotagentsError("lockfile asset entries require source, destination, sha256")
     if not isinstance(sha256, str) or not sha256:
       raise DotagentsError("lockfile asset entries require source, destination, sha256")
+    validate_contained_relative_path(destination, "asset destination")
     assets.append(LockedAsset(source, destination, sha256))
 
   links: list[LockedLink] = []
@@ -162,6 +178,9 @@ def read_lock(path: Path) -> RuntimeLock:
     backup = raw.get("backup")
     if backup is not None and (not isinstance(backup, str) or not backup):
       raise DotagentsError("lockfile link backup must be a non-empty string")
+    validate_contained_relative_path(destination, "link destination")
+    if backup is not None:
+      validate_contained_relative_path(backup, "link backup")
     links.append(
       LockedLink(destination=destination, target=target, provider=provider, backup=backup)
     )
@@ -181,6 +200,8 @@ def read_lock(path: Path) -> RuntimeLock:
   rules_backup = data.get("rules_backup")
   if rules_backup is not None and (not isinstance(rules_backup, str) or not rules_backup):
     raise DotagentsError("lockfile rules_backup must be a non-empty string")
+  if rules_backup is not None:
+    validate_contained_relative_path(rules_backup, "rules_backup")
 
   return RuntimeLock(
     lockfile_version=lockfile_version,

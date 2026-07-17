@@ -81,6 +81,31 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
       'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = ""\n',
       "generated_at must be a non-empty string",
     ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[assets]]\nsource = "x"\ndestination = "../../etc/passwd"\nsha256 = "abc"\n',
+      "asset destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[assets]]\nsource = "x"\ndestination = "/etc/passwd"\nsha256 = "abc"\n',
+      "asset destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "../outside"\ntarget = "y"\n',
+      "link destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "CLAUDE.md"\ntarget = "y"\nbackup = "../outside.bak"\n',
+      "link backup must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      'rules_backup = "../outside.bak"\n',
+      "rules_backup must be a relative path with no '..' segments",
+    ),
   ],
 )
 def test_read_lock_rejects_malformed_lockfiles(tmp_path: Path, content: str, message: str) -> None:
