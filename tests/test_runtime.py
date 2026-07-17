@@ -11,12 +11,14 @@ from dotagents.errors import DotagentsError
 from dotagents.lockfile import LockedAsset, LockedLink, read_lock, sha256_file, write_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
+  OperationLog,
   add_provider,
   build_context,
   capability_compiled_groups,
   init_runtime,
   remove_provider,
   resolve_within_root,
+  restore_backup,
   runtime_destination,
   sync_existing,
   uninstall_existing,
@@ -724,6 +726,121 @@ def test_uninstall_restores_backup_for_replaced_symlink(
 
   assert os.readlink(tmp_path / "CLAUDE.md") == "elsewhere.md"
   assert not (tmp_path / "CLAUDE.md.bak").exists()
+
+
+def test_init_records_backup_fingerprint_in_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  claude_link = next(link for link in lock.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup_fingerprint == f"sha256:{sha256_file(tmp_path / 'CLAUDE.md.bak')}"
+
+
+def test_init_records_symlink_backup_fingerprint_in_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("elsewhere.md").write_text("unrelated file\n", encoding="utf-8")
+  Path("CLAUDE.md").symlink_to("elsewhere.md")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  claude_link = next(link for link in lock.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup_fingerprint == "symlink:elsewhere.md"
+
+
+def test_init_global_records_rules_backup_fingerprint_in_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+
+  init_runtime(tmp_path, ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.rules_backup_fingerprint == f"sha256:{sha256_file(tmp_path / '.rules.bak')}"
+
+
+def test_init_does_not_adopt_unrelated_preexisting_link_backup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md.bak").write_text("unrelated stray backup\n", encoding="utf-8")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  claude_link = next(link for link in lock.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup is None
+  assert claude_link.backup_fingerprint is None
+  assert (tmp_path / "CLAUDE.md.bak").read_text(encoding="utf-8") == "unrelated stray backup\n"
+
+
+def test_uninstall_skips_restoring_link_backup_with_tampered_fingerprint(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  (tmp_path / "CLAUDE.md.bak").write_text("tampered content\n", encoding="utf-8")
+
+  operation_log = uninstall_existing(Path.cwd())
+
+  assert (tmp_path / "CLAUDE.md.bak").read_text(encoding="utf-8") == "tampered content\n"
+  assert not (tmp_path / "CLAUDE.md").exists()
+  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+
+
+def test_uninstall_skips_restoring_rules_backup_with_tampered_fingerprint(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+  init_runtime(tmp_path, ("claude",))
+  (tmp_path / ".rules.bak").write_text("tampered rules\n", encoding="utf-8")
+
+  operation_log = uninstall_existing(tmp_path)
+
+  assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "tampered rules\n"
+  assert not (tmp_path / ".rules").exists()
+  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+
+
+def test_restore_backup_rejects_directory_at_backup_path(tmp_path: Path) -> None:
+  destination = tmp_path / "CLAUDE.md"
+  backup_path = tmp_path / "CLAUDE.md.bak"
+  backup_path.mkdir()
+  (backup_path / "not-a-backup.txt").write_text("payload", encoding="utf-8")
+  operation_log = OperationLog()
+
+  restore_backup(tmp_path, backup_path, destination, operation_log)
+
+  assert backup_path.is_dir()
+  assert not destination.exists()
+  assert any("not a file or symlink" in line for line in operation_log.lines)
+
+
+def test_uninstall_rejects_directory_swapped_for_link_backup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  backup = tmp_path / "CLAUDE.md.bak"
+  backup.unlink()
+  backup.mkdir()
+
+  operation_log = uninstall_existing(Path.cwd())
+
+  assert backup.is_dir()
+  assert not (tmp_path / "CLAUDE.md").exists()
+  assert any("not a file or symlink" in line for line in operation_log.lines)
 
 
 def test_sync_repairs_missing_provider_link(

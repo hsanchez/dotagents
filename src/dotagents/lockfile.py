@@ -1,6 +1,7 @@
 """Runtime lockfile support."""
 
 import hashlib
+import os
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ class LockedLink:
   target: str
   provider: str | None = None
   backup: str | None = None
+  backup_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ class RuntimeLock:
   assets: tuple[LockedAsset, ...]
   links: tuple[LockedLink, ...]
   rules_backup: str | None
+  rules_backup_fingerprint: str | None
 
 
 def validate_contained_relative_path(value: str, description: str) -> None:
@@ -66,6 +69,24 @@ def sha256_file(path: Path) -> str:
   return digest.hexdigest()
 
 
+def backup_fingerprint(path: Path) -> str:
+  """Return a fingerprint identifying `path`'s current content or symlink target.
+
+  Used to detect whether a recorded backup was swapped for something else between
+  creation and restoration (e.g. a symlink substituted for the original backup).
+
+  Raises:
+    DotagentsError: if `path` is neither a symlink nor a regular file — a directory or
+      FIFO would raise an unhelpful `IsADirectoryError` from `sha256_file`, or block
+      indefinitely waiting for a writer.
+  """
+  if path.is_symlink():
+    return f"symlink:{os.readlink(path)}"
+  if not path.is_file():
+    raise DotagentsError(f"cannot fingerprint non-regular file: {path}")
+  return f"sha256:{sha256_file(path)}"
+
+
 def write_lock(
   path: Path,
   manifest_sha256: str,
@@ -76,6 +97,7 @@ def write_lock(
   skillfile_sha256: str | None = None,
   generated_at: str | None = None,
   rules_backup: str | None = None,
+  rules_backup_fingerprint: str | None = None,
 ) -> None:
   payload = {
     "lockfile_version": SUPPORTED_LOCKFILE_VERSION,
@@ -86,6 +108,7 @@ def write_lock(
     **({"skills": list(skills)} if skills is not None else {}),
     **({"skillfile_sha256": skillfile_sha256} if skillfile_sha256 is not None else {}),
     **({"rules_backup": rules_backup} if rules_backup else {}),
+    **({"rules_backup_fingerprint": rules_backup_fingerprint} if rules_backup_fingerprint else {}),
     "generated_at": generated_at or datetime.now(UTC).isoformat(),
     "assets": [
       {
@@ -101,6 +124,7 @@ def write_lock(
         "target": link.target,
         **({"provider": link.provider} if link.provider else {}),
         **({"backup": link.backup} if link.backup else {}),
+        **({"backup_fingerprint": link.backup_fingerprint} if link.backup_fingerprint else {}),
       }
       for link in links
     ],
@@ -178,11 +202,22 @@ def read_lock(path: Path) -> RuntimeLock:
     backup = raw.get("backup")
     if backup is not None and (not isinstance(backup, str) or not backup):
       raise DotagentsError("lockfile link backup must be a non-empty string")
+    backup_fingerprint_value = raw.get("backup_fingerprint")
+    if backup_fingerprint_value is not None and (
+      not isinstance(backup_fingerprint_value, str) or not backup_fingerprint_value
+    ):
+      raise DotagentsError("lockfile link backup_fingerprint must be a non-empty string")
     validate_contained_relative_path(destination, "link destination")
     if backup is not None:
       validate_contained_relative_path(backup, "link backup")
     links.append(
-      LockedLink(destination=destination, target=target, provider=provider, backup=backup)
+      LockedLink(
+        destination=destination,
+        target=target,
+        provider=provider,
+        backup=backup,
+        backup_fingerprint=backup_fingerprint_value,
+      )
     )
 
   version = data.get("version")
@@ -203,6 +238,12 @@ def read_lock(path: Path) -> RuntimeLock:
   if rules_backup is not None:
     validate_contained_relative_path(rules_backup, "rules_backup")
 
+  rules_backup_fingerprint = data.get("rules_backup_fingerprint")
+  if rules_backup_fingerprint is not None and (
+    not isinstance(rules_backup_fingerprint, str) or not rules_backup_fingerprint
+  ):
+    raise DotagentsError("lockfile rules_backup_fingerprint must be a non-empty string")
+
   return RuntimeLock(
     lockfile_version=lockfile_version,
     version=version,
@@ -214,4 +255,5 @@ def read_lock(path: Path) -> RuntimeLock:
     assets=tuple(assets),
     links=tuple(links),
     rules_backup=rules_backup,
+    rules_backup_fingerprint=rules_backup_fingerprint,
   )

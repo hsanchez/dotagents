@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import LockedAsset, LockedLink, read_lock, sha256_file, write_lock
+from dotagents.lockfile import (
+  LockedAsset,
+  LockedLink,
+  backup_fingerprint,
+  read_lock,
+  sha256_file,
+  write_lock,
+)
 
 
 def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
@@ -32,6 +39,49 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
   assert runtime_lock.generated_at == "2026-06-26T00:00:00+00:00"
   assert runtime_lock.assets == tuple(assets)
   assert runtime_lock.links == tuple(links)
+
+
+def test_write_and_read_lock_round_trips_backup_fingerprints(tmp_path: Path) -> None:
+  lock_path = tmp_path / "dotagents.lock"
+  links = [
+    LockedLink(
+      destination="CLAUDE.md",
+      target="../.rules",
+      provider="claude",
+      backup="CLAUDE.md.bak",
+      backup_fingerprint="sha256:" + "a" * 64,
+    )
+  ]
+
+  write_lock(
+    lock_path,
+    "f" * 64,
+    ("claude",),
+    [],
+    links,
+    rules_backup=".rules.bak",
+    rules_backup_fingerprint="sha256:" + "b" * 64,
+  )
+  runtime_lock = read_lock(lock_path)
+
+  assert runtime_lock.links[0].backup_fingerprint == "sha256:" + "a" * 64
+  assert runtime_lock.rules_backup_fingerprint == "sha256:" + "b" * 64
+
+
+def test_backup_fingerprint_hashes_regular_file(tmp_path: Path) -> None:
+  path = tmp_path / "file.txt"
+  path.write_text("payload", encoding="utf-8")
+
+  assert backup_fingerprint(path) == f"sha256:{sha256_file(path)}"
+
+
+def test_backup_fingerprint_reads_symlink_target(tmp_path: Path) -> None:
+  target = tmp_path / "target.txt"
+  target.write_text("content", encoding="utf-8")
+  link = tmp_path / "link.txt"
+  link.symlink_to(target)
+
+  assert backup_fingerprint(link) == f"symlink:{target}"
 
 
 @pytest.mark.parametrize(
@@ -105,6 +155,16 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
       'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
       'rules_backup = "../outside.bak"\n',
       "rules_backup must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "CLAUDE.md"\ntarget = "y"\nbackup_fingerprint = ""\n',
+      "link backup_fingerprint must be a non-empty string",
+    ),
+    (
+      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      'rules_backup_fingerprint = ""\n',
+      "rules_backup_fingerprint must be a non-empty string",
     ),
   ],
 )
