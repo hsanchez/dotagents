@@ -640,6 +640,33 @@ def test_sync_preserves_rules_backup_across_unrelated_changes(
   assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "human-owned rules\n"
 
 
+def test_uninstall_restores_rules_backup_when_rules_already_missing(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+  init_runtime(tmp_path, ("claude",))
+  (tmp_path / ".rules").unlink()
+
+  uninstall_existing(tmp_path)
+
+  assert (tmp_path / ".rules").read_text(encoding="utf-8") == "human-owned rules\n"
+  assert not (tmp_path / ".rules.bak").exists()
+
+
+def test_init_does_not_adopt_unrelated_preexisting_rules_backup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules.bak").write_text("unrelated stray backup\n", encoding="utf-8")
+
+  init_runtime(tmp_path, ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.rules_backup is None
+  assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "unrelated stray backup\n"
+
+
 def test_init_backs_up_existing_symlink_pointing_elsewhere_and_creates_link(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

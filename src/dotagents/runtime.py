@@ -429,7 +429,11 @@ def sync_runtime(
       lock_entries(runtime_context.repo_root, source, destination, f"skills/{skill}")
     )
 
-  rules_backup = render_rules(runtime_context, operation_log)
+  rules_backup = render_rules(
+    runtime_context,
+    operation_log,
+    known_backup=previous_lock.rules_backup if previous_lock else None,
+  )
   locked_assets.extend(compiled_assets)
   log_compiled_assets(compiled_assets, operation_log)
   validate_locked_asset_destinations_unique(locked_assets)
@@ -935,7 +939,9 @@ def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
   raise DotagentsError(f"unsupported manifest source root: {entry.source}")
 
 
-def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> str | None:
+def render_rules(
+  runtime_context: RuntimeContext, operation_log: OperationLog, known_backup: str | None = None
+) -> str | None:
   shared_rules = runtime_context.asset_root / "rules" / "rules.md"
   try:
     shared = shared_rules.read_text(encoding="utf-8").rstrip()
@@ -959,6 +965,7 @@ def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -
     "\n".join(chunks) + "\n",
     operation_log,
     backup_existing=runtime_context.is_global,
+    known_backup=known_backup,
   )
 
 
@@ -1047,8 +1054,14 @@ def write_text(
   content: str,
   operation_log: OperationLog,
   backup_existing: bool = False,
+  known_backup: str | None = None,
 ) -> str | None:
-  """Return the relative path to the backup file if one was created or already exists, else None."""
+  """Return the relative path to the backup file if one was created or already tracked, else None.
+
+  `known_backup` is the backup path previously recorded in the lock, if any. A `.bak` file found
+  on disk is only ever reported back if it was created by this call or was already tracked —
+  an unrelated pre-existing `.bak` file is never adopted as dotagents-owned.
+  """
   backup = destination.parent / (destination.name + ".bak")
   if (
     destination.exists()
@@ -1056,11 +1069,12 @@ def write_text(
     and destination.read_text(encoding="utf-8") == content
   ):
     operation_log.add(f"ok {relative(repo_root, destination)}")
-    return relative(repo_root, backup) if backup.exists(follow_symlinks=False) else None
+    return known_backup
   if destination.exists() and destination.is_symlink():
     raise DotagentsError(
       f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
     )
+  backup_rel = known_backup
   if backup_existing and destination.exists():
     if backup.exists(follow_symlinks=False):
       raise DotagentsError(
@@ -1076,7 +1090,7 @@ def write_text(
       operation_log.add(
         f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
-  backup_rel = relative(repo_root, backup) if backup.exists(follow_symlinks=False) else None
+    backup_rel = relative(repo_root, backup)
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
     return backup_rel
@@ -1220,6 +1234,8 @@ def remove_generated_rules(
   display = relative(repo_root, rules)
   if not rules.exists() and not rules.is_symlink():
     operation_log.add(f"missing {display}")
+    if rules_backup:
+      restore_backup(repo_root, repo_root / rules_backup, rules, operation_log)
     return
   if rules.is_symlink() or not rules.is_file():
     operation_log.add(f"skip unexpected {display}; remove manually after verifying")
