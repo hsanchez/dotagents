@@ -207,7 +207,7 @@ def run_codex [
   $prompt | save --force $prompt_file
 
   try {
-    codex exec --sandbox read-only --ephemeral -o $output_file - < $prompt_file
+    open --raw $prompt_file | codex exec --sandbox read-only --ephemeral -o $output_file -
     rm -f $prompt_file
     { success: true, error: "" }
   } catch {|err|
