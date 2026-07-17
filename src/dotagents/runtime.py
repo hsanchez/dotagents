@@ -264,7 +264,7 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
       restore_backup(root, root / link.backup, destination, operation_log)
     collect_parents(root, destination, prune_candidates)
 
-  remove_generated_rules(root, operation_log)
+  remove_generated_rules(root, operation_log, runtime_lock.rules_backup)
   collect_parents(root, root / ".rules", prune_candidates)
 
   for asset in sorted(runtime_lock.assets, key=lambda item: item.destination, reverse=True):
@@ -369,6 +369,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       remaining_links,
       skills=current_lock.skills,
       skillfile_sha256=current_lock.skillfile_sha256,
+      rules_backup=current_lock.rules_backup,
     )
     operation_log.add(f"removed provider: {provider}")
   else:
@@ -428,7 +429,7 @@ def sync_runtime(
       lock_entries(runtime_context.repo_root, source, destination, f"skills/{skill}")
     )
 
-  render_rules(runtime_context, operation_log)
+  rules_backup = render_rules(runtime_context, operation_log)
   locked_assets.extend(compiled_assets)
   log_compiled_assets(compiled_assets, operation_log)
   validate_locked_asset_destinations_unique(locked_assets)
@@ -484,6 +485,7 @@ def sync_runtime(
       skills=runtime_context.skills,
       skillfile_sha256=compute_skillfile_sha256(runtime_context.repo_root),
       generated_at=generated_at,
+      rules_backup=rules_backup,
     )
     operation_log.add("wrote .agents/dotagents.lock")
 
@@ -933,7 +935,7 @@ def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
   raise DotagentsError(f"unsupported manifest source root: {entry.source}")
 
 
-def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> None:
+def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> str | None:
   shared_rules = runtime_context.asset_root / "rules" / "rules.md"
   try:
     shared = shared_rules.read_text(encoding="utf-8").rstrip()
@@ -951,7 +953,7 @@ def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -
         local.read_text(encoding="utf-8").rstrip(),
       ]
     )
-  write_text(
+  return write_text(
     runtime_context.repo_root,
     runtime_context.repo_root / ".rules",
     "\n".join(chunks) + "\n",
@@ -1045,21 +1047,22 @@ def write_text(
   content: str,
   operation_log: OperationLog,
   backup_existing: bool = False,
-) -> None:
+) -> str | None:
+  """Return the relative path to the backup file if one was created or already exists, else None."""
+  backup = destination.parent / (destination.name + ".bak")
   if (
     destination.exists()
     and destination.is_file()
     and destination.read_text(encoding="utf-8") == content
   ):
     operation_log.add(f"ok {relative(repo_root, destination)}")
-    return
+    return relative(repo_root, backup) if backup.exists(follow_symlinks=False) else None
   if destination.exists() and destination.is_symlink():
     raise DotagentsError(
       f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
     )
-  backup = destination.parent / (destination.name + ".bak")
   if backup_existing and destination.exists():
-    if backup.exists():
+    if backup.exists(follow_symlinks=False):
       raise DotagentsError(
         f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
       )
@@ -1073,11 +1076,13 @@ def write_text(
       operation_log.add(
         f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
+  backup_rel = relative(repo_root, backup) if backup.exists(follow_symlinks=False) else None
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
-    return
+    return backup_rel
   destination.write_text(content, encoding="utf-8")
   operation_log.add(f"wrote {relative(repo_root, destination)}")
+  return backup_rel
 
 
 def link_path(
@@ -1208,7 +1213,9 @@ def remove_locked_asset(
   return True
 
 
-def remove_generated_rules(repo_root: Path, operation_log: OperationLog) -> None:
+def remove_generated_rules(
+  repo_root: Path, operation_log: OperationLog, rules_backup: str | None
+) -> None:
   rules = repo_root / ".rules"
   display = relative(repo_root, rules)
   if not rules.exists() and not rules.is_symlink():
@@ -1229,9 +1236,12 @@ def remove_generated_rules(repo_root: Path, operation_log: OperationLog) -> None
   if operation_log.dry_run:
     operation_log.add(f"would remove {display}")
     operation_log.pending_removals.add(rules)
-    return
-  rules.unlink()
-  operation_log.add(f"removed {display}")
+  else:
+    rules.unlink()
+    operation_log.add(f"removed {display}")
+
+  if rules_backup:
+    restore_backup(repo_root, repo_root / rules_backup, rules, operation_log)
 
 
 def remove_lockfile(repo_root: Path, lock_path: Path, operation_log: OperationLog) -> None:

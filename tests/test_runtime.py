@@ -600,6 +600,46 @@ def test_init_raises_when_backup_file_already_exists(
     init_runtime(Path.cwd(), ("claude",))
 
 
+def test_init_global_records_rules_backup_in_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+
+  init_runtime(tmp_path, ("claude",))
+
+  assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "human-owned rules\n"
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.rules_backup == ".rules.bak"
+
+
+def test_uninstall_restores_global_rules_backup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+  init_runtime(tmp_path, ("claude",))
+
+  uninstall_existing(tmp_path)
+
+  assert (tmp_path / ".rules").read_text(encoding="utf-8") == "human-owned rules\n"
+  assert not (tmp_path / ".rules.bak").exists()
+
+
+def test_sync_preserves_rules_backup_across_unrelated_changes(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+  init_runtime(tmp_path, ("claude",))
+
+  sync_existing(tmp_path)
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.rules_backup == ".rules.bak"
+  assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "human-owned rules\n"
+
+
 def test_init_backs_up_existing_symlink_pointing_elsewhere_and_creates_link(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

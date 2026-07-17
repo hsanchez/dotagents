@@ -40,6 +40,7 @@ class RuntimeLock:
   generated_at: str
   assets: tuple[LockedAsset, ...]
   links: tuple[LockedLink, ...]
+  rules_backup: str | None
 
 
 def sha256_file(path: Path) -> str:
@@ -59,6 +60,7 @@ def write_lock(
   skills: tuple[str, ...] | None = None,
   skillfile_sha256: str | None = None,
   generated_at: str | None = None,
+  rules_backup: str | None = None,
 ) -> None:
   payload = {
     "lockfile_version": SUPPORTED_LOCKFILE_VERSION,
@@ -68,6 +70,7 @@ def write_lock(
     "providers": list(providers),
     **({"skills": list(skills)} if skills is not None else {}),
     **({"skillfile_sha256": skillfile_sha256} if skillfile_sha256 is not None else {}),
+    **({"rules_backup": rules_backup} if rules_backup else {}),
     "generated_at": generated_at or datetime.now(UTC).isoformat(),
     "assets": [
       {
@@ -175,6 +178,10 @@ def read_lock(path: Path) -> RuntimeLock:
   if not isinstance(generated_at, str) or not generated_at:
     raise DotagentsError("lockfile generated_at must be a non-empty string")
 
+  rules_backup = data.get("rules_backup")
+  if rules_backup is not None and (not isinstance(rules_backup, str) or not rules_backup):
+    raise DotagentsError("lockfile rules_backup must be a non-empty string")
+
   return RuntimeLock(
     lockfile_version=lockfile_version,
     version=version,
@@ -185,4 +192,5 @@ def read_lock(path: Path) -> RuntimeLock:
     generated_at=generated_at,
     assets=tuple(assets),
     links=tuple(links),
+    rules_backup=rules_backup,
   )
