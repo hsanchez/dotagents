@@ -8,7 +8,7 @@ import dotagents.runtime as runtime_module
 from dotagents.compiler import BuildGroup, BuildManifest
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import LockedLink, read_lock, write_lock
+from dotagents.lockfile import LockedAsset, LockedLink, read_lock, sha256_file, write_lock
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
   add_provider,
@@ -16,6 +16,7 @@ from dotagents.runtime import (
   capability_compiled_groups,
   init_runtime,
   remove_provider,
+  resolve_within_root,
   runtime_destination,
   sync_existing,
   uninstall_existing,
@@ -1235,3 +1236,53 @@ def test_remove_provider_retains_skipped_changed_asset_in_lockfile(
   destinations = {a.destination for a in lock.assets}
   assert ".agents/providers/copilot/review.prompt.md" in destinations
   assert changed.exists()
+
+
+def test_resolve_within_root_rejects_symlinked_parent_escape(tmp_path: Path) -> None:
+  root = tmp_path / "root"
+  root.mkdir()
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  (root / "escape-dir").symlink_to(outside)
+
+  with pytest.raises(DotagentsError, match="path escapes root via symlink"):
+    resolve_within_root(root, root / "escape-dir" / "file.txt")
+
+
+def test_resolve_within_root_accepts_path_within_root(tmp_path: Path) -> None:
+  root = tmp_path / "root"
+  (root / "subdir").mkdir(parents=True)
+
+  resolved = resolve_within_root(root, root / "subdir" / "file.txt")
+
+  assert resolved == (root / "subdir" / "file.txt").resolve()
+
+
+def test_uninstall_rejects_asset_destination_escaping_root_via_symlinked_parent(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  root = tmp_path / "repo"
+  root.mkdir()
+  monkeypatch.chdir(root)
+  init_runtime(Path.cwd(), ("claude",))
+
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  secret = outside / "secret.txt"
+  secret.write_text("do not touch\n", encoding="utf-8")
+  (root / "escape-dir").symlink_to(outside)
+
+  lock_path = root / ".agents" / "dotagents.lock"
+  runtime_lock = read_lock(lock_path)
+  write_lock(
+    lock_path,
+    runtime_lock.manifest_sha256,
+    runtime_lock.providers,
+    [*runtime_lock.assets, LockedAsset("fake", "escape-dir/secret.txt", sha256_file(secret))],
+    list(runtime_lock.links),
+  )
+
+  with pytest.raises(DotagentsError, match="path escapes root via symlink"):
+    uninstall_existing(Path.cwd())
+
+  assert secret.read_text(encoding="utf-8") == "do not touch\n"

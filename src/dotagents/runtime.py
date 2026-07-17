@@ -1161,9 +1161,27 @@ def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None
   operation_log.add(f"created {relative(repo_root, path)}")
 
 
+def resolve_within_root(repo_root: Path, path: Path) -> Path:
+  """Resolve `path` and confirm it stays within `repo_root`, following any symlinked parents.
+
+  Lockfile-sourced destinations are validated lexically at parse time
+  (`validate_contained_relative_path`), but that catches only `..`/absolute-path strings —
+  not an intermediate directory that is itself a symlink pointing outside root. This closes
+  that gap at the point of actual filesystem use.
+
+  Raises:
+    DotagentsError: if `path` resolves outside `repo_root`.
+  """
+  resolved = path.resolve()
+  if not resolved.is_relative_to(repo_root.resolve()):
+    raise DotagentsError(f"path escapes root via symlink: {relative(repo_root, path)}")
+  return resolved
+
+
 def remove_locked_link(
   repo_root: Path, destination: Path, expected_target: str, operation_log: OperationLog
 ) -> bool:
+  resolve_within_root(repo_root, destination)
   display = relative(repo_root, destination)
   if not destination.exists() and not destination.is_symlink():
     operation_log.add(f"missing {display}")
@@ -1189,6 +1207,8 @@ def remove_locked_link(
 def restore_backup(
   repo_root: Path, backup_path: Path, destination: Path, operation_log: OperationLog
 ) -> None:
+  resolve_within_root(repo_root, backup_path)
+  resolve_within_root(repo_root, destination)
   if not backup_path.exists(follow_symlinks=False):
     operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
     return
@@ -1207,6 +1227,7 @@ def remove_locked_asset(
   repo_root: Path, path: Path, expected_sha256: str, operation_log: OperationLog
 ) -> bool:
   """Return True if the asset was removed (or would be in dry-run), False if skipped."""
+  resolve_within_root(repo_root, path)
   display = relative(repo_root, path)
   if not path.exists() and not path.is_symlink():
     operation_log.add(f"missing {display}")
