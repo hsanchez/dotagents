@@ -407,9 +407,9 @@ def rollback_created_backups(operation_log: OperationLog) -> None:
   `sync_runtime` may have performed before failing (asset copies, newly-created symlinks,
   stale-entry removals, directory pruning). Those are safe to leave as-is because they're
   each idempotent on retry — a copy re-copies identical content, an already-correct symlink
-  is a no-op via `already_linked`, a stale entry already removed is recognized as no longer
-  ours and skipped. `sync_runtime` is not transactional as a whole; this function closes the
-  one gap that isn't self-healing on retry.
+  is a no-op via `already_linked`, a stale entry already removed is reported as missing and
+  treated as done (`remove_locked_link`). `sync_runtime` is not transactional as a whole;
+  this function closes the one gap that isn't self-healing on retry.
 
   Backups are that gap: `sync_runtime` mutates disk incrementally per entry but writes the
   lockfile once, at the end, after every entry succeeds. Without this, a later entry failing
