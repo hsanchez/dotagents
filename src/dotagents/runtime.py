@@ -272,9 +272,7 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
 
   for link in runtime_lock.links:
     destination = root / link.destination
-    removed = remove_locked_link(root, destination, link.target, operation_log)
-    if link.backup and removed:
-      restore_backup(root, root / link.backup, destination, operation_log, link.backup_fingerprint)
+    remove_link_with_backup(root, link, destination, operation_log)
     collect_parents(root, destination, prune_candidates)
 
   remove_generated_rules(
@@ -346,13 +344,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   skipped_links: list[LockedLink] = []
   for link in (link for link in current_lock.links if link.provider == provider):
     destination = root / link.destination
-    removed = remove_locked_link(root, destination, link.target, operation_log)
-    if removed:
-      if link.backup:
-        restore_backup(
-          root, root / link.backup, destination, operation_log, link.backup_fingerprint
-        )
-    else:
+    if not remove_link_with_backup(root, link, destination, operation_log):
       skipped_links.append(link)
     collect_parents(root, destination, prune_candidates)
 
@@ -922,13 +914,7 @@ def remove_stale_links(
     if link.destination in current_destinations:
       continue
     destination = repo_root / link.destination
-    removed = remove_locked_link(repo_root, destination, link.target, operation_log)
-    if removed:
-      if link.backup:
-        restore_backup(
-          repo_root, repo_root / link.backup, destination, operation_log, link.backup_fingerprint
-        )
-    else:
+    if not remove_link_with_backup(repo_root, link, destination, operation_log):
       skipped_links.append(link)
     collect_parents(repo_root, destination, prune_candidates)
 
@@ -1286,6 +1272,18 @@ def restore_backup(
   operation_log.add(
     f"restored {relative(repo_root, backup_path)} -> {relative(repo_root, destination)}"
   )
+
+
+def remove_link_with_backup(
+  repo_root: Path, link: LockedLink, destination: Path, operation_log: OperationLog
+) -> bool:
+  """Remove a locked link and restore its backup on success. Return whether it was removed."""
+  removed = remove_locked_link(repo_root, destination, link.target, operation_log)
+  if removed and link.backup:
+    restore_backup(
+      repo_root, repo_root / link.backup, destination, operation_log, link.backup_fingerprint
+    )
+  return removed
 
 
 def remove_locked_asset(
