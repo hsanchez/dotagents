@@ -230,6 +230,24 @@ def test_init_global_copilot_prompts_before_replacing_root_rules(
   assert not (tmp_path / ".rules.bak").exists()
 
 
+def test_init_global_prompts_before_replacing_unexpected_symlink(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  (tmp_path / "elsewhere.json").write_text("{}", encoding="utf-8")
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.symlink_to(tmp_path / "elsewhere.json")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"], input="n\n")
+
+  assert result.exit_code == 1
+  assert "will be backed up (.bak) and replaced" in result.output
+  assert "aborted: confirmation declined" in result.output
+  assert existing.is_symlink()
+  assert not (tmp_path / ".claude" / "CLAUDE.md.bak").exists()
+
+
 def test_init_global_confirmation_survives_unresolved_home_symlink(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

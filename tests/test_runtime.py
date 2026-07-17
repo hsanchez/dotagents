@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -597,6 +598,64 @@ def test_init_raises_when_backup_file_already_exists(
 
   with pytest.raises(DotagentsError, match="backup already exists"):
     init_runtime(Path.cwd(), ("claude",))
+
+
+def test_init_backs_up_existing_symlink_pointing_elsewhere_and_creates_link(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("elsewhere.md").write_text("unrelated file\n", encoding="utf-8")
+  Path("CLAUDE.md").symlink_to("elsewhere.md")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+  assert os.readlink(tmp_path / "CLAUDE.md") != "elsewhere.md"
+  backup = tmp_path / "CLAUDE.md.bak"
+  assert backup.is_symlink()
+  assert os.readlink(backup) == "elsewhere.md"
+
+
+def test_init_backs_up_broken_symlink_and_creates_link(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").symlink_to("does-not-exist.md")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  assert (tmp_path / "CLAUDE.md").is_symlink()
+  backup = tmp_path / "CLAUDE.md.bak"
+  assert backup.is_symlink()
+  assert os.readlink(backup) == "does-not-exist.md"
+
+
+def test_init_records_backup_path_in_lockfile_for_replaced_symlink(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("elsewhere.md").write_text("unrelated file\n", encoding="utf-8")
+  Path("CLAUDE.md").symlink_to("elsewhere.md")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  claude_link = next(link for link in lock.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup == "CLAUDE.md.bak"
+
+
+def test_uninstall_restores_backup_for_replaced_symlink(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("elsewhere.md").write_text("unrelated file\n", encoding="utf-8")
+  Path("CLAUDE.md").symlink_to("elsewhere.md")
+  init_runtime(Path.cwd(), ("claude",))
+
+  uninstall_existing(Path.cwd())
+
+  assert os.readlink(tmp_path / "CLAUDE.md") == "elsewhere.md"
+  assert not (tmp_path / "CLAUDE.md.bak").exists()
 
 
 def test_sync_repairs_missing_provider_link(

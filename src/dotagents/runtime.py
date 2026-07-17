@@ -1086,9 +1086,14 @@ def link_path(
     DotagentsError: if a `.bak` file already exists at the backup path (conflict must be resolved manually).
   """
   backup = destination.parent / (destination.name + ".bak")
+  target = os.path.relpath(source, destination.parent)
+  already_linked = destination.is_symlink() and os.readlink(destination) == target
 
-  if destination.exists() and not destination.is_symlink():
-    if backup.exists():
+  # follow_symlinks=False: a pre-existing entry that isn't already our link — a
+  # regular file, a symlink to something else, or a broken symlink — must be
+  # backed up before replacement, not silently overwritten.
+  if destination.exists(follow_symlinks=False) and not already_linked:
+    if backup.exists(follow_symlinks=False):
       raise DotagentsError(
         f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
       )
@@ -1104,10 +1109,9 @@ def link_path(
       )
     backup_rel: str | None = relative(repo_root, backup)
   else:
-    backup_rel = relative(repo_root, backup) if backup.exists() else None
+    backup_rel = relative(repo_root, backup) if backup.exists(follow_symlinks=False) else None
 
-  target = os.path.relpath(source, destination.parent)
-  if destination.is_symlink() and os.readlink(destination) == target:
+  if already_linked:
     operation_log.add(f"ok {relative(repo_root, destination)}")
     return backup_rel
 
@@ -1163,7 +1167,7 @@ def remove_locked_link(
 def restore_backup(
   repo_root: Path, backup_path: Path, destination: Path, operation_log: OperationLog
 ) -> None:
-  if not backup_path.exists():
+  if not backup_path.exists(follow_symlinks=False):
     operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
     return
   if operation_log.dry_run:
