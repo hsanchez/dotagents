@@ -62,8 +62,10 @@ class OperationLog:
 class BackupRecord:
   """A backup's location and a fingerprint of what it held at creation time.
 
-  `fingerprint` is `None` for backups recorded before fingerprinting existed — those
-  are carried forward for restoration but can't be integrity-checked.
+  `fingerprint` is typed as optional because `read_lock` only enforces its presence at the
+  lockfile boundary (a lock with `backup` but no `backup_fingerprint` fails to parse at all,
+  forcing `dotagents update` — see `SUPPORTED_LOCKFILE_VERSION`), not at this dataclass's
+  construction sites.
   """
 
   path: str
@@ -1075,6 +1077,24 @@ def copy_file(
   operation_log.add(f"copied {relative(repo_root, destination)}")
 
 
+def migrate_legacy_backup(
+  known_backup: BackupRecord | None, backup_path: Path
+) -> BackupRecord | None:
+  """Upgrade a fingerprint-less backup record (carried forward from a v1 lock) to a real
+  fingerprint computed from `backup_path`'s current on-disk state, or drop it if the backup
+  is no longer a readable file or symlink.
+
+  Without this, carrying `known_backup.fingerprint = None` forward unchanged into a
+  freshly-written v2 lock would record `backup` with no `backup_fingerprint` — unreadable
+  by the next `read_lock` call, which requires a fingerprint whenever a v2 lock has a backup.
+  """
+  if known_backup is None or known_backup.fingerprint is not None:
+    return known_backup
+  if backup_path.is_symlink() or backup_path.is_file():
+    return BackupRecord(known_backup.path, backup_fingerprint(backup_path))
+  return None
+
+
 def write_text(
   repo_root: Path,
   destination: Path,
@@ -1094,6 +1114,7 @@ def write_text(
       backup path (conflict must be resolved manually).
   """
   backup = destination.parent / (destination.name + ".bak")
+  known_backup = migrate_legacy_backup(known_backup, backup)
   if (
     destination.exists()
     and destination.is_file()
@@ -1106,22 +1127,18 @@ def write_text(
       f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
     )
   backup_record = known_backup
-  if backup_existing and destination.exists():
+  backup_rel = relative(repo_root, backup)
+  already_tracked = known_backup is not None and known_backup.path == backup_rel
+  if backup_existing and destination.exists() and not already_tracked:
     if backup.exists(follow_symlinks=False):
-      raise DotagentsError(
-        f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
-      )
-    backup_record = BackupRecord(relative(repo_root, backup), backup_fingerprint(destination))
+      raise DotagentsError(f"backup already exists: {backup_rel}; resolve manually and re-run")
+    backup_record = BackupRecord(backup_rel, backup_fingerprint(destination))
     if operation_log.dry_run:
-      operation_log.add(
-        f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
-      )
+      operation_log.add(f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {backup_rel}")
       operation_log.planned_backups.append((destination, backup))
     else:
       destination.rename(backup)
-      operation_log.add(
-        f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
-      )
+      operation_log.add(f"backed up {relative(repo_root, destination)} -> {backup_rel}")
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
     return backup_record
@@ -1172,7 +1189,7 @@ def link_path(
         f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
   else:
-    backup_record = known_backup
+    backup_record = migrate_legacy_backup(known_backup, backup)
 
   if already_linked:
     operation_log.add(f"ok {relative(repo_root, destination)}")
@@ -1219,15 +1236,31 @@ def resolve_within_root(repo_root: Path, path: Path) -> Path:
   return resolved
 
 
+def resolve_parent_within_root(repo_root: Path, path: Path) -> None:
+  """Confirm `path`'s parent directory chain stays within `repo_root`, without resolving `path`.
+
+  For operations that rename or unlink a symlink entry directly (never open or follow it) —
+  `resolve_within_root` would incorrectly reject a legitimate symlink whose own target lies
+  outside root (e.g. a backed-up `CLAUDE.md -> ~/notes.md`), since `Path.resolve()` dereferences
+  the final path component too, not just its parents.
+
+  Raises:
+    DotagentsError: if `path`'s parent directory resolves outside `repo_root`.
+  """
+  resolved_parent = path.parent.resolve()
+  if not resolved_parent.is_relative_to(repo_root.resolve()):
+    raise DotagentsError(f"path escapes root via symlink: {relative(repo_root, path)}")
+
+
 def remove_locked_link(
   repo_root: Path, destination: Path, expected_target: str, operation_log: OperationLog
 ) -> bool:
   """Return True if the link was removed (or would be in dry-run), False if skipped.
 
   Raises:
-    DotagentsError: if `destination` resolves outside `repo_root`.
+    DotagentsError: if `destination`'s parent directory resolves outside `repo_root`.
   """
-  resolve_within_root(repo_root, destination)
+  resolve_parent_within_root(repo_root, destination)
   display = relative(repo_root, destination)
   if not destination.exists() and not destination.is_symlink():
     operation_log.add(f"missing {display}")
@@ -1263,10 +1296,11 @@ def restore_backup(
   symlink, or its fingerprint doesn't match `expected_fingerprint`.
 
   Raises:
-    DotagentsError: if `backup_path` or `destination` resolves outside `repo_root`.
+    DotagentsError: if `backup_path` or `destination`'s parent directory resolves outside
+      `repo_root`.
   """
-  resolve_within_root(repo_root, backup_path)
-  resolve_within_root(repo_root, destination)
+  resolve_parent_within_root(repo_root, backup_path)
+  resolve_parent_within_root(repo_root, destination)
   if not backup_path.exists(follow_symlinks=False):
     operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
     return
@@ -1303,7 +1337,8 @@ def remove_link_with_backup(
   """Remove a locked link and restore its backup on success. Return whether it was removed.
 
   Raises:
-    DotagentsError: if `destination` or the link's backup resolves outside `repo_root`.
+    DotagentsError: if `destination` or the link's backup's parent directory resolves
+      outside `repo_root`.
   """
   removed = remove_locked_link(repo_root, destination, link.target, operation_log)
   if removed and link.backup:

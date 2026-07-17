@@ -12,7 +12,23 @@ import tomli_w
 from dotagents.errors import DotagentsError
 from dotagents.version import package_version
 
-SUPPORTED_LOCKFILE_VERSION = 1
+# SUPPORTED_LOCKFILE_VERSION is the version write_lock always stamps. read_lock accepts
+# anything in [MIN_READABLE_LOCKFILE_VERSION, SUPPORTED_LOCKFILE_VERSION]: an existing
+# install's lockfile must stay readable by `update`/`uninstall`/`sync` so it can migrate
+# forward — read_lock is the very function those commands call first, so hard-rejecting an
+# older version they don't yet know about would make `dotagents update` unable to run at all.
+#
+# FINGERPRINT_REQUIRED_SINCE_VERSION marks the version where backup_fingerprint became
+# mandatory whenever backup/rules_backup is set (see read_lock). A lockfile below that version
+# is read as legacy/unverified — its recorded backups restore without integrity checking,
+# same as before fingerprinting existed. Note this is not proof against a fully-tampered
+# lockfile: an attacker who can already rewrite `backup`/`backup_fingerprint` can equally
+# rewrite `lockfile_version` down to bypass the requirement. Versioning here defends against
+# an *incomplete* migration (a genuinely old lockfile), not a fully hostile one — the broader
+# "attacker fully controls the local lockfile" threat model was never in scope (see #21/#22).
+SUPPORTED_LOCKFILE_VERSION = 2
+MIN_READABLE_LOCKFILE_VERSION = 1
+FINGERPRINT_REQUIRED_SINCE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -162,10 +178,12 @@ def read_lock(path: Path) -> RuntimeLock:
   lockfile_version = data.get("lockfile_version")
   if not isinstance(lockfile_version, int):
     raise DotagentsError("lockfile_version must be an integer; run: uv run dotagents update")
-  if lockfile_version != SUPPORTED_LOCKFILE_VERSION:
+  if not (MIN_READABLE_LOCKFILE_VERSION <= lockfile_version <= SUPPORTED_LOCKFILE_VERSION):
     raise DotagentsError(
-      f"lockfile_version must be {SUPPORTED_LOCKFILE_VERSION}; run: uv run dotagents update"
+      f"lockfile_version must be between {MIN_READABLE_LOCKFILE_VERSION} and "
+      f"{SUPPORTED_LOCKFILE_VERSION}; run: uv run dotagents update"
     )
+  requires_backup_fingerprint = lockfile_version >= FINGERPRINT_REQUIRED_SINCE_VERSION
 
   assets: list[LockedAsset] = []
   for raw in data.get("assets", []):
@@ -207,6 +225,11 @@ def read_lock(path: Path) -> RuntimeLock:
       not isinstance(backup_fingerprint_value, str) or not backup_fingerprint_value
     ):
       raise DotagentsError("lockfile link backup_fingerprint must be a non-empty string")
+    if backup is not None and backup_fingerprint_value is None and requires_backup_fingerprint:
+      raise DotagentsError(
+        f"lockfile link backup requires backup_fingerprint: {destination}; "
+        "run: uv run dotagents update"
+      )
     validate_contained_relative_path(destination, "link destination")
     if backup is not None:
       validate_contained_relative_path(backup, "link backup")
@@ -243,6 +266,10 @@ def read_lock(path: Path) -> RuntimeLock:
     not isinstance(rules_backup_fingerprint, str) or not rules_backup_fingerprint
   ):
     raise DotagentsError("lockfile rules_backup_fingerprint must be a non-empty string")
+  if rules_backup is not None and rules_backup_fingerprint is None and requires_backup_fingerprint:
+    raise DotagentsError(
+      "lockfile rules_backup requires rules_backup_fingerprint; run: uv run dotagents update"
+    )
 
   return RuntimeLock(
     lockfile_version=lockfile_version,

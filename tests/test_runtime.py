@@ -8,7 +8,14 @@ import dotagents.runtime as runtime_module
 from dotagents.compiler import BuildGroup, BuildManifest
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import LockedAsset, LockedLink, read_lock, sha256_file, write_lock
+from dotagents.lockfile import (
+  LockedAsset,
+  LockedLink,
+  backup_fingerprint,
+  read_lock,
+  sha256_file,
+  write_lock,
+)
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
   OperationLog,
@@ -643,6 +650,22 @@ def test_sync_preserves_rules_backup_across_unrelated_changes(
   assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "human-owned rules\n"
 
 
+def test_sync_rewrites_rules_content_after_backup_already_tracked(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+  init_runtime(tmp_path, ("claude",))
+
+  (tmp_path / ".rules.local").write_text("new local guidance\n", encoding="utf-8")
+  sync_existing(tmp_path)
+
+  assert "new local guidance" in (tmp_path / ".rules").read_text(encoding="utf-8")
+  assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "human-owned rules\n"
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.rules_backup == ".rules.bak"
+
+
 def test_uninstall_restores_rules_backup_when_rules_already_missing(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -726,6 +749,25 @@ def test_uninstall_restores_backup_for_replaced_symlink(
 
   assert os.readlink(tmp_path / "CLAUDE.md") == "elsewhere.md"
   assert not (tmp_path / "CLAUDE.md.bak").exists()
+
+
+def test_uninstall_restores_backup_symlink_pointing_outside_root(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  repo = tmp_path / "repo"
+  repo.mkdir()
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  external_notes = outside / "notes.md"
+  external_notes.write_text("my external notes\n", encoding="utf-8")
+  monkeypatch.chdir(repo)
+  Path("CLAUDE.md").symlink_to(external_notes)
+  init_runtime(Path.cwd(), ("claude",))
+
+  uninstall_existing(Path.cwd())
+
+  assert os.readlink(repo / "CLAUDE.md") == str(external_notes)
+  assert not (repo / "CLAUDE.md.bak").exists()
 
 
 def test_init_records_backup_fingerprint_in_lockfile(
@@ -936,7 +978,15 @@ def test_sync_restores_backup_for_stale_managed_link(
     runtime_lock.manifest_sha256,
     runtime_lock.providers,
     list(runtime_lock.assets),
-    [*runtime_lock.links, LockedLink("skills", ".agents/skills", backup="skills.bak")],
+    [
+      *runtime_lock.links,
+      LockedLink(
+        "skills",
+        ".agents/skills",
+        backup="skills.bak",
+        backup_fingerprint=backup_fingerprint(backup_path),
+      ),
+    ],
   )
 
   sync_existing(Path.cwd())
@@ -944,6 +994,117 @@ def test_sync_restores_backup_for_stale_managed_link(
   assert not stale_link.is_symlink()
   assert stale_link.read_text(encoding="utf-8") == "human-owned skills file\n"
   assert not backup_path.exists()
+
+
+def test_update_migrates_legacy_v1_lockfile_to_v2(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    encoding="utf-8",
+  )
+
+  update_existing(Path.cwd())
+
+  assert read_lock(lock_path).lockfile_version == 2
+
+
+def test_uninstall_succeeds_on_legacy_v1_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    encoding="utf-8",
+  )
+
+  uninstall_existing(Path.cwd())
+
+  assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == "human-owned\n"
+  assert not (tmp_path / "CLAUDE.md.bak").exists()
+
+
+def test_update_migrates_legacy_v1_link_backup_to_fingerprinted_v2(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock = read_lock(lock_path)
+  downgraded_links = [
+    LockedLink(link.destination, link.target, link.provider, link.backup, None)
+    if link.destination == "CLAUDE.md"
+    else link
+    for link in lock.links
+  ]
+  write_lock(
+    lock_path,
+    lock.manifest_sha256,
+    lock.providers,
+    list(lock.assets),
+    downgraded_links,
+    skills=lock.skills,
+    skillfile_sha256=lock.skillfile_sha256,
+    rules_backup=lock.rules_backup,
+    rules_backup_fingerprint=lock.rules_backup_fingerprint,
+  )
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    encoding="utf-8",
+  )
+  assert read_lock(lock_path).links[0].backup_fingerprint is None
+
+  update_existing(Path.cwd())
+
+  migrated = read_lock(lock_path)
+  assert migrated.lockfile_version == 2
+  migrated_link = next(link for link in migrated.links if link.destination == "CLAUDE.md")
+  assert migrated_link.backup == "CLAUDE.md.bak"
+  assert migrated_link.backup_fingerprint is not None
+
+  update_existing(Path.cwd())
+
+
+def test_sync_migrates_legacy_v1_rules_backup_to_fingerprinted_v2(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
+  init_runtime(tmp_path, ("claude",))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock = read_lock(lock_path)
+  write_lock(
+    lock_path,
+    lock.manifest_sha256,
+    lock.providers,
+    list(lock.assets),
+    list(lock.links),
+    skills=lock.skills,
+    skillfile_sha256=lock.skillfile_sha256,
+    rules_backup=lock.rules_backup,
+    rules_backup_fingerprint=None,
+  )
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    encoding="utf-8",
+  )
+  assert read_lock(lock_path).rules_backup_fingerprint is None
+
+  sync_existing(tmp_path)
+
+  migrated = read_lock(lock_path)
+  assert migrated.lockfile_version == 2
+  assert migrated.rules_backup == ".rules.bak"
+  assert migrated.rules_backup_fingerprint is not None
+
+  sync_existing(tmp_path)
 
 
 def test_update_reports_matching_version_refresh(
