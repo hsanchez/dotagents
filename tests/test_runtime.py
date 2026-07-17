@@ -735,6 +735,32 @@ def test_update_removes_stale_managed_link(tmp_path: Path, monkeypatch: pytest.M
   assert "skills" not in {link.destination for link in runtime_lock.links}
 
 
+def test_sync_restores_backup_for_stale_managed_link(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  stale_link = tmp_path / "skills"
+  stale_link.symlink_to(".agents/skills")
+  backup_path = tmp_path / "skills.bak"
+  backup_path.write_text("human-owned skills file\n", encoding="utf-8")
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  runtime_lock = read_lock(lock_path)
+  write_lock(
+    lock_path,
+    runtime_lock.manifest_sha256,
+    runtime_lock.providers,
+    list(runtime_lock.assets),
+    [*runtime_lock.links, LockedLink("skills", ".agents/skills", backup="skills.bak")],
+  )
+
+  sync_existing(Path.cwd())
+
+  assert not stale_link.is_symlink()
+  assert stale_link.read_text(encoding="utf-8") == "human-owned skills file\n"
+  assert not backup_path.exists()
+
+
 def test_update_reports_matching_version_refresh(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

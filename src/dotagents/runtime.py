@@ -886,7 +886,10 @@ def remove_stale_links(
       continue
     destination = repo_root / link.destination
     removed = remove_locked_link(repo_root, destination, link.target, operation_log)
-    if not removed:
+    if removed:
+      if link.backup:
+        restore_backup(repo_root, repo_root / link.backup, destination, operation_log)
+    else:
       skipped_links.append(link)
     collect_parents(repo_root, destination, prune_candidates)
 
