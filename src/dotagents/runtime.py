@@ -53,6 +53,7 @@ class OperationLog:
   lines: list[str] = field(default_factory=list)
   pending_removals: set[Path] = field(default_factory=set)
   planned_backups: list[tuple[Path, Path]] = field(default_factory=list)
+  created_backups: list[tuple[Path, Path]] = field(default_factory=list)
 
   def add(self, message: str) -> None:
     self.lines.append(message)
@@ -370,8 +371,17 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       a for a in current_lock.assets if not a.destination.startswith(provider_prefix)
     ] + skipped_assets
     remaining_links = [
-      link for link in current_lock.links if link.provider != provider
-    ] + skipped_links
+      migrate_legacy_link_backup(root, link)
+      for link in (
+        [link for link in current_lock.links if link.provider != provider] + skipped_links
+      )
+    ]
+    rules_backup_record = migrate_legacy_backup(
+      BackupRecord(current_lock.rules_backup, current_lock.rules_backup_fingerprint)
+      if current_lock.rules_backup
+      else None,
+      root / current_lock.rules_backup if current_lock.rules_backup else root,
+    )
     write_lock(
       lock_path,
       compute_manifest_sha256(runtime_context),
@@ -380,8 +390,8 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       remaining_links,
       skills=current_lock.skills,
       skillfile_sha256=current_lock.skillfile_sha256,
-      rules_backup=current_lock.rules_backup,
-      rules_backup_fingerprint=current_lock.rules_backup_fingerprint,
+      rules_backup=rules_backup_record.path if rules_backup_record else None,
+      rules_backup_fingerprint=rules_backup_record.fingerprint if rules_backup_record else None,
     )
     operation_log.add(f"removed provider: {provider}")
   else:
@@ -390,10 +400,48 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   return operation_log
 
 
+def rollback_created_backups(operation_log: OperationLog) -> None:
+  """Undo backups created earlier in a failed `sync_runtime` call.
+
+  This is deliberately narrow: it undoes backup renames only, not every mutation
+  `sync_runtime` may have performed before failing (asset copies, newly-created symlinks,
+  stale-entry removals, directory pruning). Those are safe to leave as-is because they're
+  each idempotent on retry — a copy re-copies identical content, an already-correct symlink
+  is a no-op via `already_linked`, a stale entry already removed is recognized as no longer
+  ours and skipped. `sync_runtime` is not transactional as a whole; this function closes the
+  one gap that isn't self-healing on retry.
+
+  Backups are that gap: `sync_runtime` mutates disk incrementally per entry but writes the
+  lockfile once, at the end, after every entry succeeds. Without this, a later entry failing
+  (e.g. a `.bak` naming collision unrelated to an earlier entry) would leave an earlier
+  entry's backup created on disk but never recorded in the lockfile — stranded as untracked
+  on retry, since the "don't adopt an unrecorded `.bak`" protection can't tell it apart from
+  a genuinely stray file.
+  """
+  for destination, backup in reversed(operation_log.created_backups):
+    if not backup.exists(follow_symlinks=False):
+      continue
+    if destination.exists() or destination.is_symlink():
+      destination.unlink()
+    backup.rename(destination)
+
+
 def sync_runtime(
   runtime_context: RuntimeContext, dry_run: bool = False, locked: bool = False
 ) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
+  try:
+    _sync_runtime_body(runtime_context, dry_run, locked, operation_log)
+  except Exception:
+    if not dry_run:
+      rollback_created_backups(operation_log)
+    raise
+  return operation_log
+
+
+def _sync_runtime_body(
+  runtime_context: RuntimeContext, dry_run: bool, locked: bool, operation_log: OperationLog
+) -> None:
   locked_assets: list[LockedAsset] = []
   locked_links: list[LockedLink] = []
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
@@ -517,8 +565,6 @@ def sync_runtime(
       rules_backup_fingerprint=rules_backup.fingerprint if rules_backup else None,
     )
     operation_log.add("wrote .agents/dotagents.lock")
-
-  return operation_log
 
 
 def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) -> list[LockedAsset]:
@@ -1095,6 +1141,28 @@ def migrate_legacy_backup(
   return None
 
 
+def migrate_legacy_link_backup(repo_root: Path, link: LockedLink) -> LockedLink:
+  """Return `link` with its backup fingerprint migrated if it's a legacy (fingerprint-less)
+  record, so writing it back into a v2 lock doesn't produce an unreadable entry.
+
+  Needed anywhere a `LockedLink` read from an existing lock is written back out without
+  going through `link_path` (which already migrates via `migrate_legacy_backup`) — e.g.
+  `remove_provider`, which carries forward links it isn't touching.
+  """
+  if link.backup is None or link.backup_fingerprint is not None:
+    return link
+  migrated = migrate_legacy_backup(
+    BackupRecord(link.backup, link.backup_fingerprint), repo_root / link.backup
+  )
+  return LockedLink(
+    destination=link.destination,
+    target=link.target,
+    provider=link.provider,
+    backup=migrated.path if migrated else None,
+    backup_fingerprint=migrated.fingerprint if migrated else None,
+  )
+
+
 def write_text(
   repo_root: Path,
   destination: Path,
@@ -1139,6 +1207,7 @@ def write_text(
     else:
       destination.rename(backup)
       operation_log.add(f"backed up {relative(repo_root, destination)} -> {backup_rel}")
+      operation_log.created_backups.append((destination, backup))
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
     return backup_record
@@ -1188,6 +1257,7 @@ def link_path(
       operation_log.add(
         f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
+      operation_log.created_backups.append((destination, backup))
   else:
     backup_record = migrate_legacy_backup(known_backup, backup)
 

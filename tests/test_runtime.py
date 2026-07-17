@@ -610,6 +610,33 @@ def test_init_raises_when_backup_file_already_exists(
     init_runtime(Path.cwd(), ("claude",))
 
 
+def test_init_rolls_back_earlier_backup_when_a_later_entry_fails(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned claude notes\n", encoding="utf-8")
+  (tmp_path / ".claude").mkdir()
+  Path(".claude/skills").write_text("blocks the skills symlink\n", encoding="utf-8")
+  Path(".claude/skills.bak").write_text("unrelated colliding backup\n", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="backup already exists"):
+    init_runtime(Path.cwd(), ("claude",))
+
+  assert not Path("CLAUDE.md").is_symlink()
+  assert Path("CLAUDE.md").read_text(encoding="utf-8") == "human-owned claude notes\n"
+  assert not Path("CLAUDE.md.bak").exists()
+  assert not (tmp_path / ".agents" / "dotagents.lock").exists()
+
+  Path(".claude/skills.bak").unlink()
+  init_runtime(Path.cwd(), ("claude",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  claude_link = next(link for link in lock.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup == "CLAUDE.md.bak"
+  assert claude_link.backup_fingerprint is not None
+  assert Path("CLAUDE.md.bak").read_text(encoding="utf-8") == "human-owned claude notes\n"
+
+
 def test_init_global_records_rules_backup_in_lockfile(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1514,6 +1541,49 @@ def test_remove_provider_retains_skipped_changed_asset_in_lockfile(
   destinations = {a.destination for a in lock.assets}
   assert ".agents/providers/copilot/review.prompt.md" in destinations
   assert changed.exists()
+
+
+def test_remove_provider_migrates_legacy_v1_backup_on_retained_link(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude", "copilot"))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock = read_lock(lock_path)
+  downgraded_links = [
+    LockedLink(link.destination, link.target, link.provider, link.backup, None)
+    if link.destination == "CLAUDE.md"
+    else link
+    for link in lock.links
+  ]
+  write_lock(
+    lock_path,
+    lock.manifest_sha256,
+    lock.providers,
+    list(lock.assets),
+    downgraded_links,
+    skills=lock.skills,
+    skillfile_sha256=lock.skillfile_sha256,
+    rules_backup=lock.rules_backup,
+    rules_backup_fingerprint=lock.rules_backup_fingerprint,
+  )
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    encoding="utf-8",
+  )
+  downgraded_claude_link = next(
+    link for link in read_lock(lock_path).links if link.destination == "CLAUDE.md"
+  )
+  assert downgraded_claude_link.backup_fingerprint is None
+
+  remove_provider(Path.cwd(), "copilot")
+
+  migrated = read_lock(lock_path)
+  assert migrated.lockfile_version == 2
+  claude_link = next(link for link in migrated.links if link.destination == "CLAUDE.md")
+  assert claude_link.backup == "CLAUDE.md.bak"
+  assert claude_link.backup_fingerprint is not None
 
 
 def test_resolve_within_root_rejects_symlinked_parent_escape(tmp_path: Path) -> None:

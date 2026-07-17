@@ -227,7 +227,7 @@ def run_agy [
     "--sandbox"
     "--print"
     "--print-timeout"
-    (council_timeout_seconds | into string)
+    $"(council_timeout_seconds)s"
     "--log-file"
     $log_file
   ]
