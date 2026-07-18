@@ -127,10 +127,13 @@ Overrides are limited to these documented backends. Each backend has a fixed per
 | `claude`         | `claude`     | System prompt (`--system-prompt`)                    |
 | `codex`          | `codex`      | Instruction prompt (positional argument to `codex exec`) |
 | `copilot-gemini` | `gh copilot` extension, or standalone `copilot` binary | Combined prompt (no separate system-prompt channel) |
+| `agy`            | `agy`        | Combined prompt (positional argument to `agy --print`) |
 
 Any persona can run on any backend in this table. A persona is not tied to its default backend.
 
 If `gh copilot` is missing, fall back to the standalone `copilot` binary (same flags, no `gh copilot --` wrapper); if neither is present, treat it as missing per [Error Handling](#error-handling) — do not auto-install.
+
+If a Copilot invocation fails because its quota or token allowance is exhausted, reroute that persona to `agy`. Detect this from the Copilot exit status and matching quota/exhaustion text in its stderr or stdout; do not treat a successful invocation with empty stdout as quota exhaustion. Record `agy` as the backend actually used. If `agy` is unavailable or fails, treat the persona as failed unless another documented fallback applies.
 
 If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `codex` and run the same persona there. This is a backend fallback, not a persona failure. If `codex` is unavailable or fails to start, try `claude`. Only mark the persona failed after all non-Copilot fallback backends have failed.
 
@@ -262,7 +265,7 @@ For Copilot backends, build a combined input file because `gh copilot` does not 
 } > "$OUTPUT_DIR/input-<persona>"
 ```
 
-Claude and Codex personas consume the persona prompt separately from `$PROMPT_FILE`. Copilot personas consume their combined input file.
+Claude and Codex personas consume the persona prompt separately from `$PROMPT_FILE`. Copilot and Agy personas consume their combined input file.
 
 Do not re-run `review-code`.
 
@@ -356,9 +359,26 @@ if [ $? -eq 0 ]; then
 fi
 ```
 
+If the Copilot process exits nonzero and its stdout or `pragmatist.stderr` indicates exhausted quota or tokens, run the same combined prompt through Agy:
+
+```bash
+(
+  cd "$REVIEWER_CWD" && \
+  agy --sandbox --print --print-timeout 600 \
+    --log-file "$OUTPUT_DIR/pragmatist-agy.log" \
+    "$(cat "$OUTPUT_DIR/input-pragmatist")" \
+    > "$OUTPUT_DIR/audit-output-NN" \
+    2> "$OUTPUT_DIR/pragmatist-agy.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "pragmatist" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
+```
+
 An exit code of 0 with empty stdout is a valid result: the persona found nothing. A nonzero exit code is always a failure, regardless of what was written to stdout — never report it as "no findings." Read the matching `.stderr` file to report or diagnose the failure.
 
-If a persona is assigned or rerouted to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt, `codex` → instruction prompt, `copilot-gemini` → combined prompt).
+If a persona is assigned or rerouted to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt, `codex` → instruction prompt, `copilot-gemini` → combined prompt, `agy` → combined positional prompt).
 
 ## Execution Quorum
 
@@ -596,10 +616,12 @@ If aggregation fails:
 | No changes to review            | Stop and report that there are no changes to audit (uncommitted, or relative to `$BASE_REF`). |
 | `gh: command not found`         | Tell user: `brew install gh && gh extension install github/gh-copilot`  |
 | `gh copilot` missing            | Tell user: `gh extension install github/gh-copilot`                     |
+| `agy: command not found`        | Tell user to install or enable the Agy CLI.                            |
 | `claude: command not found`     | Tell user to install Claude Code.                                       |
 | `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
 | Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If it still fails, treat as a genuine failure and report the exact startup error from `auditor.stderr` — do not retry inside the repo root. |
 | Copilot prompt exceeds limit   | Reroute that persona to `codex`, then `claude` if needed. Treat as failed only if every non-Copilot fallback fails. |
+| Copilot quota exhausted        | Reroute that persona to `agy`. Treat it as failed if Agy is unavailable or exits nonzero. |
 | Reviewer timeout                | Exclude reviewer; continue if quorum remains.                           |
 | Reviewer exits nonzero          | Treat as failed regardless of stdout content; report exit code and stderr.|
 | Fewer than 2 successful reviews | Abort adversarial audit.                                                |
