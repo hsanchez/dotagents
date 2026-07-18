@@ -85,19 +85,74 @@ def sha256_file(path: Path) -> str:
   return digest.hexdigest()
 
 
+def _update_with_field(digest: hashlib._Hash, data: bytes) -> None:
+  """Feed a length-prefixed field into `digest`.
+
+  A delimiter byte (even a real NUL/newline) is ambiguous when a field's own content can
+  contain that same byte — a crafted file name or file content could then make two
+  structurally different trees hash identically. Length-prefixing every field removes that
+  ambiguity regardless of what bytes the field holds.
+  """
+  digest.update(len(data).to_bytes(8, "big"))
+  digest.update(data)
+
+
+def directory_fingerprint(path: Path) -> str:
+  """Return a deterministic fingerprint of a directory tree.
+
+  Raises:
+    DotagentsError: if the tree contains an unsupported special file or cannot be read.
+  """
+  digest = hashlib.sha256()
+
+  def visit(current_path: Path, relative_path: Path) -> None:
+    try:
+      entries = sorted(os.scandir(current_path), key=lambda entry: entry.name)
+    except OSError as exc:
+      raise DotagentsError(f"cannot fingerprint directory: {current_path}") from exc
+
+    for entry in entries:
+      entry_path = current_path / entry.name
+      entry_relative_path = relative_path / entry.name
+      encoded_name = os.fsencode(entry_relative_path)
+      try:
+        if entry.is_symlink():
+          _update_with_field(digest, b"symlink")
+          _update_with_field(digest, encoded_name)
+          _update_with_field(digest, os.fsencode(os.readlink(entry_path)))
+        elif entry.is_dir(follow_symlinks=False):
+          _update_with_field(digest, b"directory")
+          _update_with_field(digest, encoded_name)
+          visit(entry_path, entry_relative_path)
+        elif entry.is_file(follow_symlinks=False):
+          _update_with_field(digest, b"file")
+          _update_with_field(digest, encoded_name)
+          _update_with_field(digest, sha256_file(entry_path).encode("ascii"))
+        else:
+          raise DotagentsError(f"cannot fingerprint special file: {entry_path}")
+      except OSError as exc:
+        raise DotagentsError(f"cannot fingerprint directory: {entry_path}") from exc
+
+  visit(path, Path())
+  return f"directory:sha256:{digest.hexdigest()}"
+
+
 def backup_fingerprint(path: Path) -> str:
   """Return a fingerprint identifying `path`'s current content or symlink target.
 
   Used to detect whether a recorded backup was swapped for something else between
   creation and restoration (e.g. a symlink substituted for the original backup).
 
+  Directories use a deterministic recursive content fingerprint. FIFOs and other
+  non-regular entries are rejected before they can be opened.
+
   Raises:
-    DotagentsError: if `path` is neither a symlink nor a regular file — a directory or
-      FIFO would raise an unhelpful `IsADirectoryError` from `sha256_file`, or block
-      indefinitely waiting for a writer.
+    DotagentsError: if `path` is neither a symlink, directory, nor regular file.
   """
   if path.is_symlink():
     return f"symlink:{os.readlink(path)}"
+  if path.is_dir():
+    return directory_fingerprint(path)
   if not path.is_file():
     raise DotagentsError(f"cannot fingerprint non-regular file: {path}")
   return f"sha256:{sha256_file(path)}"

@@ -226,6 +226,7 @@ def run_agy [
   run_timed_backend $prompt $output_file "agy" [
     "--sandbox"
     "--print"
+    $prompt
     "--print-timeout"
     $"(council_timeout_seconds)s"
     "--log-file"
@@ -289,8 +290,15 @@ def run_timed_backend [
     | complete
   )
   if $completed.exit_code == 0 {
-    $completed.stdout | save --force $output_file
-    return { success: true, error: "" }
+    try {
+      $completed.stdout | save --force $output_file
+      return { success: true, error: "" }
+    } catch {|err|
+      return {
+        success: false,
+        error: ($"could not write ($output_file): " + ($err.msg | default "write failed"))
+      }
+    }
   }
 
   let detail = ($completed.stderr | str trim)

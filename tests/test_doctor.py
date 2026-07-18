@@ -366,4 +366,21 @@ def test_doctor_prek_ok_when_binary_and_config_present(
   result = doctor(Path.cwd())
 
   assert result.passed
+
+
+def test_doctor_warns_when_council_nushell_is_missing(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  def missing_nushell(command: str) -> str | None:
+    return None if command == "nu" else "/bin/tool"
+
+  monkeypatch.setattr("dotagents.doctor.shutil.which", missing_nushell)
+
+  result = doctor(Path.cwd())
+
+  assert result.passed
+  assert any(line.startswith("council: Nushell missing") for line in result.lines)
   assert not any(line.startswith("prek:") for line in result.lines)

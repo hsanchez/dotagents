@@ -18,14 +18,19 @@ from dotagents.lockfile import (
 )
 from dotagents.manifest import SyncEntry
 from dotagents.runtime import (
+  BackupRecord,
   OperationLog,
   add_provider,
   build_context,
   capability_compiled_groups,
+  copy_file,
   init_runtime,
+  migrate_legacy_backup,
+  remove_locked_asset,
   remove_provider,
   resolve_within_root,
   restore_backup,
+  rollback_created_backups,
   runtime_destination,
   sync_existing,
   uninstall_existing,
@@ -575,6 +580,31 @@ def test_init_records_backup_path_in_lockfile(
   assert claude_link.backup == "CLAUDE.md.bak"
 
 
+def test_init_backs_up_pre_existing_directory_before_linking(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  skills = tmp_path / ".claude" / "skills"
+  skills.mkdir(parents=True)
+  (skills / "user-skill.md").write_text("user-owned\n", encoding="utf-8")
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  assert (tmp_path / ".claude" / "skills").is_symlink()
+  assert (tmp_path / ".claude" / "skills.bak" / "user-skill.md").read_text(
+    encoding="utf-8"
+  ) == "user-owned\n"
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  skills_link = next(link for link in lock.links if link.destination == ".claude/skills")
+  assert skills_link.backup_fingerprint == backup_fingerprint(tmp_path / ".claude" / "skills.bak")
+
+  uninstall_existing(Path.cwd())
+
+  assert (tmp_path / ".claude" / "skills" / "user-skill.md").read_text(
+    encoding="utf-8"
+  ) == "user-owned\n"
+
+
 def test_uninstall_restores_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.chdir(tmp_path)
   Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
@@ -866,6 +896,22 @@ def test_uninstall_skips_restoring_link_backup_with_tampered_fingerprint(
   assert any("fingerprint mismatch" in line for line in operation_log.lines)
 
 
+def test_uninstall_skips_external_symlink_for_locked_asset(
+  tmp_path: Path,
+) -> None:
+  outside = tmp_path / "outside.txt"
+  outside.write_text("outside\n", encoding="utf-8")
+  asset = tmp_path / "managed.txt"
+  asset.symlink_to(outside)
+  operation_log = OperationLog()
+
+  removed = remove_locked_asset(tmp_path, asset, "unused", operation_log)
+
+  assert not removed
+  assert asset.is_symlink()
+  assert any("skip unexpected managed.txt" in line for line in operation_log.lines)
+
+
 def test_uninstall_skips_restoring_rules_backup_with_tampered_fingerprint(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -910,6 +956,147 @@ def test_uninstall_rejects_directory_swapped_for_link_backup(
   assert backup.is_dir()
   assert not (tmp_path / "CLAUDE.md").exists()
   assert any("not a file or symlink" in line for line in operation_log.lines)
+
+
+def test_restore_backup_accepts_directory_created_as_a_backup(
+  tmp_path: Path,
+) -> None:
+  destination = tmp_path / "skills"
+  backup_path = tmp_path / "skills.bak"
+  backup_path.mkdir()
+  (backup_path / "user-skill.md").write_text("payload", encoding="utf-8")
+  operation_log = OperationLog()
+  expected_fingerprint = backup_fingerprint(backup_path)
+
+  restore_backup(tmp_path, backup_path, destination, operation_log, expected_fingerprint)
+
+  assert destination.is_dir()
+  assert (destination / "user-skill.md").read_text(encoding="utf-8") == "payload"
+
+
+def test_restore_backup_skips_changed_directory_backup(tmp_path: Path) -> None:
+  destination = tmp_path / "skills"
+  backup_path = tmp_path / "skills.bak"
+  backup_path.mkdir()
+  (backup_path / "original.md").write_text("original", encoding="utf-8")
+  expected_fingerprint = backup_fingerprint(backup_path)
+  (backup_path / "original.md").write_text("changed", encoding="utf-8")
+  operation_log = OperationLog()
+
+  restore_backup(tmp_path, backup_path, destination, operation_log, expected_fingerprint)
+
+  assert backup_path.is_dir()
+  assert not destination.exists()
+  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+
+
+def test_restore_backup_rechecks_fingerprint_immediately_before_rename(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Simulates a race: the backup is swapped after the first fingerprint check passes but
+  before the rename. The second (pre-rename) check must catch the swap rather than trusting
+  the now-stale first result.
+  """
+  destination = tmp_path / "CLAUDE.md"
+  backup_path = tmp_path / "CLAUDE.md.bak"
+  backup_path.write_text("original content\n", encoding="utf-8")
+  expected_fingerprint = backup_fingerprint(backup_path)
+  operation_log = OperationLog()
+
+  real_backup_fingerprint = backup_fingerprint
+  call_count = 0
+
+  def fingerprint_and_swap_after_first_call(path: Path) -> str:
+    nonlocal call_count
+    call_count += 1
+    result = real_backup_fingerprint(path)
+    if call_count == 1:
+      path.write_text("swapped content\n", encoding="utf-8")
+    return result
+
+  monkeypatch.setattr(runtime_module, "backup_fingerprint", fingerprint_and_swap_after_first_call)
+
+  restore_backup(tmp_path, backup_path, destination, operation_log, expected_fingerprint)
+
+  assert call_count == 2
+  assert not destination.exists()
+  assert backup_path.read_text(encoding="utf-8") == "swapped content\n"
+  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+
+
+def test_legacy_backup_migration_rejects_symlinked_parent_escape(tmp_path: Path) -> None:
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  (outside / "backup").write_text("outside", encoding="utf-8")
+  root = tmp_path / "root"
+  root.mkdir()
+  (root / "escape").symlink_to(outside, target_is_directory=True)
+
+  with pytest.raises(DotagentsError, match="path escapes root via symlink"):
+    migrate_legacy_backup(
+      root,
+      BackupRecord("escape/backup", None),
+      root / "escape" / "backup",
+    )
+
+
+def test_legacy_backup_migration_preserves_directory_backup(tmp_path: Path) -> None:
+  backup_path = tmp_path / "skills.bak"
+  backup_path.mkdir()
+  (backup_path / "user-skill.md").write_text("user-owned", encoding="utf-8")
+
+  migrated = migrate_legacy_backup(
+    tmp_path,
+    BackupRecord("skills.bak", None),
+    backup_path,
+  )
+
+  assert migrated is not None
+  assert migrated.path == "skills.bak"
+  assert migrated.fingerprint == backup_fingerprint(backup_path)
+
+
+def test_copy_file_rejects_symlinked_destination_parent_escape(tmp_path: Path) -> None:
+  root = tmp_path / "root"
+  root.mkdir()
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  (root / "escape").symlink_to(outside, target_is_directory=True)
+  source = root / "source.txt"
+  source.write_text("managed", encoding="utf-8")
+  operation_log = OperationLog()
+
+  with pytest.raises(DotagentsError, match="path escapes root via symlink"):
+    copy_file(root, source, root / "escape" / "destination.txt", operation_log)
+
+
+def test_rollback_continues_after_one_backup_failure(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  first_destination = tmp_path / "first"
+  first_backup = tmp_path / "first.bak"
+  first_backup.write_text("first", encoding="utf-8")
+  second_destination = tmp_path / "second"
+  second_backup = tmp_path / "second.bak"
+  second_backup.write_text("second", encoding="utf-8")
+  operation_log = OperationLog()
+  operation_log.created_backups.extend(
+    [(first_destination, first_backup), (second_destination, second_backup)]
+  )
+  original_rename = Path.rename
+
+  def fail_second_backup(self: Path, target: Path) -> Path:
+    if self == second_backup:
+      raise OSError("simulated rollback failure")
+    return original_rename(self, target)
+
+  monkeypatch.setattr(Path, "rename", fail_second_backup)
+
+  rollback_created_backups(tmp_path, operation_log)
+
+  assert first_destination.read_text(encoding="utf-8") == "first"
+  assert second_backup.read_text(encoding="utf-8") == "second"
+  assert any("rollback failed second.bak" in line for line in operation_log.lines)
 
 
 def test_sync_repairs_missing_provider_link(

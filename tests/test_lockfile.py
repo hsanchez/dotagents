@@ -7,6 +7,7 @@ from dotagents.lockfile import (
   LockedAsset,
   LockedLink,
   backup_fingerprint,
+  directory_fingerprint,
   read_lock,
   sha256_file,
   write_lock,
@@ -111,6 +112,48 @@ def test_backup_fingerprint_reads_symlink_target(tmp_path: Path) -> None:
   link.symlink_to(target)
 
   assert backup_fingerprint(link) == f"symlink:{target}"
+
+
+def test_directory_fingerprint_stable_for_unchanged_tree(tmp_path: Path) -> None:
+  tree = tmp_path / "tree"
+  (tree / "sub").mkdir(parents=True)
+  (tree / "sub" / "file.txt").write_text("content", encoding="utf-8")
+
+  assert directory_fingerprint(tree) == directory_fingerprint(tree)
+
+
+def test_directory_fingerprint_changes_when_file_content_changes(tmp_path: Path) -> None:
+  tree = tmp_path / "tree"
+  tree.mkdir()
+  target = tree / "file.txt"
+  target.write_text("before", encoding="utf-8")
+  before = directory_fingerprint(tree)
+
+  target.write_text("after", encoding="utf-8")
+
+  assert directory_fingerprint(tree) != before
+
+
+def test_directory_fingerprint_distinguishes_differently_structured_trees_with_crafted_content(
+  tmp_path: Path,
+) -> None:
+  """A single file whose content is crafted to reproduce the exact byte sequence the fixed
+  bug (literal `\\0`/`\\n` character pairs, not real delimiter bytes, used as a record
+  separator) previously produced for two separate files — must not collide with a tree that
+  actually has that second file. Confirms fields are length-prefixed rather than
+  delimiter-terminated; verified by reverting to the pre-fix implementation and confirming
+  this same content does produce identical byte streams (and thus identical hashes) there.
+  """
+  single = tmp_path / "single"
+  single.mkdir()
+  (single / "onlyfile").write_bytes(b"hello\\nfile\\0other\\0world")
+
+  split = tmp_path / "split"
+  split.mkdir()
+  (split / "onlyfile").write_bytes(b"hello")
+  (split / "other").write_bytes(b"world")
+
+  assert directory_fingerprint(single) != directory_fingerprint(split)
 
 
 @pytest.mark.parametrize(

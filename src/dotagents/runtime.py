@@ -377,6 +377,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       )
     ]
     rules_backup_record = migrate_legacy_backup(
+      root,
       BackupRecord(current_lock.rules_backup, current_lock.rules_backup_fingerprint)
       if current_lock.rules_backup
       else None,
@@ -400,7 +401,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   return operation_log
 
 
-def rollback_created_backups(operation_log: OperationLog) -> None:
+def rollback_created_backups(repo_root: Path, operation_log: OperationLog) -> None:
   """Undo backups created earlier in a failed `sync_runtime` call.
 
   This is deliberately narrow: it undoes backup renames only, not every mutation
@@ -421,9 +422,12 @@ def rollback_created_backups(operation_log: OperationLog) -> None:
   for destination, backup in reversed(operation_log.created_backups):
     if not backup.exists(follow_symlinks=False):
       continue
-    if destination.exists() or destination.is_symlink():
-      destination.unlink()
-    backup.rename(destination)
+    try:
+      if destination.exists() or destination.is_symlink():
+        destination.unlink()
+      backup.rename(destination)
+    except OSError as exc:
+      operation_log.add(f"rollback failed {relative(repo_root, backup)}: {exc}")
 
 
 def sync_runtime(
@@ -434,7 +438,7 @@ def sync_runtime(
     _sync_runtime_body(runtime_context, dry_run, locked, operation_log)
   except Exception:
     if not dry_run:
-      rollback_created_backups(operation_log)
+      rollback_created_backups(runtime_context.repo_root, operation_log)
     raise
   return operation_log
 
@@ -1104,6 +1108,11 @@ def copy_path(
 def copy_file(
   repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
 ) -> None:
+  resolve_parent_within_root(repo_root, destination)
+  if destination.is_symlink():
+    raise DotagentsError(
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
+    )
   if (
     destination.exists()
     and destination.is_file()
@@ -1111,10 +1120,6 @@ def copy_file(
   ):
     operation_log.add(f"ok {relative(repo_root, destination)}")
     return
-  if destination.exists() and destination.is_symlink():
-    raise DotagentsError(
-      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
-    )
   if operation_log.dry_run:
     operation_log.add(f"would copy {relative(repo_root, destination)}")
     return
@@ -1124,7 +1129,7 @@ def copy_file(
 
 
 def migrate_legacy_backup(
-  known_backup: BackupRecord | None, backup_path: Path
+  repo_root: Path, known_backup: BackupRecord | None, backup_path: Path
 ) -> BackupRecord | None:
   """Upgrade a fingerprint-less backup record (carried forward from a v1 lock) to a real
   fingerprint computed from `backup_path`'s current on-disk state, or drop it if the backup
@@ -1136,7 +1141,8 @@ def migrate_legacy_backup(
   """
   if known_backup is None or known_backup.fingerprint is not None:
     return known_backup
-  if backup_path.is_symlink() or backup_path.is_file():
+  resolve_parent_within_root(repo_root, backup_path)
+  if backup_path.is_symlink() or backup_path.is_file() or backup_path.is_dir():
     return BackupRecord(known_backup.path, backup_fingerprint(backup_path))
   return None
 
@@ -1152,7 +1158,7 @@ def migrate_legacy_link_backup(repo_root: Path, link: LockedLink) -> LockedLink:
   if link.backup is None or link.backup_fingerprint is not None:
     return link
   migrated = migrate_legacy_backup(
-    BackupRecord(link.backup, link.backup_fingerprint), repo_root / link.backup
+    repo_root, BackupRecord(link.backup, link.backup_fingerprint), repo_root / link.backup
   )
   return LockedLink(
     destination=link.destination,
@@ -1182,7 +1188,12 @@ def write_text(
       backup path (conflict must be resolved manually).
   """
   backup = destination.parent / (destination.name + ".bak")
-  known_backup = migrate_legacy_backup(known_backup, backup)
+  resolve_parent_within_root(repo_root, destination)
+  known_backup = migrate_legacy_backup(repo_root, known_backup, backup)
+  if destination.is_symlink():
+    raise DotagentsError(
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
+    )
   if (
     destination.exists()
     and destination.is_file()
@@ -1190,10 +1201,6 @@ def write_text(
   ):
     operation_log.add(f"ok {relative(repo_root, destination)}")
     return known_backup
-  if destination.exists() and destination.is_symlink():
-    raise DotagentsError(
-      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
-    )
   backup_record = known_backup
   backup_rel = relative(repo_root, backup)
   already_tracked = known_backup is not None and known_backup.path == backup_rel
@@ -1232,6 +1239,7 @@ def link_path(
   Raises:
     DotagentsError: if a `.bak` file already exists at the backup path (conflict must be resolved manually).
   """
+  resolve_parent_within_root(repo_root, destination)
   backup = destination.parent / (destination.name + ".bak")
   target = os.path.relpath(source, destination.parent)
   already_linked = destination.is_symlink() and os.readlink(destination) == target
@@ -1259,7 +1267,7 @@ def link_path(
       )
       operation_log.created_backups.append((destination, backup))
   else:
-    backup_record = migrate_legacy_backup(known_backup, backup)
+    backup_record = migrate_legacy_backup(repo_root, known_backup, backup)
 
   if already_linked:
     operation_log.add(f"ok {relative(repo_root, destination)}")
@@ -1362,8 +1370,8 @@ def restore_backup(
 ) -> None:
   """Rename `backup_path` onto `destination`.
 
-  Skips (with a log entry, no exception) if the backup is missing, not a regular file or
-  symlink, or its fingerprint doesn't match `expected_fingerprint`.
+  Skips (with a log entry, no exception) if the backup is missing, not a regular file,
+  directory, or symlink, or its fingerprint doesn't match `expected_fingerprint`.
 
   Raises:
     DotagentsError: if `backup_path` or `destination`'s parent directory resolves outside
@@ -1375,16 +1383,29 @@ def restore_backup(
     operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
     return
   if not backup_path.is_symlink() and not backup_path.is_file():
-    # A directory or FIFO at the backup path — swapped in after backup creation, or a
-    # legacy backup with no fingerprint to check. Never rename an untrusted non-regular
-    # entry onto a managed destination, and never let backup_fingerprint() below open it
-    # (IsADirectoryError, or a hang on a FIFO with no writer).
-    operation_log.add(
-      f"backup is not a file or symlink {relative(repo_root, backup_path)}; "
-      "skipped restore, resolve manually"
+    if (
+      backup_path.is_dir()
+      and expected_fingerprint
+      and expected_fingerprint.startswith("directory:")
+    ):
+      pass
+    else:
+      # A directory or FIFO at the backup path — swapped in after backup creation, or a
+      # legacy backup with no fingerprint to check. Never rename an untrusted non-regular
+      # entry onto a managed destination, and never let backup_fingerprint() below open it
+      # (IsADirectoryError, or a hang on a FIFO with no writer).
+      operation_log.add(
+        f"backup is not a file or symlink {relative(repo_root, backup_path)}; "
+        "skipped restore, resolve manually"
+      )
+      return
+
+  def fingerprint_mismatch() -> bool:
+    return (
+      expected_fingerprint is not None and backup_fingerprint(backup_path) != expected_fingerprint
     )
-    return
-  if expected_fingerprint is not None and backup_fingerprint(backup_path) != expected_fingerprint:
+
+  if fingerprint_mismatch():
     operation_log.add(
       f"backup fingerprint mismatch {relative(repo_root, backup_path)}; "
       "skipped restore, resolve manually"
@@ -1393,6 +1414,17 @@ def restore_backup(
   if operation_log.dry_run:
     operation_log.add(
       f"would restore {relative(repo_root, backup_path)} -> {relative(repo_root, destination)}"
+    )
+    return
+  # Re-verify immediately before the mutation. Directory fingerprinting requires a full
+  # recursive walk, which widens the window between "checked" and "renamed" compared to a
+  # single file's hash — this doesn't eliminate the race (no OS-level atomicity is used, and
+  # the same race exists between this check and the rename call below), but shrinks it to
+  # the minimum achievable without one.
+  if fingerprint_mismatch():
+    operation_log.add(
+      f"backup fingerprint mismatch {relative(repo_root, backup_path)}; "
+      "skipped restore, resolve manually"
     )
     return
   backup_path.rename(destination)
@@ -1426,7 +1458,7 @@ def remove_locked_asset(
   Raises:
     DotagentsError: if `path` resolves outside `repo_root`.
   """
-  resolve_within_root(repo_root, path)
+  resolve_parent_within_root(repo_root, path)
   display = relative(repo_root, path)
   if not path.exists() and not path.is_symlink():
     operation_log.add(f"missing {display}")
