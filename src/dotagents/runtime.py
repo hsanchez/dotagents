@@ -456,7 +456,10 @@ def rollback_created_backups(repo_root: Path, operation_log: OperationLog) -> No
       continue
     if moved_aside and aside is not None:
       try:
-        aside.unlink()
+        if aside.is_symlink() or not aside.is_dir():
+          aside.unlink()
+        else:
+          shutil.rmtree(aside)
       except OSError as cleanup_exc:
         # The restore itself succeeded — `destination` holds the correct content — but the
         # discarded pre-rollback content is now stranded at `aside` instead of removed. Still

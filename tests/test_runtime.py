@@ -1132,6 +1132,24 @@ def test_rollback_preserves_destination_when_restore_fails(
   assert backup.read_text(encoding="utf-8") == "pre-sync content"
 
 
+def test_rollback_restores_directory_backup_and_removes_directory_aside(tmp_path: Path) -> None:
+  destination = tmp_path / "managed"
+  destination.mkdir()
+  (destination / "post-sync.txt").write_text("post-sync", encoding="utf-8")
+  backup = tmp_path / "managed.bak"
+  backup.mkdir()
+  (backup / "pre-sync.txt").write_text("pre-sync", encoding="utf-8")
+  operation_log = OperationLog()
+  operation_log.created_backups.append((destination, backup))
+
+  rollback_created_backups(tmp_path, operation_log)
+
+  assert (destination / "pre-sync.txt").read_text(encoding="utf-8") == "pre-sync"
+  assert not (destination / "post-sync.txt").exists()
+  assert not backup.exists()
+  assert not list(tmp_path.glob("managed.rollback-*"))
+
+
 def test_rollback_surfaces_leftover_aside_cleanup_failure(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
