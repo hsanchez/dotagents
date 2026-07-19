@@ -32,6 +32,8 @@ from dotagents.runtime import (
   capability_index_payload,
   compiled_group_statuses,
   init_runtime,
+  is_global_root,
+  relative,
   remove_provider,
   sync_existing,
   uninstall_existing,
@@ -95,6 +97,54 @@ GitHubRefOption = Annotated[
   str,
   typer.Option("--ref", help="Full 40-character commit SHA to vendor."),
 ]
+RootOption = Annotated[
+  Path | None,
+  typer.Option(
+    "--root", "-C", help="Root directory to operate against. Defaults to the current directory."
+  ),
+]
+GlobalOption = Annotated[
+  bool,
+  typer.Option("--global", help='Shorthand for --root "$HOME".'),
+]
+YesOption = Annotated[
+  bool,
+  typer.Option(
+    "--yes", "-y", help="Skip confirmation before replacing existing files at global scope."
+  ),
+]
+
+
+def _resolve_root(root: Path | None, global_scope: bool) -> Path:
+  if root is not None and global_scope:
+    raise DotagentsError("cannot combine --root and --global")
+  if global_scope:
+    return Path.home()
+  return root if root is not None else Path.cwd()
+
+
+def _resolve_root_or_exit(root: Path | None, global_scope: bool) -> Path:
+  try:
+    return _resolve_root(root, global_scope).resolve()
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+
+
+def _confirm_global_replacements(repo_root: Path, preview: OperationLog, assume_yes: bool) -> None:
+  if assume_yes:
+    return
+  backups = preview.planned_backups
+  if not backups:
+    return
+  console.print(
+    "[yellow]The following existing files will be backed up (.bak) and replaced:[/yellow]"
+  )
+  for destination, backup in backups:
+    console.print(
+      f"  would back up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+    )
+  if not typer.confirm("Proceed with backup and replace at global scope?"):
+    raise DotagentsError("aborted: confirmation declined for global install")
 
 
 @app.command()
@@ -108,28 +158,36 @@ def init(
   ),
   locked: bool = typer.Option(False, "--locked", help="Require Skillfile and lockfile to match."),
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
+  root: RootOption = None,
+  global_scope: GlobalOption = False,
+  assume_yes: YesOption = False,
 ) -> None:
   """Initialize the managed .agents runtime."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
     if with_preset and not with_skills:
       raise DotagentsError("preset selection requires --with")
     if locked and with_skills:
       raise DotagentsError("cannot combine --locked and --with")
-    missing_skillfile = not skillfile_path(Path.cwd()).exists()
+    missing_skillfile = not skillfile_path(repo_root).exists()
     should_select = with_skills or (not locked and not dry_run and missing_skillfile)
     if should_select and with_preset:
       if dry_run:
         raise DotagentsError("cannot select skills during a dry run")
-      write_preset_skillfile(Path.cwd(), asset_root(), with_preset)
+      write_preset_skillfile(repo_root, asset_root(), with_preset)
     elif with_skills:
       if dry_run:
         raise DotagentsError("cannot select skills during a dry run")
-      edit_skillfile(Path.cwd(), asset_root())
+      edit_skillfile(repo_root, asset_root())
     elif should_select and missing_skillfile:
       if dry_run:
         raise DotagentsError("cannot select skills during a dry run")
-      write_preset_skillfile(Path.cwd(), asset_root(), DEFAULT_PRESET)
-    operation_log = init_runtime(Path.cwd(), tuple(providers or ()), dry_run=dry_run, locked=locked)
+      write_preset_skillfile(repo_root, asset_root(), DEFAULT_PRESET)
+    resolved_providers = tuple(providers or ())
+    if not dry_run and is_global_root(repo_root):
+      preview = init_runtime(repo_root, resolved_providers, dry_run=True, locked=locked)
+      _confirm_global_replacements(repo_root, preview, assume_yes)
+    operation_log = init_runtime(repo_root, resolved_providers, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)
@@ -141,9 +199,10 @@ def init(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(root: RootOption = None, global_scope: GlobalOption = False) -> None:
   """Validate the dotagents runtime."""
-  result = run_doctor(Path.cwd())
+  repo_root = _resolve_root_or_exit(root, global_scope)
+  result = run_doctor(repo_root)
   for line in result.lines:
     console.print(line)
   if not result.passed:
@@ -154,10 +213,17 @@ def doctor() -> None:
 def sync(
   locked: bool = typer.Option(False, "--locked", help="Require Skillfile and lockfile to match."),
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
+  root: RootOption = None,
+  global_scope: GlobalOption = False,
+  assume_yes: YesOption = False,
 ) -> None:
   """Repair generated runtime state from current configuration."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    operation_log = sync_existing(Path.cwd(), dry_run=dry_run, locked=locked)
+    if not dry_run and is_global_root(repo_root):
+      preview = sync_existing(repo_root, dry_run=True, locked=locked)
+      _confirm_global_replacements(repo_root, preview, assume_yes)
+    operation_log = sync_existing(repo_root, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)
@@ -171,10 +237,17 @@ def sync(
 @app.command()
 def update(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
+  root: RootOption = None,
+  global_scope: GlobalOption = False,
+  assume_yes: YesOption = False,
 ) -> None:
   """Refresh runtime assets after a dotagents dependency update."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    operation_log = update_existing(Path.cwd(), dry_run=dry_run)
+    if not dry_run and is_global_root(repo_root):
+      preview = update_existing(repo_root, dry_run=True)
+      _confirm_global_replacements(repo_root, preview, assume_yes)
+    operation_log = update_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)
@@ -188,10 +261,13 @@ def update(
 @app.command()
 def uninstall(
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned removals without writing."),
+  root: RootOption = None,
+  global_scope: GlobalOption = False,
 ) -> None:
   """Remove managed dotagents runtime output."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
   try:
-    operation_log = uninstall_existing(Path.cwd(), dry_run=dry_run)
+    operation_log = uninstall_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
   _run_log(operation_log)
@@ -203,13 +279,14 @@ def uninstall(
 
 
 @app.command()
-def status() -> None:
+def status(root: RootOption = None, global_scope: GlobalOption = False) -> None:
   """Show a short runtime summary."""
-  runtime = Path.cwd() / ".agents"
+  repo_root = _resolve_root_or_exit(root, global_scope)
+  runtime = repo_root / ".agents"
   console.print(f"dotagents package: {package_version()}")
   console.print(f"runtime: {'present' if runtime.exists() else 'missing'}")
   console.print(f"lockfile: {'present' if (runtime / 'dotagents.lock').exists() else 'missing'}")
-  console.print(f"local rules: {'yes' if (Path.cwd() / '.rules.local').exists() else 'no'}")
+  console.print(f"local rules: {'yes' if (repo_root / '.rules.local').exists() else 'no'}")
 
 
 @app.command("list")

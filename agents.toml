@@ -3,22 +3,27 @@ version = 1
 [[sync]]
 source = "scripts/simplify-code"
 destination = "scripts/simplify-code"
+always_copy = true
 
 [[sync]]
 source = "scripts/gh-issue"
 destination = "scripts/gh-issue"
+always_copy = true
 
 [[sync]]
 source = "scripts/memlog"
 destination = "scripts/memlog"
+always_copy = true
 
 [[sync]]
 source = "scripts/review-branch"
 destination = "scripts/review-branch"
+always_copy = true
 
 [[sync]]
 source = "scripts/review-code"
 destination = "scripts/review-code"
+always_copy = true
 
 [[sync]]
 source = ".rules"
@@ -29,9 +34,10 @@ destination = "AGENTS.md"
 [providers.claude]
 sync = [
   { source = ".rules", destination = "CLAUDE.md" },
-  { source = "scripts", destination = ".claude/commands" },
-  { source = "skills", destination = ".claude/skills" },
-  { source = "claude/settings.json", destination = ".claude/settings.json" },
+  { source = ".rules", destination = ".claude/CLAUDE.md", scope = "global" },
+  { source = "scripts", destination = ".claude/commands", scope = "both" },
+  { source = "skills", destination = ".claude/skills", scope = "both" },
+  { source = "claude/settings.json", destination = ".claude/settings.json", scope = "both" },
   { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".claude/hooks/block-dangerous-git", skill = "git-guardrails" }
 ]
 
@@ -47,6 +53,7 @@ sync = [
 [providers.gemini]
 sync = [
   { source = ".rules", destination = "GEMINI.md" },
+  { source = ".rules", destination = ".gemini/GEMINI.md", scope = "global" },
   { source = "gemini/settings.json", destination = ".gemini/settings.json" }
 ]
 

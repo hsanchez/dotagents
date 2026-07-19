@@ -52,6 +52,107 @@ uv run dotagents doctor
 
 `dotagents init` initializes the harness for the specified providers, writes a `Skillfile` with the default skill preset, and creates the `.agents/` runtime directory.
 
+## Install Globally
+
+In addition to the per-repo dev-dependency flow above, dotagents supports a
+dotfiles-style global install against `$HOME`, coexisting independently with
+any per-repo installs on the same machine.
+
+Bootstrap on a fresh machine with `git` installed:
+
+```bash
+git clone --depth 1 https://github.com/hsanchez/dotagents ~/.config/dotagents
+~/.config/dotagents/bin/dot install
+```
+
+`bin/dot` is a thin shell shim: it reuses `uv` if already on `$PATH`, otherwise
+downloads and checksum-verifies a pinned `uv` release into a private copy
+scoped to `~/.config/dotagents/.uv` (no shell-profile mutation) — this fallback
+path additionally requires `curl` and a SHA-256 utility (`shasum` or
+`sha256sum`) — then delegates to `dotagents init --global`. To pick up later
+changes:
+
+```bash
+~/.config/dotagents/bin/dot update
+```
+
+That runs `git pull --ff-only` in `~/.config/dotagents`, then
+`dotagents update --global`. As with other `git clone`-based dotfiles tools
+(Doom Emacs, oh-my-zsh, and similar), `dot update` trusts the upstream repo
+it was cloned from — the fast-forward-only pull guards against a rewritten
+history, but not against a legitimate new commit on a compromised upstream
+account. There's no additional signature or checksum verification of pulled
+commits beyond that.
+
+If dotagents is already installed some other way (`uv tool install`, a
+per-repo checkout), the same global behavior is available directly through
+`--root`/`--global`, accepted by `init`, `sync`, `update`, `doctor`, `status`,
+and `uninstall` (not by `list`, `compile`, or `providers add`/`remove`):
+
+```bash
+uv run dotagents init --global --for claude
+uv run dotagents doctor --global
+uv run dotagents status --root ~
+```
+
+`--root <path>` targets an arbitrary directory; `--global` is shorthand for
+`--root "$HOME"`. The two cannot be combined.
+
+### Per-provider global support
+
+Not every provider has a real user-level config location, so global scope only
+applies where one is confirmed:
+
+```text
+claude    full support: rules, commands, skills, settings all apply globally
+gemini    rules file applies globally (~/.gemini/GEMINI.md); settings.json
+          stays repo-only pending a confirmed global path
+codex     repo-only pending a confirmed global config path
+copilot   repo-only — no known global/personal-instructions mechanism
+```
+
+A provider with nothing valid at global scope produces no output there rather
+than writing a meaningless file into `$HOME`.
+
+### Scripts at global scope
+
+Repo-root `scripts/*` convenience symlinks (see Managed Output below) are
+repo-scope only — `~/scripts` isn't a `$PATH` convention, and symlinking
+generic names like `review-code` into a shared `~/bin` or `~/.local/bin` risks
+collisions dotagents can't safely resolve. At global scope, the scripts still
+materialize under `~/.agents/scripts`, and `init`/`update` print:
+
+```text
+add to PATH: /Users/you/.agents/scripts
+```
+
+Add that directory to `$PATH` yourself (or from a dotfiles bootstrap script)
+to run them from anywhere.
+
+### Confirmation before replacing existing files
+
+Global `init`, `sync`, and `update` can encounter real, hand-maintained files
+at paths like `~/.claude/CLAUDE.md` — unlike a fresh repo, `$HOME` is exactly
+where such files are likely to already exist with content you care about, and
+a later `sync`/`update` can hit this just as easily as the first `init` (for
+example, after a newer dotagents version adds a file at a path that wasn't
+managed before). Before backing up and replacing anything, each of these
+three commands prints the plan and asks for confirmation at global scope:
+
+```text
+The following existing files will be backed up (.bak) and replaced:
+  would back up .claude/CLAUDE.md -> .claude/CLAUDE.md.bak
+Proceed with backup and replace at global scope? [y/N]:
+```
+
+Pass `--yes` on any of the three to skip the prompt for scripted bootstraps
+(`bin/dot install`/`bin/dot update` forward it the same way). The prompt only
+ever appears when there is something to actually back up — a routine
+`sync --global`/`update --global` with nothing new to replace stays silent.
+Repo-scope `init`/`sync`/`update` are unchanged — they keep the existing
+backup-and-hard-error-on-conflict behavior without prompting, since repo
+scaffolding rarely pre-exists with real content.
+
 ## Commands
 
 ```bash
@@ -519,6 +620,25 @@ sh tests/smoke-test
 The smoke test creates a temporary consuming repo, installs this checkout as a
 dev dependency, initializes selected providers, runs `doctor`, and verifies the
 shared dangerous-git guardrail.
+
+`bin/dot` (the global-install bootstrap) has its own smoke test:
+
+```bash
+sh tests/smoke-test-dot
+```
+
+It clones the repo into a scratch directory and runs `dot install` / `dot
+update` against a fake `$HOME`, so it never touches your real home directory
+or pulls into your working checkout. By default it only exercises the fast
+path (`uv` already on `PATH`). To also exercise the private-uv-download branch
+and the installer checksum-mismatch failure path — both of which hit the real
+network — run:
+
+```bash
+DOTAGENTS_SMOKE_TEST_UV_DOWNLOAD=1 sh tests/smoke-test-dot
+```
+
+Run this variant before a release or after touching `resolve_uv` in `bin/dot`.
 
 ## Contributing
 

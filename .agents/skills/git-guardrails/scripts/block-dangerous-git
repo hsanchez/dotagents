@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Hook adapter for blocking dangerous git operations across providers."""
+
+import json
+import re
+import shlex
+import sys
+from typing import Any
+
+_ALWAYS_BLOCK: dict[str, str] = {
+  "push": "git push requires explicit human approval",
+  "restore": "git restore discards working tree changes — use git stash to preserve them",
+}
+
+_GLOBAL_FLAGS_WITH_ARG: frozenset[str] = frozenset(
+  {
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--exec-path",
+    "--super-prefix",
+  }
+)
+
+_GLOBAL_FLAGS_SOLO: frozenset[str] = frozenset(
+  {
+    "--no-pager",
+    "--paginate",
+    "-p",
+    "--bare",
+    "--no-replace-objects",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-optional-locks",
+  }
+)
+
+_GLOBAL_FLAG_PREFIXES: tuple[str, ...] = (
+  "--git-dir=",
+  "--work-tree=",
+  "--namespace=",
+  "--exec-path=",
+  "--super-prefix=",
+)
+
+# Per-wrapper flag specs: (flags_with_arg, flags_solo, allows_env_assignments_after_flags).
+# Modelled per-tool because the same short flag means different things across wrappers
+# (e.g. -n is "non-interactive" in sudo but "adjustment" in nice).
+_WRAPPER_SPECS: dict[str, tuple[frozenset[str], frozenset[str], bool]] = {
+  "env": (
+    frozenset({"-u", "--unset"}),
+    frozenset({"-i", "-0", "--ignore-environment", "--null"}),
+    True,  # env FOO=bar git ... is valid
+  ),
+  "command": (
+    frozenset(),
+    frozenset({"-p", "-V", "-v"}),
+    False,
+  ),
+  "exec": (
+    frozenset({"-a"}),
+    frozenset({"-c", "-l"}),
+    False,
+  ),
+  "sudo": (
+    frozenset({"-C", "-D", "-g", "-h", "-p", "-R", "-r", "-t", "-T", "-u"}),
+    frozenset({"-A", "-B", "-b", "-E", "-H", "-n", "-P", "-S"}),
+    True,  # sudo VAR=val git ... is valid
+  ),
+  "nice": (
+    frozenset({"-n"}),
+    frozenset(),
+    False,
+  ),
+  "nohup": (
+    frozenset(),
+    frozenset(),
+    False,
+  ),
+}
+
+_COMMAND_PATHS: tuple[tuple[str, ...], ...] = (
+  ("tool_input", "command"),
+  ("toolInput", "command"),
+  ("input", "command"),
+  ("command",),
+)
+
+
+def _is_git(token: str) -> bool:
+  """True for 'git' or any path whose final component is 'git'."""
+  return token == "git" or token.endswith("/git")
+
+
+def _parse_git_call(segment: str) -> tuple[str, list[str]] | None:
+  try:
+    tokens = shlex.split(segment)
+  except ValueError:
+    tokens = segment.split()
+
+  i = 0
+
+  # Skip leading env var assignments (e.g. GIT_DIR=foo git ...)
+  while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+    i += 1
+
+  # Skip command wrappers using per-wrapper flag awareness
+  while i < len(tokens) and tokens[i] in _WRAPPER_SPECS:
+    flags_with_arg, _flags_solo, allows_env = _WRAPPER_SPECS[tokens[i]]
+    i += 1
+
+    while i < len(tokens) and tokens[i].startswith("-"):
+      tok = tokens[i]
+      base = tok.split("=")[0] if "=" in tok else tok
+      if base in flags_with_arg:
+        i += 1 if "=" in tok else 2  # --flag=val vs --flag val
+      else:
+        i += 1  # solo flag or unrecognised
+
+    # env and sudo allow NAME=VALUE between flags and the command
+    if allows_env:
+      while i < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i]):
+        i += 1
+
+  if i >= len(tokens) or not _is_git(tokens[i]):
+    return None
+  i += 1
+
+  # Skip global git options
+  while i < len(tokens):
+    t = tokens[i]
+    if t in _GLOBAL_FLAGS_WITH_ARG:
+      i += 2
+    elif t in _GLOBAL_FLAGS_SOLO or any(t.startswith(p) for p in _GLOBAL_FLAG_PREFIXES):
+      i += 1
+    elif t.startswith("-"):
+      i += 1
+    else:
+      break
+
+  if i >= len(tokens):
+    return None
+
+  return tokens[i], tokens[i + 1 :]
+
+
+def _short_flag(args: list[str], char: str) -> bool:
+  return any(a.startswith("-") and not a.startswith("--") and char in a for a in args)
+
+
+def _check_segment(segment: str) -> str | None:
+  # Strip shell grouping so subshells like (git reset) and $(git push) are analysed
+  segment = re.sub(r"^[\s$(]+", "", segment).rstrip(")")
+
+  result = _parse_git_call(segment.strip())
+  if result is None:
+    return None
+
+  sub, args = result
+
+  if sub in _ALWAYS_BLOCK:
+    return _ALWAYS_BLOCK[sub]
+
+  if sub == "reset":
+    if "--hard" in args:
+      return "git reset --hard discards committed work — use --soft or --mixed"
+
+  elif sub == "clean":
+    if "--force" in args or _short_flag(args, "f"):
+      return "git clean -f removes untracked files irreversibly"
+
+  elif sub == "branch":
+    if "-D" in args or _short_flag(args, "D"):
+      return "git branch -D force-deletes branches — requires explicit human approval"
+    has_delete = "--delete" in args or "-d" in args or _short_flag(args, "d")
+    has_force = "--force" in args or _short_flag(args, "f")
+    if has_delete and has_force:
+      return "git branch --delete --force force-deletes branches"
+
+  elif sub == "checkout":
+    if "--force" in args or _short_flag(args, "f"):
+      return "git checkout -f discards local changes — use git stash first"
+    if args and args[0] == ".":
+      return "git checkout . discards working tree changes"
+    if "--" in args and args.index("--") < len(args) - 1:
+      return "git checkout -- <paths> discards working tree changes"
+
+  elif sub == "switch":
+    if "--force" in args or "--discard-changes" in args or _short_flag(args, "f"):
+      return "git switch --force discards local changes — use git stash first"
+
+  return None
+
+
+def check(command: str) -> str | None:
+  for segment in re.split(r"&&|\|\||[;|\n]", command):
+    reason = _check_segment(segment)
+    if reason:
+      return reason
+  return None
+
+
+def _nested_get(payload: dict[str, Any], path: tuple[str, ...]) -> str:
+  value: Any = payload
+  for key in path:
+    if not isinstance(value, dict):
+      return ""
+    value = value.get(key)
+  return value if isinstance(value, str) else ""
+
+
+def _extract_command(payload: dict[str, Any]) -> str:
+  for path in _COMMAND_PATHS:
+    command = _nested_get(payload, path)
+    if command:
+      return command
+  return ""
+
+
+def _deny(reason: str, output_format: str) -> int:
+  if output_format == "copilot":
+    print(
+      json.dumps(
+        {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": reason,
+        }
+      )
+    )
+    return 0
+  print(reason, file=sys.stderr)
+  return 2
+
+
+def _allow(output_format: str) -> int:
+  if output_format == "copilot":
+    print("{}")
+  return 0
+
+
+def _output_format(args: list[str]) -> str:
+  if args == ["--format", "copilot"]:
+    return "copilot"
+  if args in ([], ["--format", "claude"]):
+    return "claude"
+  print("usage: block-dangerous-git [--format claude|copilot]", file=sys.stderr)
+  return "usage-error"
+
+
+def main() -> int:
+  output_format = _output_format(sys.argv[1:])
+  if output_format == "usage-error":
+    return 2
+
+  try:
+    payload = json.load(sys.stdin)
+  except (json.JSONDecodeError, ValueError) as exc:
+    return _deny(f"git-guardrails: cannot parse hook payload ({exc}) — blocking.", output_format)
+
+  if not isinstance(payload, dict):
+    return _allow(output_format)
+
+  command = _extract_command(payload)
+  if not command:
+    return _allow(output_format)
+
+  reason = check(command)
+  if reason:
+    return _deny(f"BLOCKED: {reason}.\n  Command: {command!r}", output_format)
+
+  return _allow(output_format)
+
+
+if __name__ == "__main__":
+  sys.exit(main())

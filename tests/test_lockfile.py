@@ -1,9 +1,21 @@
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import dotagents.lockfile as lockfile_module
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import LockedAsset, LockedLink, read_lock, sha256_file, write_lock
+from dotagents.lockfile import (
+  LockedAsset,
+  LockedLink,
+  backup_fingerprint,
+  directory_fingerprint,
+  read_lock,
+  sha256_file,
+  write_lock,
+)
 
 
 def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
@@ -24,7 +36,7 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
   )
   runtime_lock = read_lock(lock_path)
 
-  assert runtime_lock.lockfile_version == 1
+  assert runtime_lock.lockfile_version == 2
   assert runtime_lock.manifest_sha256 == manifest_sha256
   assert runtime_lock.providers == ("claude", "copilot")
   assert runtime_lock.skills == ("research",)
@@ -32,6 +44,198 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
   assert runtime_lock.generated_at == "2026-06-26T00:00:00+00:00"
   assert runtime_lock.assets == tuple(assets)
   assert runtime_lock.links == tuple(links)
+
+
+def test_read_lock_accepts_legacy_v1_link_backup_without_fingerprint(tmp_path: Path) -> None:
+  lock_path = tmp_path / "dotagents.lock"
+  lock_path.write_text(
+    'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n'
+    'generated_at = "now"\n[[links]]\ndestination = "CLAUDE.md"\ntarget = "y"\n'
+    'backup = "CLAUDE.md.bak"\n',
+    encoding="utf-8",
+  )
+
+  runtime_lock = read_lock(lock_path)
+
+  assert runtime_lock.links[0].backup == "CLAUDE.md.bak"
+  assert runtime_lock.links[0].backup_fingerprint is None
+
+
+def test_read_lock_accepts_legacy_v1_rules_backup_without_fingerprint(tmp_path: Path) -> None:
+  lock_path = tmp_path / "dotagents.lock"
+  lock_path.write_text(
+    'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\n'
+    'generated_at = "now"\nrules_backup = ".rules.bak"\n',
+    encoding="utf-8",
+  )
+
+  runtime_lock = read_lock(lock_path)
+
+  assert runtime_lock.rules_backup == ".rules.bak"
+  assert runtime_lock.rules_backup_fingerprint is None
+
+
+def test_write_and_read_lock_round_trips_backup_fingerprints(tmp_path: Path) -> None:
+  lock_path = tmp_path / "dotagents.lock"
+  links = [
+    LockedLink(
+      destination="CLAUDE.md",
+      target="../.rules",
+      provider="claude",
+      backup="CLAUDE.md.bak",
+      backup_fingerprint="sha256:" + "a" * 64,
+    )
+  ]
+
+  write_lock(
+    lock_path,
+    "f" * 64,
+    ("claude",),
+    [],
+    links,
+    rules_backup=".rules.bak",
+    rules_backup_fingerprint="sha256:" + "b" * 64,
+  )
+  runtime_lock = read_lock(lock_path)
+
+  assert runtime_lock.links[0].backup_fingerprint == "sha256:" + "a" * 64
+  assert runtime_lock.rules_backup_fingerprint == "sha256:" + "b" * 64
+
+
+def test_backup_fingerprint_hashes_regular_file(tmp_path: Path) -> None:
+  path = tmp_path / "file.txt"
+  path.write_text("payload", encoding="utf-8")
+
+  assert backup_fingerprint(path) == f"sha256:{sha256_file(path)}"
+
+
+def test_backup_fingerprint_reads_symlink_target(tmp_path: Path) -> None:
+  target = tmp_path / "target.txt"
+  target.write_text("content", encoding="utf-8")
+  link = tmp_path / "link.txt"
+  link.symlink_to(target)
+
+  assert backup_fingerprint(link) == f"symlink:{target}"
+
+
+def test_directory_fingerprint_stable_for_unchanged_tree(tmp_path: Path) -> None:
+  tree = tmp_path / "tree"
+  (tree / "sub").mkdir(parents=True)
+  (tree / "sub" / "file.txt").write_text("content", encoding="utf-8")
+
+  assert directory_fingerprint(tree) == directory_fingerprint(tree)
+
+
+def test_directory_fingerprint_changes_when_file_content_changes(tmp_path: Path) -> None:
+  tree = tmp_path / "tree"
+  tree.mkdir()
+  target = tree / "file.txt"
+  target.write_text("before", encoding="utf-8")
+  before = directory_fingerprint(tree)
+
+  target.write_text("after", encoding="utf-8")
+
+  assert directory_fingerprint(tree) != before
+
+
+def test_directory_fingerprint_distinguishes_differently_structured_trees_with_crafted_content(
+  tmp_path: Path,
+) -> None:
+  """A single file whose content is crafted to reproduce the exact byte sequence the fixed
+  bug (literal `\\0`/`\\n` character pairs, not real delimiter bytes, used as a record
+  separator) previously produced for two separate files — must not collide with a tree that
+  actually has that second file. Confirms fields are length-prefixed rather than
+  delimiter-terminated; verified by reverting to the pre-fix implementation and confirming
+  this same content does produce identical byte streams (and thus identical hashes) there.
+  """
+  single = tmp_path / "single"
+  single.mkdir()
+  (single / "onlyfile").write_bytes(b"hello\\nfile\\0other\\0world")
+
+  split = tmp_path / "split"
+  split.mkdir()
+  (split / "onlyfile").write_bytes(b"hello")
+  (split / "other").write_bytes(b"world")
+
+  assert directory_fingerprint(single) != directory_fingerprint(split)
+
+
+def test_directory_fingerprint_rejects_too_many_entries(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Bounds the walk against an adversarially wide directory (fan-out DoS).
+
+  `directory_fingerprint` fingerprints a pre-existing directory at a managed destination
+  before backing it up — content dotagents doesn't control, so a hostile checkout could put
+  an unbounded number of entries there. The cap is patched down instead of creating real
+  entries so the test stays fast.
+  """
+  monkeypatch.setattr(lockfile_module, "MAX_FINGERPRINT_ENTRIES", 2)
+  tree = tmp_path / "tree"
+  tree.mkdir()
+  (tree / "one.txt").write_text("a", encoding="utf-8")
+  (tree / "two.txt").write_text("b", encoding="utf-8")
+  (tree / "three.txt").write_text("c", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="exceeds max entry count"):
+    directory_fingerprint(tree)
+
+
+def test_directory_fingerprint_enforces_entry_cap_before_full_enumeration(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """The entry cap must stop enumeration before the full directory listing is consumed.
+
+  Regression test: the prior implementation called `sorted(os.scandir(current_path), ...)`
+  before the cap check in the loop below, so a directory with far more entries than the cap
+  still paid the full listing and O(n log n) sort cost before the cap ever got a chance to
+  fire — what mattered for an adversarially wide directory, not just the final error.
+  """
+  entry_cap = 3
+  monkeypatch.setattr(lockfile_module, "MAX_FINGERPRINT_ENTRIES", entry_cap)
+  tree = tmp_path / "tree"
+  tree.mkdir()
+  for index in range(10):
+    (tree / f"file{index}.txt").write_text("x", encoding="utf-8")
+
+  consumed_count = 0
+  original_scandir = os.scandir
+
+  @contextmanager
+  def counting_scandir(path: str | os.PathLike[str]) -> Iterator[Iterator[os.DirEntry[str]]]:
+    def counted_entries() -> Iterator[os.DirEntry[str]]:
+      nonlocal consumed_count
+      with original_scandir(path) as scanner:
+        for entry in scanner:
+          consumed_count += 1
+          yield entry
+
+    yield counted_entries()
+
+  monkeypatch.setattr(os, "scandir", counting_scandir)
+
+  with pytest.raises(DotagentsError, match="exceeds max entry count"):
+    directory_fingerprint(tree)
+
+  # The loop checks the cap right after pulling each entry, so it pulls one entry past the
+  # cap before it can detect the overage and raise — bounded, not the same as unbounded.
+  assert consumed_count <= entry_cap + 1, (
+    "enumeration must stop at the entry cap, not consume the full directory"
+  )
+
+
+def test_directory_fingerprint_rejects_too_deep_nesting(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Bounds the walk against an adversarially deep directory (recursion DoS)."""
+  monkeypatch.setattr(lockfile_module, "MAX_FINGERPRINT_DEPTH", 2)
+  tree = tmp_path / "tree"
+  nested = tree / "a" / "b" / "c"
+  nested.mkdir(parents=True)
+  (nested / "file.txt").write_text("content", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="exceeds max nesting depth"):
+    directory_fingerprint(tree)
 
 
 @pytest.mark.parametrize(
@@ -46,40 +250,89 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
       "lockfile_version must be an integer",
     ),
     (
-      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
-      "lockfile_version must be 1",
+      'lockfile_version = 0\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
+      "lockfile_version must be between 1 and 2",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nproviders = "claude"\ngenerated_at = "now"\n',
+      'lockfile_version = 3\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
+      "lockfile_version must be between 1 and 2",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nproviders = "claude"\ngenerated_at = "now"\n',
       "providers must be a string array",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\nassets = ["bad"]\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\nassets = ["bad"]\n',
       "lockfile assets must be tables",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n[[assets]]\nsource = "x"\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n[[assets]]\nsource = "x"\n',
       "asset entries require source, destination, sha256",
     ),
     (
-      'lockfile_version = 1\nproviders = []\ngenerated_at = "now"\n',
+      'lockfile_version = 2\nproviders = []\ngenerated_at = "now"\n',
       "version must be a non-empty string",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nproviders = []\ngenerated_at = "now"\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nproviders = []\ngenerated_at = "now"\n',
       "manifest_sha256 must be a non-empty string",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\nlinks = ["bad"]\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\nlinks = ["bad"]\n',
       "lockfile links must be tables",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n[[links]]\ndestination = "x"\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n[[links]]\ndestination = "x"\n',
       "link entries require destination and target",
     ),
     (
-      'lockfile_version = 1\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = ""\n',
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = ""\n',
       "generated_at must be a non-empty string",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[assets]]\nsource = "x"\ndestination = "../../etc/passwd"\nsha256 = "abc"\n',
+      "asset destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[assets]]\nsource = "x"\ndestination = "/etc/passwd"\nsha256 = "abc"\n',
+      "asset destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "../outside"\ntarget = "y"\n',
+      "link destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "CLAUDE.md"\ntarget = "y"\nbackup = "../outside.bak"\nbackup_fingerprint = "sha256:a"\n',
+      "link backup must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      'rules_backup = "../outside.bak"\nrules_backup_fingerprint = "sha256:a"\n',
+      "rules_backup must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "CLAUDE.md"\ntarget = "y"\nbackup_fingerprint = ""\n',
+      "link backup_fingerprint must be a non-empty string",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      'rules_backup_fingerprint = ""\n',
+      "rules_backup_fingerprint must be a non-empty string",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[links]]\ndestination = "CLAUDE.md"\ntarget = "y"\nbackup = "CLAUDE.md.bak"\n',
+      "link backup requires backup_fingerprint",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      'rules_backup = ".rules.bak"\n',
+      "rules_backup requires rules_backup_fingerprint",
     ),
   ],
 )

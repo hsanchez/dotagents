@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dotagents.errors import DotagentsError
 
+SCOPES = ("repo", "global", "both")
+
 
 @dataclass(frozen=True)
 class SyncEntry:
@@ -15,6 +17,8 @@ class SyncEntry:
   link: bool = True
   provider: str | None = None
   skill: str | None = None
+  scope: str = "repo"
+  always_copy: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,28 +91,42 @@ def selected_entries(
   return tuple(entry for entry in entries if entry.skill is None or entry.skill in skills)
 
 
-def _parse_entries(scope: str, entries: object, provider: str | None) -> list[SyncEntry]:
+def _parse_entries(section: str, entries: object, provider: str | None) -> list[SyncEntry]:
   if not isinstance(entries, list):
-    raise DotagentsError(f"agents.toml: {scope} must be an array of tables")
+    raise DotagentsError(f"agents.toml: {section} must be an array of tables")
 
   parsed: list[SyncEntry] = []
   for entry in entries:
     if not isinstance(entry, dict):
-      raise DotagentsError(f"agents.toml: {scope} entries must be tables")
+      raise DotagentsError(f"agents.toml: {section} entries must be tables")
     source = entry.get("source")
     destination = entry.get("destination")
     if not isinstance(source, str) or not source:
-      raise DotagentsError(f"agents.toml: {scope}.source must be a non-empty string")
+      raise DotagentsError(f"agents.toml: {section}.source must be a non-empty string")
     if not isinstance(destination, str) or not destination:
-      raise DotagentsError(f"agents.toml: {scope}.destination must be a non-empty string")
+      raise DotagentsError(f"agents.toml: {section}.destination must be a non-empty string")
     link = entry.get("link", True)
     if not isinstance(link, bool):
-      raise DotagentsError(f"agents.toml: {scope}.link must be a boolean")
+      raise DotagentsError(f"agents.toml: {section}.link must be a boolean")
     skill = entry.get("skill")
     if skill is not None and (not isinstance(skill, str) or not skill):
-      raise DotagentsError(f"agents.toml: {scope}.skill must be a non-empty string")
+      raise DotagentsError(f"agents.toml: {section}.skill must be a non-empty string")
+    scope = entry.get("scope", "repo")
+    if not isinstance(scope, str) or scope not in SCOPES:
+      raise DotagentsError(f"agents.toml: {section}.scope must be one of {', '.join(SCOPES)}")
+    always_copy = entry.get("always_copy", False)
+    if not isinstance(always_copy, bool):
+      raise DotagentsError(f"agents.toml: {section}.always_copy must be a boolean")
     parsed.append(
-      SyncEntry(source=source, destination=destination, link=link, provider=provider, skill=skill)
+      SyncEntry(
+        source=source,
+        destination=destination,
+        link=link,
+        provider=provider,
+        skill=skill,
+        scope=scope,
+        always_copy=always_copy,
+      )
     )
   return parsed
 
@@ -123,7 +141,7 @@ def validate_manifest(manifest: Manifest, asset_root: Path) -> None:
     if not provider_pattern.match(provider):
       errors.append(f"invalid provider name: {provider}")
 
-  destinations: dict[str, str] = {}
+  destinations: dict[str, list[SyncEntry]] = {}
   entries = list(manifest.global_sync)
   for provider_entries in manifest.provider_sync.values():
     entries.extend(provider_entries)
@@ -133,15 +151,29 @@ def validate_manifest(manifest: Manifest, asset_root: Path) -> None:
     _validate_path("destination", entry.destination, errors)
     if entry.source != ".rules" and not (asset_root / entry.source).exists():
       errors.append(f"source does not exist: {entry.source}")
-    previous = destinations.get(entry.destination)
-    if previous:
-      errors.append(f"duplicate destination {entry.destination}: {previous} and {entry.source}")
-    else:
-      destinations[entry.destination] = entry.source
+    for previous in destinations.get(entry.destination, ()):
+      if _scopes_overlap(previous.scope, entry.scope):
+        errors.append(
+          f"duplicate destination {entry.destination}: {previous.source} and {entry.source}"
+        )
+    destinations.setdefault(entry.destination, []).append(entry)
 
   if errors:
     lines = "\n".join(f"- {error}" for error in errors)
     raise DotagentsError(f"agents.toml validation failed:\n{lines}")
+
+
+def scope_applies(scope: str, is_global: bool) -> bool:
+  if scope == "both":
+    return True
+  return scope == "global" if is_global else scope == "repo"
+
+
+def _scopes_overlap(first: str, second: str) -> bool:
+  return any(
+    scope_applies(first, is_global) and scope_applies(second, is_global)
+    for is_global in (True, False)
+  )
 
 
 def _validate_path(field: str, value: str, errors: list[str]) -> None:

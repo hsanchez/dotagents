@@ -3,6 +3,7 @@
 import filecmp
 import os
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -24,6 +25,7 @@ from dotagents.lockfile import (
   LockedAsset,
   LockedLink,
   RuntimeLock,
+  backup_fingerprint,
   read_lock,
   sha256_file,
   write_lock,
@@ -32,6 +34,7 @@ from dotagents.manifest import (
   Manifest,
   SyncEntry,
   load_manifest,
+  scope_applies,
   selected_entries,
   selected_providers,
 )
@@ -41,6 +44,7 @@ from dotagents.version import package_version
 OPT_IN_SKILLS = frozenset({"prek-bootstrap", "review-saga", "saga"})
 BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
 CAPABILITY_INDEX_SCHEMA_VERSION = 1
+WOULD_BACK_UP_PREFIX = "would back up "
 CapabilityStatus = Literal["ok", "stale", "missing", "invalid"]
 
 
@@ -49,9 +53,25 @@ class OperationLog:
   dry_run: bool = False
   lines: list[str] = field(default_factory=list)
   pending_removals: set[Path] = field(default_factory=set)
+  planned_backups: list[tuple[Path, Path]] = field(default_factory=list)
+  created_backups: list[tuple[Path, Path]] = field(default_factory=list)
 
   def add(self, message: str) -> None:
     self.lines.append(message)
+
+
+@dataclass(frozen=True)
+class BackupRecord:
+  """A backup's location and a fingerprint of what it held at creation time.
+
+  `fingerprint` is typed as optional because `read_lock` only enforces its presence at the
+  lockfile boundary (a lock with `backup` but no `backup_fingerprint` fails to parse at all,
+  forcing `dotagents update` — see `SUPPORTED_LOCKFILE_VERSION`), not at this dataclass's
+  construction sites.
+  """
+
+  path: str
+  fingerprint: str | None
 
 
 @dataclass(frozen=True)
@@ -62,6 +82,7 @@ class RuntimeContext:
   manifest: Manifest
   providers: tuple[str, ...]
   skills: tuple[str, ...]
+  is_global: bool
 
 
 @dataclass(frozen=True)
@@ -146,6 +167,10 @@ def default_skills(asset_root: Path) -> tuple[str, ...]:
   return tuple(skill for skill in available_skills(asset_root) if skill not in OPT_IN_SKILLS)
 
 
+def is_global_root(root: Path) -> bool:
+  return root.resolve() == Path.home().resolve()
+
+
 def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) -> RuntimeContext:
   root = repo_root.resolve()
   assets = asset_root()
@@ -162,6 +187,7 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
     manifest=manifest,
     providers=providers,
     skills=skills,
+    is_global=is_global_root(root),
   )
 
 
@@ -250,12 +276,12 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
 
   for link in runtime_lock.links:
     destination = root / link.destination
-    removed = remove_locked_link(root, destination, link.target, operation_log)
-    if link.backup and removed:
-      restore_backup(root, root / link.backup, destination, operation_log)
+    remove_link_with_backup(root, link, destination, operation_log)
     collect_parents(root, destination, prune_candidates)
 
-  remove_generated_rules(root, operation_log)
+  remove_generated_rules(
+    root, operation_log, runtime_lock.rules_backup, runtime_lock.rules_backup_fingerprint
+  )
   collect_parents(root, root / ".rules", prune_candidates)
 
   for asset in sorted(runtime_lock.assets, key=lambda item: item.destination, reverse=True):
@@ -322,11 +348,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   skipped_links: list[LockedLink] = []
   for link in (link for link in current_lock.links if link.provider == provider):
     destination = root / link.destination
-    removed = remove_locked_link(root, destination, link.target, operation_log)
-    if removed:
-      if link.backup:
-        restore_backup(root, root / link.backup, destination, operation_log)
-    else:
+    if not remove_link_with_backup(root, link, destination, operation_log):
       skipped_links.append(link)
     collect_parents(root, destination, prune_candidates)
 
@@ -350,8 +372,18 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       a for a in current_lock.assets if not a.destination.startswith(provider_prefix)
     ] + skipped_assets
     remaining_links = [
-      link for link in current_lock.links if link.provider != provider
-    ] + skipped_links
+      migrate_legacy_link_backup(root, link)
+      for link in (
+        [link for link in current_lock.links if link.provider != provider] + skipped_links
+      )
+    ]
+    rules_backup_record = migrate_legacy_backup(
+      root,
+      BackupRecord(current_lock.rules_backup, current_lock.rules_backup_fingerprint)
+      if current_lock.rules_backup
+      else None,
+      root / current_lock.rules_backup if current_lock.rules_backup else root,
+    )
     write_lock(
       lock_path,
       compute_manifest_sha256(runtime_context),
@@ -360,6 +392,8 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       remaining_links,
       skills=current_lock.skills,
       skillfile_sha256=current_lock.skillfile_sha256,
+      rules_backup=rules_backup_record.path if rules_backup_record else None,
+      rules_backup_fingerprint=rules_backup_record.fingerprint if rules_backup_record else None,
     )
     operation_log.add(f"removed provider: {provider}")
   else:
@@ -368,10 +402,103 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
   return operation_log
 
 
+def rollback_created_backups(repo_root: Path, operation_log: OperationLog) -> None:
+  """Undo backups created earlier in a failed `sync_runtime` call.
+
+  This is deliberately narrow: it undoes backup renames only, not every mutation
+  `sync_runtime` may have performed before failing (asset copies, newly-created symlinks,
+  stale-entry removals, directory pruning). Those are safe to leave as-is because they're
+  each idempotent on retry — a copy re-copies identical content, an already-correct symlink
+  is a no-op via `already_linked`, a stale entry already removed is reported as missing and
+  treated as done (`remove_locked_link`). `sync_runtime` is not transactional as a whole;
+  this function closes the one gap that isn't self-healing on retry.
+
+  Backups are that gap: `sync_runtime` mutates disk incrementally per entry but writes the
+  lockfile once, at the end, after every entry succeeds. Without this, a later entry failing
+  (e.g. a `.bak` naming collision unrelated to an earlier entry) would leave an earlier
+  entry's backup created on disk but never recorded in the lockfile — stranded as untracked
+  on retry, since the "don't adopt an unrecorded `.bak`" protection can't tell it apart from
+  a genuinely stray file.
+
+  Each restore moves the current `destination` aside (instead of unlinking it) before
+  renaming the backup into place, so a `backup.rename()` failure after the move — a
+  cross-device rename, a permission change, disk full — doesn't leave `destination` empty.
+  On failure the aside file is renamed back so `destination` ends up unchanged rather than
+  gone. Every backup is still attempted even if an earlier one fails.
+
+  Raises:
+    DotagentsError: if any backup could not be restored, after every backup was attempted.
+  """
+  failures: list[str] = []
+  for destination, backup in reversed(operation_log.created_backups):
+    if not backup.exists(follow_symlinks=False):
+      continue
+    aside: Path | None = None
+    moved_aside = False
+    try:
+      if destination.exists(follow_symlinks=False):
+        aside = destination.parent / f"{destination.name}.rollback-{uuid.uuid4().hex}"
+        destination.rename(aside)
+        moved_aside = True
+      backup.rename(destination)
+    except OSError as exc:
+      detail = f"rollback failed {relative(repo_root, backup)}: {exc}"
+      if moved_aside and aside is not None and not destination.exists(follow_symlinks=False):
+        try:
+          aside.rename(destination)
+        except OSError as restore_exc:
+          detail += (
+            f"; could not restore prior state either ({restore_exc}); "
+            f"original content preserved at {relative(repo_root, aside)}"
+          )
+      operation_log.add(detail)
+      failures.append(detail)
+      continue
+    if moved_aside and aside is not None:
+      try:
+        if aside.is_symlink() or not aside.is_dir():
+          aside.unlink()
+        else:
+          shutil.rmtree(aside)
+      except OSError as cleanup_exc:
+        # The restore itself succeeded — `destination` holds the correct content — but the
+        # discarded pre-rollback content is now stranded at `aside` instead of removed. Still
+        # counts as incomplete: left alone, that stray file is silent disk debris nobody was
+        # told about.
+        detail = (
+          f"restored {relative(repo_root, backup)} -> {relative(repo_root, destination)}, "
+          f"but could not remove leftover {relative(repo_root, aside)}: {cleanup_exc}"
+        )
+        operation_log.add(detail)
+        failures.append(detail)
+  if failures:
+    raise DotagentsError("rollback did not fully complete:\n" + "\n".join(failures))
+
+
 def sync_runtime(
   runtime_context: RuntimeContext, dry_run: bool = False, locked: bool = False
 ) -> OperationLog:
   operation_log = OperationLog(dry_run=dry_run)
+  try:
+    _sync_runtime_body(runtime_context, dry_run, locked, operation_log)
+  except Exception as exc:
+    if not dry_run:
+      try:
+        rollback_created_backups(runtime_context.repo_root, operation_log)
+      except DotagentsError as rollback_exc:
+        # `main()` only special-cases `DotagentsError` for its clean "ERROR: ..." rendering;
+        # every other exception type gets a raw traceback instead. Folding the rollback
+        # failure into a `DotagentsError` message (regardless of the original exception's
+        # type) is what makes it reach that same visible path every time, rather than only
+        # when `_sync_runtime_body` happened to raise a `DotagentsError` itself.
+        raise DotagentsError(f"{exc}\n{rollback_exc}") from exc
+    raise
+  return operation_log
+
+
+def _sync_runtime_body(
+  runtime_context: RuntimeContext, dry_run: bool, locked: bool, operation_log: OperationLog
+) -> None:
   locked_assets: list[LockedAsset] = []
   locked_links: list[LockedLink] = []
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
@@ -394,13 +521,20 @@ def sync_runtime(
     )
   )
 
-  for entry in selected_entries(
+  entries = selected_entries(
     runtime_context.manifest, runtime_context.providers, runtime_context.skills
-  ):
+  )
+  forced_copy_dirs: set[Path] = set()
+  for entry in entries:
     if entry.source in {".rules", "skills"}:
+      continue
+    applies = scope_applies(entry.scope, runtime_context.is_global)
+    if not applies and not entry.always_copy:
       continue
     source = runtime_context.asset_root / entry.source
     destination = runtime_destination(runtime_context.runtime_dir, entry)
+    if not applies:
+      forced_copy_dirs.add(destination.parent)
     copy_path(runtime_context.repo_root, source, destination, operation_log)
     locked_assets.extend(lock_entries(runtime_context.repo_root, source, destination, entry.source))
 
@@ -412,33 +546,49 @@ def sync_runtime(
       lock_entries(runtime_context.repo_root, source, destination, f"skills/{skill}")
     )
 
-  render_rules(runtime_context, operation_log)
+  rules_known_backup = (
+    BackupRecord(previous_lock.rules_backup, previous_lock.rules_backup_fingerprint)
+    if previous_lock and previous_lock.rules_backup
+    else None
+  )
+  rules_backup = render_rules(runtime_context, operation_log, known_backup=rules_known_backup)
   locked_assets.extend(compiled_assets)
   log_compiled_assets(compiled_assets, operation_log)
   validate_locked_asset_destinations_unique(locked_assets)
 
-  for entry in selected_entries(
-    runtime_context.manifest, runtime_context.providers, runtime_context.skills
-  ):
+  previous_link_backups = (
+    {
+      link.destination: BackupRecord(link.backup, link.backup_fingerprint)
+      for link in previous_lock.links
+      if link.backup
+    }
+    if previous_lock
+    else {}
+  )
+  for entry in entries:
     if not entry.link:
+      continue
+    if not scope_applies(entry.scope, runtime_context.is_global):
       continue
     source = (
       runtime_context.repo_root / ".rules"
       if entry.source == ".rules"
       else runtime_destination(runtime_context.runtime_dir, entry)
     )
-    backup_rel = link_path(
+    backup_record = link_path(
       runtime_context.repo_root,
       source,
       runtime_context.repo_root / entry.destination,
       operation_log,
+      known_backup=previous_link_backups.get(entry.destination),
     )
     locked_links.append(
       LockedLink(
         destination=entry.destination,
         target=os.path.relpath(source, (runtime_context.repo_root / entry.destination).parent),
         provider=entry.provider,
-        backup=backup_rel,
+        backup=backup_record.path if backup_record else None,
+        backup_fingerprint=backup_record.fingerprint if backup_record else None,
       )
     )
 
@@ -451,6 +601,9 @@ def sync_runtime(
   )
   locked_assets.extend(skipped_stale_assets)
   validate_locked_asset_destinations_unique(locked_assets)
+
+  for forced_copy_dir in sorted(forced_copy_dirs):
+    operation_log.add(f"add to PATH: {forced_copy_dir}")
 
   if dry_run:
     operation_log.add("would write .agents/dotagents.lock")
@@ -465,10 +618,10 @@ def sync_runtime(
       skills=runtime_context.skills,
       skillfile_sha256=compute_skillfile_sha256(runtime_context.repo_root),
       generated_at=generated_at,
+      rules_backup=rules_backup.path if rules_backup else None,
+      rules_backup_fingerprint=rules_backup.fingerprint if rules_backup else None,
     )
     operation_log.add("wrote .agents/dotagents.lock")
-
-  return operation_log
 
 
 def compiled_lock_entries(repo_root: Path, previous_lock: RuntimeLock | None) -> list[LockedAsset]:
@@ -866,8 +1019,7 @@ def remove_stale_links(
     if link.destination in current_destinations:
       continue
     destination = repo_root / link.destination
-    removed = remove_locked_link(repo_root, destination, link.target, operation_log)
-    if not removed:
+    if not remove_link_with_backup(repo_root, link, destination, operation_log):
       skipped_links.append(link)
     collect_parents(repo_root, destination, prune_candidates)
 
@@ -911,7 +1063,17 @@ def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
   raise DotagentsError(f"unsupported manifest source root: {entry.source}")
 
 
-def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -> None:
+def render_rules(
+  runtime_context: RuntimeContext,
+  operation_log: OperationLog,
+  known_backup: BackupRecord | None = None,
+) -> BackupRecord | None:
+  """Write `.rules` and return the backup record from `write_text`, if any.
+
+  Raises:
+    DotagentsError: if the bundled `rules/rules.md` can't be read, or (via `write_text`)
+      if `.rules` is a symlink or a `.rules.bak` conflict already exists.
+  """
   shared_rules = runtime_context.asset_root / "rules" / "rules.md"
   try:
     shared = shared_rules.read_text(encoding="utf-8").rstrip()
@@ -929,11 +1091,13 @@ def render_rules(runtime_context: RuntimeContext, operation_log: OperationLog) -
         local.read_text(encoding="utf-8").rstrip(),
       ]
     )
-  write_text(
+  return write_text(
     runtime_context.repo_root,
     runtime_context.repo_root / ".rules",
     "\n".join(chunks) + "\n",
     operation_log,
+    backup_existing=runtime_context.is_global,
+    known_backup=known_backup,
   )
 
 
@@ -997,6 +1161,11 @@ def copy_path(
 def copy_file(
   repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
 ) -> None:
+  resolve_parent_within_root(repo_root, destination)
+  if destination.is_symlink():
+    raise DotagentsError(
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
+    )
   if (
     destination.exists()
     and destination.is_file()
@@ -1004,10 +1173,6 @@ def copy_file(
   ):
     operation_log.add(f"ok {relative(repo_root, destination)}")
     return
-  if destination.exists() and destination.is_symlink():
-    raise DotagentsError(
-      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
-    )
   if operation_log.dry_run:
     operation_log.add(f"would copy {relative(repo_root, destination)}")
     return
@@ -1016,70 +1181,161 @@ def copy_file(
   operation_log.add(f"copied {relative(repo_root, destination)}")
 
 
+def migrate_legacy_backup(
+  repo_root: Path, known_backup: BackupRecord | None, backup_path: Path
+) -> BackupRecord | None:
+  """Upgrade a fingerprint-less backup record (carried forward from a v1 lock) to a real
+  fingerprint computed from `backup_path`'s current on-disk state, or drop it if the backup
+  is no longer a readable file or symlink.
+
+  Without this, carrying `known_backup.fingerprint = None` forward unchanged into a
+  freshly-written v2 lock would record `backup` with no `backup_fingerprint` — unreadable
+  by the next `read_lock` call, which requires a fingerprint whenever a v2 lock has a backup.
+  """
+  if known_backup is None or known_backup.fingerprint is not None:
+    return known_backup
+  resolve_parent_within_root(repo_root, backup_path)
+  if backup_path.is_symlink() or backup_path.is_file() or backup_path.is_dir():
+    return BackupRecord(known_backup.path, backup_fingerprint(backup_path))
+  return None
+
+
+def migrate_legacy_link_backup(repo_root: Path, link: LockedLink) -> LockedLink:
+  """Return `link` with its backup fingerprint migrated if it's a legacy (fingerprint-less)
+  record, so writing it back into a v2 lock doesn't produce an unreadable entry.
+
+  Needed anywhere a `LockedLink` read from an existing lock is written back out without
+  going through `link_path` (which already migrates via `migrate_legacy_backup`) — e.g.
+  `remove_provider`, which carries forward links it isn't touching.
+  """
+  if link.backup is None or link.backup_fingerprint is not None:
+    return link
+  migrated = migrate_legacy_backup(
+    repo_root, BackupRecord(link.backup, link.backup_fingerprint), repo_root / link.backup
+  )
+  return LockedLink(
+    destination=link.destination,
+    target=link.target,
+    provider=link.provider,
+    backup=migrated.path if migrated else None,
+    backup_fingerprint=migrated.fingerprint if migrated else None,
+  )
+
+
 def write_text(
-  repo_root: Path, destination: Path, content: str, operation_log: OperationLog
-) -> None:
+  repo_root: Path,
+  destination: Path,
+  content: str,
+  operation_log: OperationLog,
+  backup_existing: bool = False,
+  known_backup: BackupRecord | None = None,
+) -> BackupRecord | None:
+  """Return the backup record for `destination` if one was created or already tracked, else None.
+
+  `known_backup` is the backup previously recorded in the lock, if any. A `.bak` file found
+  on disk is only ever reported back if it was created by this call or was already tracked —
+  an unrelated pre-existing `.bak` file is never adopted as dotagents-owned.
+
+  Raises:
+    DotagentsError: if `destination` is a symlink, or if a `.bak` file already exists at the
+      backup path (conflict must be resolved manually).
+  """
+  backup = destination.parent / (destination.name + ".bak")
+  resolve_parent_within_root(repo_root, destination)
+  known_backup = migrate_legacy_backup(repo_root, known_backup, backup)
+  if destination.is_symlink():
+    raise DotagentsError(
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
+    )
   if (
     destination.exists()
     and destination.is_file()
     and destination.read_text(encoding="utf-8") == content
   ):
     operation_log.add(f"ok {relative(repo_root, destination)}")
-    return
-  if destination.exists() and destination.is_symlink():
-    raise DotagentsError(
-      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
-    )
+    return known_backup
+  backup_record = known_backup
+  backup_rel = relative(repo_root, backup)
+  already_tracked = known_backup is not None and known_backup.path == backup_rel
+  if backup_existing and destination.exists() and not already_tracked:
+    if backup.exists(follow_symlinks=False):
+      raise DotagentsError(f"backup already exists: {backup_rel}; resolve manually and re-run")
+    backup_record = BackupRecord(backup_rel, backup_fingerprint(destination))
+    if operation_log.dry_run:
+      operation_log.add(f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {backup_rel}")
+      operation_log.planned_backups.append((destination, backup))
+    else:
+      destination.rename(backup)
+      operation_log.add(f"backed up {relative(repo_root, destination)} -> {backup_rel}")
+      operation_log.created_backups.append((destination, backup))
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
-    return
+    return backup_record
   destination.write_text(content, encoding="utf-8")
   operation_log.add(f"wrote {relative(repo_root, destination)}")
+  return backup_record
 
 
 def link_path(
-  repo_root: Path, source: Path, destination: Path, operation_log: OperationLog
-) -> str | None:
-  """Return the relative path to the backup file if one was created or already exists, else None.
+  repo_root: Path,
+  source: Path,
+  destination: Path,
+  operation_log: OperationLog,
+  known_backup: BackupRecord | None = None,
+) -> BackupRecord | None:
+  """Return the backup record for `destination` if one was created or already tracked, else None.
+
+  `known_backup` is the backup previously recorded in the lock, if any. A `.bak` file found
+  on disk is only ever reported back if it was created by this call or was already tracked —
+  an unrelated pre-existing `.bak` file is never adopted as dotagents-owned.
 
   Raises:
     DotagentsError: if a `.bak` file already exists at the backup path (conflict must be resolved manually).
   """
+  resolve_parent_within_root(repo_root, destination)
   backup = destination.parent / (destination.name + ".bak")
+  target = os.path.relpath(source, destination.parent)
+  already_linked = destination.is_symlink() and os.readlink(destination) == target
 
-  if destination.exists() and not destination.is_symlink():
-    if backup.exists():
+  # follow_symlinks=False: a pre-existing entry that isn't already our link — a
+  # regular file, a symlink to something else, or a broken symlink — must be
+  # backed up before replacement, not silently overwritten.
+  if destination.exists(follow_symlinks=False) and not already_linked:
+    if backup.exists(follow_symlinks=False):
       raise DotagentsError(
         f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
       )
+    backup_record: BackupRecord | None = BackupRecord(
+      relative(repo_root, backup), backup_fingerprint(destination)
+    )
     if operation_log.dry_run:
       operation_log.add(
-        f"would back up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+        f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
+      operation_log.planned_backups.append((destination, backup))
     else:
       destination.rename(backup)
       operation_log.add(
         f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
       )
-    backup_rel: str | None = relative(repo_root, backup)
+      operation_log.created_backups.append((destination, backup))
   else:
-    backup_rel = relative(repo_root, backup) if backup.exists() else None
+    backup_record = migrate_legacy_backup(repo_root, known_backup, backup)
 
-  target = os.path.relpath(source, destination.parent)
-  if destination.is_symlink() and os.readlink(destination) == target:
+  if already_linked:
     operation_log.add(f"ok {relative(repo_root, destination)}")
-    return backup_rel
+    return backup_record
 
   if operation_log.dry_run:
     operation_log.add(f"would link {relative(repo_root, destination)} -> {target}")
-    return backup_rel
+    return backup_record
 
   destination.parent.mkdir(parents=True, exist_ok=True)
   if destination.exists() or destination.is_symlink():
     destination.unlink()
   destination.symlink_to(target)
   operation_log.add(f"linked {relative(repo_root, destination)} -> {target}")
-  return backup_rel
+  return backup_record
 
 
 def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None:
@@ -1094,9 +1350,48 @@ def ensure_dir(repo_root: Path, path: Path, operation_log: OperationLog) -> None
   operation_log.add(f"created {relative(repo_root, path)}")
 
 
+def resolve_within_root(repo_root: Path, path: Path) -> Path:
+  """Resolve `path` and confirm it stays within `repo_root`, following any symlinked parents.
+
+  Lockfile-sourced destinations are validated lexically at parse time
+  (`validate_contained_relative_path`), but that catches only `..`/absolute-path strings —
+  not an intermediate directory that is itself a symlink pointing outside root. This closes
+  that gap at the point of actual filesystem use.
+
+  Raises:
+    DotagentsError: if `path` resolves outside `repo_root`.
+  """
+  resolved = path.resolve()
+  if not resolved.is_relative_to(repo_root.resolve()):
+    raise DotagentsError(f"path escapes root via symlink: {relative(repo_root, path)}")
+  return resolved
+
+
+def resolve_parent_within_root(repo_root: Path, path: Path) -> None:
+  """Confirm `path`'s parent directory chain stays within `repo_root`, without resolving `path`.
+
+  For operations that rename or unlink a symlink entry directly (never open or follow it) —
+  `resolve_within_root` would incorrectly reject a legitimate symlink whose own target lies
+  outside root (e.g. a backed-up `CLAUDE.md -> ~/notes.md`), since `Path.resolve()` dereferences
+  the final path component too, not just its parents.
+
+  Raises:
+    DotagentsError: if `path`'s parent directory resolves outside `repo_root`.
+  """
+  resolved_parent = path.parent.resolve()
+  if not resolved_parent.is_relative_to(repo_root.resolve()):
+    raise DotagentsError(f"path escapes root via symlink: {relative(repo_root, path)}")
+
+
 def remove_locked_link(
   repo_root: Path, destination: Path, expected_target: str, operation_log: OperationLog
 ) -> bool:
+  """Return True if the link was removed (or would be in dry-run), False if skipped.
+
+  Raises:
+    DotagentsError: if `destination`'s parent directory resolves outside `repo_root`.
+  """
+  resolve_parent_within_root(repo_root, destination)
   display = relative(repo_root, destination)
   if not destination.exists() and not destination.is_symlink():
     operation_log.add(f"missing {display}")
@@ -1120,14 +1415,69 @@ def remove_locked_link(
 
 
 def restore_backup(
-  repo_root: Path, backup_path: Path, destination: Path, operation_log: OperationLog
+  repo_root: Path,
+  backup_path: Path,
+  destination: Path,
+  operation_log: OperationLog,
+  expected_fingerprint: str | None = None,
 ) -> None:
-  if not backup_path.exists():
+  """Rename `backup_path` onto `destination`.
+
+  Skips (with a log entry, no exception) if the backup is missing, not a regular file,
+  directory, or symlink, or its fingerprint doesn't match `expected_fingerprint`.
+
+  Raises:
+    DotagentsError: if `backup_path` or `destination`'s parent directory resolves outside
+      `repo_root`.
+  """
+  resolve_parent_within_root(repo_root, backup_path)
+  resolve_parent_within_root(repo_root, destination)
+  if not backup_path.exists(follow_symlinks=False):
     operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
+    return
+  if not backup_path.is_symlink() and not backup_path.is_file():
+    if (
+      backup_path.is_dir()
+      and expected_fingerprint
+      and expected_fingerprint.startswith("directory:")
+    ):
+      pass
+    else:
+      # A directory or FIFO at the backup path — swapped in after backup creation, or a
+      # legacy backup with no fingerprint to check. Never rename an untrusted non-regular
+      # entry onto a managed destination, and never let backup_fingerprint() below open it
+      # (IsADirectoryError, or a hang on a FIFO with no writer).
+      operation_log.add(
+        f"backup is not a file or symlink {relative(repo_root, backup_path)}; "
+        "skipped restore, resolve manually"
+      )
+      return
+
+  def fingerprint_mismatch() -> bool:
+    return (
+      expected_fingerprint is not None and backup_fingerprint(backup_path) != expected_fingerprint
+    )
+
+  if fingerprint_mismatch():
+    operation_log.add(
+      f"backup fingerprint mismatch {relative(repo_root, backup_path)}; "
+      "skipped restore, resolve manually"
+    )
     return
   if operation_log.dry_run:
     operation_log.add(
       f"would restore {relative(repo_root, backup_path)} -> {relative(repo_root, destination)}"
+    )
+    return
+  # Re-verify immediately before the mutation. Directory fingerprinting requires a full
+  # recursive walk, which widens the window between "checked" and "renamed" compared to a
+  # single file's hash — this doesn't eliminate the race (no OS-level atomicity is used, and
+  # the same race exists between this check and the rename call below), but shrinks it to
+  # the minimum achievable without one.
+  if fingerprint_mismatch():
+    operation_log.add(
+      f"backup fingerprint mismatch {relative(repo_root, backup_path)}; "
+      "skipped restore, resolve manually"
     )
     return
   backup_path.rename(destination)
@@ -1136,10 +1486,32 @@ def restore_backup(
   )
 
 
+def remove_link_with_backup(
+  repo_root: Path, link: LockedLink, destination: Path, operation_log: OperationLog
+) -> bool:
+  """Remove a locked link and restore its backup on success. Return whether it was removed.
+
+  Raises:
+    DotagentsError: if `destination` or the link's backup's parent directory resolves
+      outside `repo_root`.
+  """
+  removed = remove_locked_link(repo_root, destination, link.target, operation_log)
+  if removed and link.backup:
+    restore_backup(
+      repo_root, repo_root / link.backup, destination, operation_log, link.backup_fingerprint
+    )
+  return removed
+
+
 def remove_locked_asset(
   repo_root: Path, path: Path, expected_sha256: str, operation_log: OperationLog
 ) -> bool:
-  """Return True if the asset was removed (or would be in dry-run), False if skipped."""
+  """Return True if the asset was removed (or would be in dry-run), False if skipped.
+
+  Raises:
+    DotagentsError: if `path` resolves outside `repo_root`.
+  """
+  resolve_parent_within_root(repo_root, path)
   display = relative(repo_root, path)
   if not path.exists() and not path.is_symlink():
     operation_log.add(f"missing {display}")
@@ -1160,11 +1532,28 @@ def remove_locked_asset(
   return True
 
 
-def remove_generated_rules(repo_root: Path, operation_log: OperationLog) -> None:
+def remove_generated_rules(
+  repo_root: Path,
+  operation_log: OperationLog,
+  rules_backup: str | None,
+  rules_backup_fingerprint: str | None = None,
+) -> None:
+  """Remove a dotagents-generated `.rules` and restore `rules_backup`, if any.
+
+  Skips (with a log entry, no exception) if `.rules` is missing, unexpected, unreadable, or
+  user-owned (no dotagents marker comment).
+
+  Raises:
+    DotagentsError: if (via `restore_backup`) `rules_backup` resolves outside `repo_root`.
+  """
   rules = repo_root / ".rules"
   display = relative(repo_root, rules)
   if not rules.exists() and not rules.is_symlink():
     operation_log.add(f"missing {display}")
+    if rules_backup:
+      restore_backup(
+        repo_root, repo_root / rules_backup, rules, operation_log, rules_backup_fingerprint
+      )
     return
   if rules.is_symlink() or not rules.is_file():
     operation_log.add(f"skip unexpected {display}; remove manually after verifying")
@@ -1181,9 +1570,14 @@ def remove_generated_rules(repo_root: Path, operation_log: OperationLog) -> None
   if operation_log.dry_run:
     operation_log.add(f"would remove {display}")
     operation_log.pending_removals.add(rules)
-    return
-  rules.unlink()
-  operation_log.add(f"removed {display}")
+  else:
+    rules.unlink()
+    operation_log.add(f"removed {display}")
+
+  if rules_backup:
+    restore_backup(
+      repo_root, repo_root / rules_backup, rules, operation_log, rules_backup_fingerprint
+    )
 
 
 def remove_lockfile(repo_root: Path, lock_path: Path, operation_log: OperationLog) -> None:

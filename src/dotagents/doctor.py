@@ -67,6 +67,11 @@ def doctor(repo_root: Path) -> DoctorResult:
   else:
     lines.append("lockfile: ok")
   lines.append(f"providers: {', '.join(lock.providers)}")
+  council_launcher = runtime_context.runtime_dir / "skills" / "council" / "scripts" / "run-agents"
+  if council_launcher.exists() and shutil.which("nu") is None:
+    lines.append(
+      "council: Nushell missing (install nu to run .agents/skills/council/scripts/run-agents)"
+    )
   if lock.skills is not None:
     lines.append(f"skills: {', '.join(lock.skills) or 'none'}")
     if lock.skills != runtime_context.skills:

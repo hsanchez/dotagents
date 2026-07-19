@@ -130,6 +130,235 @@ def test_status_command_reports_runtime_state(
   assert "lockfile: present" in result.output
 
 
+def test_init_with_root_option_targets_specified_directory(tmp_path: Path) -> None:
+  result = CliRunner().invoke(app, ["init", "--root", str(tmp_path), "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert (tmp_path / ".agents" / "dotagents.lock").exists()
+
+
+def test_root_and_global_options_conflict(tmp_path: Path) -> None:
+  result = CliRunner().invoke(app, ["init", "--root", str(tmp_path), "--global", "--for", "claude"])
+
+  assert result.exit_code == 1
+  assert "cannot combine --root and --global" in result.output
+
+
+def test_init_with_global_option_targets_home_directory(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert (tmp_path / ".agents" / "dotagents.lock").exists()
+
+
+def test_init_global_prompts_before_replacing_existing_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.write_text("my hand-written config", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"], input="n\n")
+
+  assert result.exit_code == 1
+  assert "will be backed up (.bak) and replaced" in result.output
+  assert "aborted: confirmation declined" in result.output
+  assert existing.read_text(encoding="utf-8") == "my hand-written config"
+  assert not (tmp_path / ".agents").exists()
+
+
+def test_init_global_proceeds_when_confirmation_accepted(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.write_text("my hand-written config", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"], input="y\n")
+
+  assert result.exit_code == 0
+  assert (tmp_path / ".claude" / "CLAUDE.md.bak").read_text(encoding="utf-8") == (
+    "my hand-written config"
+  )
+  assert (tmp_path / ".claude" / "CLAUDE.md").is_symlink()
+
+
+def test_init_global_with_yes_skips_confirmation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.write_text("my hand-written config", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude", "--yes"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+  assert (tmp_path / ".claude" / "CLAUDE.md.bak").exists()
+
+
+def test_init_global_skips_confirmation_when_nothing_to_replace(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+
+
+def test_init_global_copilot_prompts_before_replacing_root_rules(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  existing = tmp_path / ".rules"
+  existing.write_text("my hand-written rules", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "copilot"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".rules -> .rules.bak" in result.output
+  assert existing.read_text(encoding="utf-8") == "my hand-written rules"
+  assert not (tmp_path / ".rules.bak").exists()
+
+
+def test_init_global_prompts_before_replacing_unexpected_symlink(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  (tmp_path / ".claude").mkdir()
+  (tmp_path / "elsewhere.json").write_text("{}", encoding="utf-8")
+  existing = tmp_path / ".claude" / "CLAUDE.md"
+  existing.symlink_to(tmp_path / "elsewhere.json")
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "claude"], input="n\n")
+
+  assert result.exit_code == 1
+  assert "will be backed up (.bak) and replaced" in result.output
+  assert "aborted: confirmation declined" in result.output
+  assert existing.is_symlink()
+  assert not (tmp_path / ".claude" / "CLAUDE.md.bak").exists()
+
+
+def test_init_global_confirmation_survives_unresolved_home_symlink(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  real_home = tmp_path / "real-home"
+  real_home.mkdir()
+  home_symlink = tmp_path / "home-symlink"
+  home_symlink.symlink_to(real_home)
+  (real_home / ".rules").write_text("my hand-written rules", encoding="utf-8")
+  monkeypatch.setenv("HOME", str(home_symlink))
+
+  result = CliRunner().invoke(app, ["init", "--global", "--for", "copilot"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".rules -> .rules.bak" in result.output
+  assert (real_home / ".rules").read_text(encoding="utf-8") == "my hand-written rules"
+
+
+def test_sync_global_prompts_before_replacing_existing_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["sync", "--global"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".claude/settings.json -> .claude/settings.json.bak" in result.output
+  assert settings.read_text(encoding="utf-8") == "hand-edited, not managed"
+  assert not (tmp_path / ".claude" / "settings.json.bak").exists()
+
+
+def test_sync_global_with_yes_skips_confirmation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["sync", "--global", "--yes"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+  assert (tmp_path / ".claude" / "settings.json.bak").exists()
+
+
+def test_sync_global_skips_confirmation_when_nothing_to_replace(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+
+  result = CliRunner().invoke(app, ["sync", "--global"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+
+
+def test_update_global_prompts_before_replacing_existing_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["update", "--global"], input="n\n")
+
+  assert result.exit_code == 1
+  assert ".claude/settings.json -> .claude/settings.json.bak" in result.output
+  assert settings.read_text(encoding="utf-8") == "hand-edited, not managed"
+
+
+def test_update_global_with_yes_skips_confirmation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setenv("HOME", str(tmp_path))
+  init_runtime(tmp_path, ("claude",))
+  settings = tmp_path / ".claude" / "settings.json"
+  settings.unlink()
+  settings.write_text("hand-edited, not managed", encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["update", "--global", "--yes"])
+
+  assert result.exit_code == 0
+  assert "Proceed with backup and replace" not in result.output
+  assert (tmp_path / ".claude" / "settings.json.bak").exists()
+
+
+def test_doctor_with_root_option_validates_specified_directory(tmp_path: Path) -> None:
+  init_runtime(tmp_path, ("claude",))
+
+  result = CliRunner().invoke(app, ["doctor", "--root", str(tmp_path)])
+
+  assert result.exit_code == 0
+
+
+def test_status_with_root_option_reports_specified_directory(tmp_path: Path) -> None:
+  init_runtime(tmp_path, ("claude",))
+
+  result = CliRunner().invoke(app, ["status", "--root", str(tmp_path)])
+
+  assert result.exit_code == 0
+  assert "runtime: present" in result.output
+
+
 def test_list_command_rejects_invalid_kind() -> None:
   result = CliRunner().invoke(app, ["list", "unknown"])
 
