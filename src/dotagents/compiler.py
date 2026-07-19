@@ -1209,20 +1209,16 @@ def mcp_capabilities_version(capabilities: MCPCapabilities) -> str:
   )
 
 
+def _compact_json_reference(payload: dict[str, object]) -> str:
+  return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 def mcp_metadata_reference(server: str, output_skill: str, path: str) -> str:
-  return json.dumps(
-    {"server": server, "output_skill": output_skill, "path": path},
-    sort_keys=True,
-    separators=(",", ":"),
-  )
+  return _compact_json_reference({"server": server, "output_skill": output_skill, "path": path})
 
 
 def mcp_capabilities_reference(server: str, output_skill: str) -> str:
-  return json.dumps(
-    {"server": server, "output_skill": output_skill},
-    sort_keys=True,
-    separators=(",", ":"),
-  )
+  return _compact_json_reference({"server": server, "output_skill": output_skill})
 
 
 def mcp_source_identity(source: BuildSource) -> tuple[str, str]:
@@ -1278,15 +1274,13 @@ def mcp_command_reference(
   command: str,
   arguments: tuple[str, ...],
 ) -> str:
-  return json.dumps(
+  return _compact_json_reference(
     {
       "server": server,
       "output_skill": output_skill,
       "command": command,
       "arguments": list(arguments),
-    },
-    sort_keys=True,
-    separators=(",", ":"),
+    }
   )
 
 
@@ -1555,15 +1549,13 @@ def github_archive_relative_path(member_name: str, source_prefix: PurePosixPath)
 
 
 def github_skill_reference(source: GitHubSkillSource, output_skill: str) -> str:
-  return json.dumps(
+  return _compact_json_reference(
     {
       "repo": source.repo,
       "path": source.path,
       "ref": source.ref,
       "output_skill": output_skill,
-    },
-    sort_keys=True,
-    separators=(",", ":"),
+    }
   )
 
 
@@ -1600,11 +1592,7 @@ def parse_github_skill_reference(reference: str) -> tuple[str, str, str, str]:
 
 
 def template_source_reference(output_skill: str, path: str) -> str:
-  return json.dumps(
-    {"output_skill": output_skill, "path": path},
-    sort_keys=True,
-    separators=(",", ":"),
-  )
+  return _compact_json_reference({"output_skill": output_skill, "path": path})
 
 
 def template_source_output_skill(source: BuildSource) -> str:

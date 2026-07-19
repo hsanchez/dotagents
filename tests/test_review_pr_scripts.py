@@ -2,25 +2,15 @@
 
 from __future__ import annotations
 
-import importlib.util
-import types
 from pathlib import Path
 from typing import Any
 
+from helpers import load_script_module
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skills" / "review-pr" / "scripts"
 
-
-def _load(name: str) -> types.ModuleType:
-  spec = importlib.util.spec_from_file_location(name, SCRIPTS_DIR / f"{name}.py")
-  if spec is None or spec.loader is None:
-    raise ImportError(f"cannot load script: {name}")
-  module = importlib.util.module_from_spec(spec)
-  spec.loader.exec_module(module)
-  return module
-
-
-annotate_mod = _load("annotate_diff")
-validate_mod = _load("validate_review")
+annotate_mod = load_script_module("annotate_diff", SCRIPTS_DIR)
+validate_mod = load_script_module("validate_review", SCRIPTS_DIR)
 
 
 # --- annotate_diff -------------------

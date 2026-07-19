@@ -1,3 +1,8 @@
+import importlib.util
+import sys
+import tarfile
+import types
+from io import BytesIO
 from pathlib import Path
 
 from dotagents.compiler import (
@@ -10,6 +15,32 @@ from dotagents.compiler import (
 from dotagents.lockfile import read_lock
 
 DEFAULT_COMPILED_ARTIFACTS = {".agents/skills/generated/SKILL.md": "# generated\n"}
+
+
+def github_tarball(files: dict[str, str]) -> bytes:
+  archive = BytesIO()
+  with tarfile.open(fileobj=archive, mode="w") as tar:
+    for path, content in files.items():
+      data = content.encode("utf-8")
+      item = tarfile.TarInfo(f"repo-root/{path}")
+      item.size = len(data)
+      tar.addfile(item, BytesIO(data))
+  return archive.getvalue()
+
+
+def write_executable(path: Path, contents: str) -> None:
+  path.write_text(contents, encoding="utf-8")
+  path.chmod(0o755)
+
+
+def load_script_module(name: str, scripts_dir: Path) -> types.ModuleType:
+  spec = importlib.util.spec_from_file_location(name, scripts_dir / f"{name}.py")
+  if spec is None or spec.loader is None:
+    raise ImportError(f"cannot load script: {name}")
+  module = importlib.util.module_from_spec(spec)
+  sys.modules[name] = module
+  spec.loader.exec_module(module)
+  return module
 
 
 def write_compiled_manifest(

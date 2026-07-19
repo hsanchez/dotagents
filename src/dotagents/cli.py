@@ -190,12 +190,7 @@ def init(
     operation_log = init_runtime(repo_root, resolved_providers, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  _run_log(operation_log)
-  console.print(
-    "[green]Initialized dotagents runtime.[/green]"
-    if not dry_run
-    else "[yellow]Dry run complete.[/yellow]"
-  )
+  _finish(operation_log, dry_run, "Initialized dotagents runtime.")
 
 
 @app.command()
@@ -226,12 +221,7 @@ def sync(
     operation_log = sync_existing(repo_root, dry_run=dry_run, locked=locked)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  _run_log(operation_log)
-  console.print(
-    "[green]Synced dotagents runtime.[/green]"
-    if not dry_run
-    else "[yellow]Dry run complete.[/yellow]"
-  )
+  _finish(operation_log, dry_run, "Synced dotagents runtime.")
 
 
 @app.command()
@@ -250,12 +240,7 @@ def update(
     operation_log = update_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  _run_log(operation_log)
-  console.print(
-    "[green]Updated dotagents runtime.[/green]"
-    if not dry_run
-    else "[yellow]Dry run complete.[/yellow]"
-  )
+  _finish(operation_log, dry_run, "Updated dotagents runtime.")
 
 
 @app.command()
@@ -270,12 +255,7 @@ def uninstall(
     operation_log = uninstall_existing(repo_root, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  _run_log(operation_log)
-  console.print(
-    "[green]Uninstalled dotagents runtime.[/green]"
-    if not dry_run
-    else "[yellow]Dry run complete.[/yellow]"
-  )
+  _finish(operation_log, dry_run, "Uninstalled dotagents runtime.")
 
 
 @app.command()
@@ -330,14 +310,9 @@ def compile_mcp(
       from_command,
       tuple(command_args or ()),
     )
-    if dry_run:
-      print_compile_preview(compiled_skill)
-      console.print("[yellow]Dry run complete.[/yellow]")
-      return
-    write_compiled_skill(Path.cwd(), compiled_skill)
+    _finish_compile(compiled_skill, dry_run, "MCP", skill_name)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  print_compile_success("MCP", skill_name)
 
 
 def build_mcp_compiled_skill(
@@ -388,14 +363,9 @@ def compile_template(
       variables_path=variables,
       reserved_skill_names=bundled_skill_names(),
     )
-    if dry_run:
-      print_compile_preview(compiled_skill)
-      console.print("[yellow]Dry run complete.[/yellow]")
-      return
-    write_compiled_skill(Path.cwd(), compiled_skill)
+    _finish_compile(compiled_skill, dry_run, "template", output_skill)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  print_compile_success("template", output_skill)
 
 
 @compile_skill_app.command("github")
@@ -415,14 +385,20 @@ def compile_skill_github(
       output_skill,
       reserved_skill_names=bundled_skill_names(),
     )
-    if dry_run:
-      print_compile_preview(compiled_skill)
-      console.print("[yellow]Dry run complete.[/yellow]")
-      return
-    write_compiled_skill(Path.cwd(), compiled_skill)
+    _finish_compile(compiled_skill, dry_run, "GitHub", output_skill)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  print_compile_success("GitHub", output_skill)
+
+
+def _finish_compile(
+  compiled_skill: CompiledSkill, dry_run: bool, kind: str, output_skill: str
+) -> None:
+  if dry_run:
+    print_compile_preview(compiled_skill)
+    console.print("[yellow]Dry run complete.[/yellow]")
+    return
+  write_compiled_skill(Path.cwd(), compiled_skill)
+  print_compile_success(kind, output_skill)
 
 
 def print_compile_success(kind: str, output_skill: str) -> None:
@@ -491,12 +467,7 @@ def providers_add(
     operation_log = add_provider(Path.cwd(), provider, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  _run_log(operation_log)
-  console.print(
-    f"[green]Added provider: {provider}.[/green]"
-    if not dry_run
-    else "[yellow]Dry run complete.[/yellow]"
-  )
+  _finish(operation_log, dry_run, f"Added provider: {provider}.")
 
 
 @providers_app.command("remove")
@@ -509,17 +480,19 @@ def providers_remove(
     operation_log = remove_provider(Path.cwd(), provider, dry_run=dry_run)
   except DotagentsError as exc:
     _exit_with_error(exc)
-  _run_log(operation_log)
-  console.print(
-    f"[green]Removed provider: {provider}.[/green]"
-    if not dry_run
-    else "[yellow]Dry run complete.[/yellow]"
-  )
+  _finish(operation_log, dry_run, f"Removed provider: {provider}.")
 
 
 def _run_log(operation_log: OperationLog) -> None:
   for line in operation_log.lines:
     console.print(line)
+
+
+def _finish(operation_log: OperationLog, dry_run: bool, success_message: str) -> None:
+  _run_log(operation_log)
+  console.print(
+    f"[green]{success_message}[/green]" if not dry_run else "[yellow]Dry run complete.[/yellow]"
+  )
 
 
 def _exit_with_error(error: DotagentsError) -> NoReturn:

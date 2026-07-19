@@ -1,29 +1,16 @@
 import json
 import sys
-import tarfile
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pytest
-from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
+from helpers import github_tarball, make_lock_stale, make_manifest_stale, write_compiled_manifest
 from typer.testing import CliRunner
 
 import dotagents.compiler as compiler
 from dotagents.cli import app
 from dotagents.lockfile import read_lock
 from dotagents.runtime import init_runtime
-
-
-def github_tarball(files: dict[str, str]) -> bytes:
-  archive = BytesIO()
-  with tarfile.open(fileobj=archive, mode="w") as tar:
-    for path, content in files.items():
-      data = content.encode("utf-8")
-      item = tarfile.TarInfo(f"repo-root/{path}")
-      item.size = len(data)
-      tar.addfile(item, BytesIO(data))
-  return archive.getvalue()
 
 
 def test_list_providers_command_outputs_supported_providers() -> None:

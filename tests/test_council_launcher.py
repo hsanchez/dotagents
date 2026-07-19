@@ -4,15 +4,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from helpers import write_executable
 
 LAUNCHER = Path(__file__).parents[1] / "skills" / "council" / "scripts" / "run-agents"
 
 pytestmark = pytest.mark.skipif(shutil.which("nu") is None, reason="Nushell is not installed")
-
-
-def write_executable(path: Path, contents: str) -> None:
-  path.write_text(contents, encoding="utf-8")
-  path.chmod(0o755)
 
 
 def test_agy_receives_prompt_as_print_argument(tmp_path: Path) -> None:
