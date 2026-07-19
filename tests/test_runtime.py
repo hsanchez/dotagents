@@ -33,6 +33,7 @@ from dotagents.runtime import (
   rollback_created_backups,
   runtime_destination,
   sync_existing,
+  sync_runtime,
   uninstall_existing,
   update_existing,
 )
@@ -1092,11 +1093,164 @@ def test_rollback_continues_after_one_backup_failure(
 
   monkeypatch.setattr(Path, "rename", fail_second_backup)
 
-  rollback_created_backups(tmp_path, operation_log)
+  with pytest.raises(DotagentsError, match="rollback failed second.bak"):
+    rollback_created_backups(tmp_path, operation_log)
 
   assert first_destination.read_text(encoding="utf-8") == "first"
   assert second_backup.read_text(encoding="utf-8") == "second"
   assert any("rollback failed second.bak" in line for line in operation_log.lines)
+
+
+def test_rollback_preserves_destination_when_restore_fails(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A failed `backup.rename(destination)` must not leave `destination` empty.
+
+  Regression test: the prior implementation unlinked `destination` before attempting the
+  rename, so a rename failure after the unlink lost the destination's current content
+  entirely, with the backup stranded and the caller none the wiser.
+  """
+  destination = tmp_path / "managed"
+  destination.write_text("post-sync content", encoding="utf-8")
+  backup = tmp_path / "managed.bak"
+  backup.write_text("pre-sync content", encoding="utf-8")
+  operation_log = OperationLog()
+  operation_log.created_backups.append((destination, backup))
+  original_rename = Path.rename
+
+  def fail_backup_rename(self: Path, target: Path) -> Path:
+    if self == backup:
+      raise OSError("simulated disk failure")
+    return original_rename(self, target)
+
+  monkeypatch.setattr(Path, "rename", fail_backup_rename)
+
+  with pytest.raises(DotagentsError, match="rollback failed managed.bak"):
+    rollback_created_backups(tmp_path, operation_log)
+
+  assert destination.read_text(encoding="utf-8") == "post-sync content"
+  assert backup.read_text(encoding="utf-8") == "pre-sync content"
+
+
+def test_rollback_surfaces_leftover_aside_cleanup_failure(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A successful restore whose leftover aside file can't be deleted must still be reported.
+
+  Regression test: the prior implementation only logged this case, never raised — so the
+  stray `.rollback-<uuid>` file (holding the discarded post-sync content) went unmentioned in
+  the exception the caller actually sees.
+  """
+  destination = tmp_path / "managed"
+  destination.write_text("post-sync content", encoding="utf-8")
+  backup = tmp_path / "managed.bak"
+  backup.write_text("pre-sync content", encoding="utf-8")
+  operation_log = OperationLog()
+  operation_log.created_backups.append((destination, backup))
+  original_unlink = Path.unlink
+
+  def fail_aside_unlink(self: Path) -> None:
+    if ".rollback-" in self.name:
+      raise OSError("simulated cleanup failure")
+    return original_unlink(self)
+
+  monkeypatch.setattr(Path, "unlink", fail_aside_unlink)
+
+  with pytest.raises(DotagentsError, match="could not remove leftover"):
+    rollback_created_backups(tmp_path, operation_log)
+
+  assert destination.read_text(encoding="utf-8") == "pre-sync content"
+  assert any("could not remove leftover" in line for line in operation_log.lines)
+
+
+def test_sync_runtime_surfaces_rollback_failure(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """When both the sync body and the resulting rollback fail, the caller must see both.
+
+  Regression test: `sync_runtime` used to re-raise only the original failure, silently
+  discarding a `rollback_created_backups` failure recorded in `operation_log` — an
+  `OperationLog` the exception path never returns to the caller.
+  """
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  runtime_context = build_context(Path.cwd())
+
+  def failing_sync_body(
+    context: runtime_module.RuntimeContext,
+    dry_run: bool,
+    locked: bool,
+    operation_log: OperationLog,
+  ) -> None:
+    destination = tmp_path / "managed"
+    destination.write_text("post-sync content", encoding="utf-8")
+    backup = tmp_path / "managed.bak"
+    backup.write_text("pre-sync content", encoding="utf-8")
+    operation_log.created_backups.append((destination, backup))
+    raise DotagentsError("simulated sync failure")
+
+  monkeypatch.setattr(runtime_module, "_sync_runtime_body", failing_sync_body)
+  original_rename = Path.rename
+
+  def fail_backup_rename(self: Path, target: Path) -> Path:
+    if self.name == "managed.bak":
+      raise OSError("simulated rollback failure")
+    return original_rename(self, target)
+
+  monkeypatch.setattr(Path, "rename", fail_backup_rename)
+
+  with pytest.raises(DotagentsError) as excinfo:
+    sync_runtime(runtime_context)
+
+  message = str(excinfo.value)
+  assert "simulated sync failure" in message
+  assert "rollback failed managed.bak" in message
+
+
+def test_sync_runtime_surfaces_rollback_failure_for_non_dotagents_error(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """The rollback failure must reach the caller even when the original failure isn't a
+  `DotagentsError` — e.g. a raw `OSError` from `ensure_dir`'s unguarded `path.mkdir()`.
+
+  Regression test: the prior implementation only folded the rollback failure into the raised
+  exception when `isinstance(exc, DotagentsError)` was true, so a plain `OSError` (or any
+  other exception type) from `_sync_runtime_body` reached the caller with no mention that
+  rollback also failed.
+  """
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  runtime_context = build_context(Path.cwd())
+
+  def failing_sync_body(
+    context: runtime_module.RuntimeContext,
+    dry_run: bool,
+    locked: bool,
+    operation_log: OperationLog,
+  ) -> None:
+    destination = tmp_path / "managed"
+    destination.write_text("post-sync content", encoding="utf-8")
+    backup = tmp_path / "managed.bak"
+    backup.write_text("pre-sync content", encoding="utf-8")
+    operation_log.created_backups.append((destination, backup))
+    raise OSError("simulated mkdir failure")
+
+  monkeypatch.setattr(runtime_module, "_sync_runtime_body", failing_sync_body)
+  original_rename = Path.rename
+
+  def fail_backup_rename(self: Path, target: Path) -> Path:
+    if self.name == "managed.bak":
+      raise OSError("simulated rollback failure")
+    return original_rename(self, target)
+
+  monkeypatch.setattr(Path, "rename", fail_backup_rename)
+
+  with pytest.raises(DotagentsError) as excinfo:
+    sync_runtime(runtime_context)
+
+  message = str(excinfo.value)
+  assert "simulated mkdir failure" in message
+  assert "rollback failed managed.bak" in message
 
 
 def test_sync_repairs_missing_provider_link(

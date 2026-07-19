@@ -1,7 +1,11 @@
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import dotagents.lockfile as lockfile_module
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import (
   LockedAsset,
@@ -154,6 +158,84 @@ def test_directory_fingerprint_distinguishes_differently_structured_trees_with_c
   (split / "other").write_bytes(b"world")
 
   assert directory_fingerprint(single) != directory_fingerprint(split)
+
+
+def test_directory_fingerprint_rejects_too_many_entries(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Bounds the walk against an adversarially wide directory (fan-out DoS).
+
+  `directory_fingerprint` fingerprints a pre-existing directory at a managed destination
+  before backing it up — content dotagents doesn't control, so a hostile checkout could put
+  an unbounded number of entries there. The cap is patched down instead of creating real
+  entries so the test stays fast.
+  """
+  monkeypatch.setattr(lockfile_module, "MAX_FINGERPRINT_ENTRIES", 2)
+  tree = tmp_path / "tree"
+  tree.mkdir()
+  (tree / "one.txt").write_text("a", encoding="utf-8")
+  (tree / "two.txt").write_text("b", encoding="utf-8")
+  (tree / "three.txt").write_text("c", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="exceeds max entry count"):
+    directory_fingerprint(tree)
+
+
+def test_directory_fingerprint_enforces_entry_cap_before_full_enumeration(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """The entry cap must stop enumeration before the full directory listing is consumed.
+
+  Regression test: the prior implementation called `sorted(os.scandir(current_path), ...)`
+  before the cap check in the loop below, so a directory with far more entries than the cap
+  still paid the full listing and O(n log n) sort cost before the cap ever got a chance to
+  fire — what mattered for an adversarially wide directory, not just the final error.
+  """
+  entry_cap = 3
+  monkeypatch.setattr(lockfile_module, "MAX_FINGERPRINT_ENTRIES", entry_cap)
+  tree = tmp_path / "tree"
+  tree.mkdir()
+  for index in range(10):
+    (tree / f"file{index}.txt").write_text("x", encoding="utf-8")
+
+  consumed_count = 0
+  original_scandir = os.scandir
+
+  @contextmanager
+  def counting_scandir(path: str | os.PathLike[str]) -> Iterator[Iterator[os.DirEntry[str]]]:
+    def counted_entries() -> Iterator[os.DirEntry[str]]:
+      nonlocal consumed_count
+      with original_scandir(path) as scanner:
+        for entry in scanner:
+          consumed_count += 1
+          yield entry
+
+    yield counted_entries()
+
+  monkeypatch.setattr(os, "scandir", counting_scandir)
+
+  with pytest.raises(DotagentsError, match="exceeds max entry count"):
+    directory_fingerprint(tree)
+
+  # The loop checks the cap right after pulling each entry, so it pulls one entry past the
+  # cap before it can detect the overage and raise — bounded, not the same as unbounded.
+  assert consumed_count <= entry_cap + 1, (
+    "enumeration must stop at the entry cap, not consume the full directory"
+  )
+
+
+def test_directory_fingerprint_rejects_too_deep_nesting(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Bounds the walk against an adversarially deep directory (recursion DoS)."""
+  monkeypatch.setattr(lockfile_module, "MAX_FINGERPRINT_DEPTH", 2)
+  tree = tmp_path / "tree"
+  nested = tree / "a" / "b" / "c"
+  nested.mkdir(parents=True)
+  (nested / "file.txt").write_text("content", encoding="utf-8")
+
+  with pytest.raises(DotagentsError, match="exceeds max nesting depth"):
+    directory_fingerprint(tree)
 
 
 @pytest.mark.parametrize(

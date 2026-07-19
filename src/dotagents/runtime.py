@@ -3,6 +3,7 @@
 import filecmp
 import os
 import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -418,16 +419,57 @@ def rollback_created_backups(repo_root: Path, operation_log: OperationLog) -> No
   entry's backup created on disk but never recorded in the lockfile — stranded as untracked
   on retry, since the "don't adopt an unrecorded `.bak`" protection can't tell it apart from
   a genuinely stray file.
+
+  Each restore moves the current `destination` aside (instead of unlinking it) before
+  renaming the backup into place, so a `backup.rename()` failure after the move — a
+  cross-device rename, a permission change, disk full — doesn't leave `destination` empty.
+  On failure the aside file is renamed back so `destination` ends up unchanged rather than
+  gone. Every backup is still attempted even if an earlier one fails.
+
+  Raises:
+    DotagentsError: if any backup could not be restored, after every backup was attempted.
   """
+  failures: list[str] = []
   for destination, backup in reversed(operation_log.created_backups):
     if not backup.exists(follow_symlinks=False):
       continue
+    aside: Path | None = None
+    moved_aside = False
     try:
-      if destination.exists() or destination.is_symlink():
-        destination.unlink()
+      if destination.exists(follow_symlinks=False):
+        aside = destination.parent / f"{destination.name}.rollback-{uuid.uuid4().hex}"
+        destination.rename(aside)
+        moved_aside = True
       backup.rename(destination)
     except OSError as exc:
-      operation_log.add(f"rollback failed {relative(repo_root, backup)}: {exc}")
+      detail = f"rollback failed {relative(repo_root, backup)}: {exc}"
+      if moved_aside and aside is not None and not destination.exists(follow_symlinks=False):
+        try:
+          aside.rename(destination)
+        except OSError as restore_exc:
+          detail += (
+            f"; could not restore prior state either ({restore_exc}); "
+            f"original content preserved at {relative(repo_root, aside)}"
+          )
+      operation_log.add(detail)
+      failures.append(detail)
+      continue
+    if moved_aside and aside is not None:
+      try:
+        aside.unlink()
+      except OSError as cleanup_exc:
+        # The restore itself succeeded — `destination` holds the correct content — but the
+        # discarded pre-rollback content is now stranded at `aside` instead of removed. Still
+        # counts as incomplete: left alone, that stray file is silent disk debris nobody was
+        # told about.
+        detail = (
+          f"restored {relative(repo_root, backup)} -> {relative(repo_root, destination)}, "
+          f"but could not remove leftover {relative(repo_root, aside)}: {cleanup_exc}"
+        )
+        operation_log.add(detail)
+        failures.append(detail)
+  if failures:
+    raise DotagentsError("rollback did not fully complete:\n" + "\n".join(failures))
 
 
 def sync_runtime(
@@ -436,9 +478,17 @@ def sync_runtime(
   operation_log = OperationLog(dry_run=dry_run)
   try:
     _sync_runtime_body(runtime_context, dry_run, locked, operation_log)
-  except Exception:
+  except Exception as exc:
     if not dry_run:
-      rollback_created_backups(runtime_context.repo_root, operation_log)
+      try:
+        rollback_created_backups(runtime_context.repo_root, operation_log)
+      except DotagentsError as rollback_exc:
+        # `main()` only special-cases `DotagentsError` for its clean "ERROR: ..." rendering;
+        # every other exception type gets a raw traceback instead. Folding the rollback
+        # failure into a `DotagentsError` message (regardless of the original exception's
+        # type) is what makes it reach that same visible path every time, rather than only
+        # when `_sync_runtime_body` happened to raise a `DotagentsError` itself.
+        raise DotagentsError(f"{exc}\n{rollback_exc}") from exc
     raise
   return operation_log
 

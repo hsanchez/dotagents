@@ -97,19 +97,49 @@ def _update_with_field(digest: hashlib._Hash, data: bytes) -> None:
   digest.update(data)
 
 
+# A directory being fingerprinted is whatever a pre-existing managed destination happens to
+# contain at backup time, not something dotagents controls — on a hostile checkout that could
+# be an adversarially large or deep tree. These caps bound the walk to keep fingerprinting a
+# bounded, fast operation; both are far beyond any real managed skill/provider directory (the
+# largest in this repo's own `skills/` is a few dozen files, four levels deep).
+MAX_FINGERPRINT_ENTRIES = 20_000
+MAX_FINGERPRINT_DEPTH = 64
+
+
 def directory_fingerprint(path: Path) -> str:
   """Return a deterministic fingerprint of a directory tree.
 
   Raises:
-    DotagentsError: if the tree contains an unsupported special file or cannot be read.
+    DotagentsError: if the tree contains an unsupported special file, cannot be read, or
+      exceeds MAX_FINGERPRINT_ENTRIES entries or MAX_FINGERPRINT_DEPTH levels of nesting.
   """
   digest = hashlib.sha256()
+  entry_count = 0
 
-  def visit(current_path: Path, relative_path: Path) -> None:
+  def visit(current_path: Path, relative_path: Path, depth: int) -> None:
+    nonlocal entry_count
+    if depth > MAX_FINGERPRINT_DEPTH:
+      raise DotagentsError(
+        f"cannot fingerprint directory: {path} exceeds max nesting depth ({MAX_FINGERPRINT_DEPTH})"
+      )
+    # Enforce the entry cap while enumerating, before `sorted()` — a single directory with
+    # millions of entries would otherwise pay the full os.scandir + O(n log n) sort cost
+    # before the cap in the loop below ever got a chance to fire.
     try:
-      entries = sorted(os.scandir(current_path), key=lambda entry: entry.name)
+      raw_entries = []
+      with os.scandir(current_path) as scanner:
+        for entry in scanner:
+          entry_count += 1
+          if entry_count > MAX_FINGERPRINT_ENTRIES:
+            raise DotagentsError(
+              f"cannot fingerprint directory: {path} exceeds max entry count "
+              f"({MAX_FINGERPRINT_ENTRIES})"
+            )
+          raw_entries.append(entry)
     except OSError as exc:
       raise DotagentsError(f"cannot fingerprint directory: {current_path}") from exc
+    raw_entries.sort(key=lambda entry: entry.name)
+    entries = raw_entries
 
     for entry in entries:
       entry_path = current_path / entry.name
@@ -123,7 +153,7 @@ def directory_fingerprint(path: Path) -> str:
         elif entry.is_dir(follow_symlinks=False):
           _update_with_field(digest, b"directory")
           _update_with_field(digest, encoded_name)
-          visit(entry_path, entry_relative_path)
+          visit(entry_path, entry_relative_path, depth + 1)
         elif entry.is_file(follow_symlinks=False):
           _update_with_field(digest, b"file")
           _update_with_field(digest, encoded_name)
@@ -133,7 +163,7 @@ def directory_fingerprint(path: Path) -> str:
       except OSError as exc:
         raise DotagentsError(f"cannot fingerprint directory: {entry_path}") from exc
 
-  visit(path, Path())
+  visit(path, Path(), 0)
   return f"directory:sha256:{digest.hexdigest()}"
 
 
