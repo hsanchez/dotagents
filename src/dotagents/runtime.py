@@ -513,11 +513,12 @@ def _sync_runtime_body(
     runtime_context.runtime_dir / "agents.toml",
     operation_log,
   )
+  manifest_sha256 = sha256_file(runtime_context.asset_root / "agents.toml")
   locked_assets.append(
     LockedAsset(
       "agents.toml",
       relative(runtime_context.repo_root, runtime_context.runtime_dir / "agents.toml"),
-      sha256_file(runtime_context.asset_root / "agents.toml"),
+      manifest_sha256,
     )
   )
 
@@ -611,7 +612,7 @@ def _sync_runtime_body(
     generated_at = previous_lock.generated_at if locked and previous_lock else None
     write_lock(
       lock_path,
-      compute_manifest_sha256(runtime_context),
+      manifest_sha256,
       runtime_context.providers,
       unique_locked_assets(locked_assets),
       unique_locked_links(locked_links),

@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from helpers import github_tarball
 
 import dotagents.compiler as compiler
 from dotagents.compiler import (
@@ -54,17 +55,6 @@ def templates(tmp_path: Path) -> Path:
   templates_dir = tmp_path / "templates"
   templates_dir.mkdir()
   return templates_dir
-
-
-def github_tarball(files: dict[str, str]) -> bytes:
-  archive = BytesIO()
-  with tarfile.open(fileobj=archive, mode="w") as tar:
-    for path, content in files.items():
-      data = content.encode("utf-8")
-      item = tarfile.TarInfo(f"repo-root/{path}")
-      item.size = len(data)
-      tar.addfile(item, BytesIO(data))
-  return archive.getvalue()
 
 
 def github_tarball_with_sizes(files: dict[str, int]) -> bytes:

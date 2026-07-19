@@ -2,26 +2,16 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
-import types
 from pathlib import Path
 from typing import Any
 
+from helpers import load_script_module
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "skills" / "pr-comments" / "scripts"
 
-
-def _load(name: str) -> types.ModuleType:
-  spec = importlib.util.spec_from_file_location(name, SCRIPTS_DIR / f"{name}.py")
-  if spec is None or spec.loader is None:
-    raise ImportError(f"cannot load script: {name}")
-  module = importlib.util.module_from_spec(spec)
-  spec.loader.exec_module(module)
-  return module
-
-
-fetch_mod = _load("fetch_comments")
+fetch_mod = load_script_module("fetch_comments", SCRIPTS_DIR)
 
 
 # --- _parse_paginated ---

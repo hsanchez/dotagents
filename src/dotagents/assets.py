@@ -1,10 +1,12 @@
 """Bundled asset discovery."""
 
 import tomllib
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 
 
+@lru_cache(maxsize=1)
 def asset_root() -> Path:
   packaged = Path(str(resources.files("dotagents").joinpath("_assets")))
   if packaged.exists():

@@ -2,12 +2,9 @@ import os
 import subprocess
 from pathlib import Path
 
+from helpers import write_executable
+
 BIN_DOT = Path(__file__).parents[1] / "bin" / "dot"
-
-
-def write_executable(path: Path, contents: str) -> None:
-  path.write_text(contents, encoding="utf-8")
-  path.chmod(0o755)
 
 
 def copy_bin_dot_into(repo_root: Path) -> Path:

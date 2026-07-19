@@ -1,30 +1,20 @@
-import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
+from helpers import load_script_module
 
 SKILLS_DIR = Path(__file__).parent.parent / "skills" / "pr-walkthrough" / "scripts"
 
 
-def _load(name: str):
-  spec = importlib.util.spec_from_file_location(name, SKILLS_DIR / f"{name}.py")
-  assert spec and spec.loader
-  module = importlib.util.module_from_spec(spec)
-  sys.modules[name] = module
-  spec.loader.exec_module(module)
-  return module
-
-
 @pytest.fixture(scope="module")
 def runtime_mod():
-  return _load("d3_canvas_runtime")
+  return load_script_module("d3_canvas_runtime", SKILLS_DIR)
 
 
 @pytest.fixture(scope="module")
 def validate_mod():
-  return _load("validate_d3_canvas")
+  return load_script_module("validate_d3_canvas", SKILLS_DIR)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
