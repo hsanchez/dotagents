@@ -1,5 +1,4 @@
 import importlib.util
-import sys
 import tarfile
 import types
 from io import BytesIO
@@ -38,7 +37,6 @@ def load_script_module(name: str, scripts_dir: Path) -> types.ModuleType:
   if spec is None or spec.loader is None:
     raise ImportError(f"cannot load script: {name}")
   module = importlib.util.module_from_spec(spec)
-  sys.modules[name] = module
   spec.loader.exec_module(module)
   return module
 
