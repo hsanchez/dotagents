@@ -133,9 +133,13 @@ Any persona can run on any backend in this table. A persona is not tied to its d
 
 If `gh copilot` is missing, fall back to the standalone `copilot` binary (same flags, no `gh copilot --` wrapper); if neither is present, treat it as missing per [Error Handling](#error-handling) — do not auto-install.
 
-If a Copilot invocation fails because its quota or token allowance is exhausted, reroute that persona to `agy`. Detect this from the Copilot exit status and matching quota/exhaustion text in its stderr or stdout; do not treat a successful invocation with empty stdout as quota exhaustion. Record `agy` as the backend actually used. If `agy` is unavailable or fails, treat the persona as failed unless another documented fallback applies.
+If `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set, the audit is already running inside Codex. Treat `codex` as unavailable for this run because a nested Codex cannot initialize its app-server client under the parent seatbelt sandbox. Reroute Codex personas to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails — `agy` is unreliable for this use case (see [Error Handling](#error-handling)) and should never be the first fallback tried. Do not retry nested Codex from another working directory.
 
-If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `codex` and run the same persona there. This is a backend fallback, not a persona failure. If `codex` is unavailable or fails to start, try `claude`. Only mark the persona failed after all non-Copilot fallback backends have failed.
+Default Claude reviews use the user's Claude login/OAuth session. Run them with `ANTHROPIC_API_KEY` removed from the subprocess environment; an inherited API key otherwise takes precedence over login auth. If the user explicitly requests API-key authentication, honor that override.
+
+If a Copilot invocation fails because its quota or token allowance is exhausted, reroute that persona to `codex`, then `claude`, then `agy` only as a last resort (the full order and rationale are in [Copilot Prompt Limit and Fallback](#copilot-prompt-limit-and-fallback) and the Error Handling table). Detect quota exhaustion from the Copilot exit status and matching quota/exhaustion text in its stderr or stdout; do not treat a successful invocation with empty stdout as quota exhaustion. Record whichever backend actually ran the persona in the summary. Treat the persona as failed only if every fallback is unavailable or fails.
+
+If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `claude` when nested inside Codex (where `codex` is unavailable); otherwise use `codex`. This is a backend fallback, not a persona failure. If the selected fallback is unavailable or fails to start, try the other of `codex`/`claude`; only fall back to `agy` if both have failed. Only mark the persona failed after every fallback has failed.
 
 If the user asks for a backend not in this table, tell them it is unsupported and list the table above.
 
@@ -267,6 +271,8 @@ For Copilot backends, build a combined input file because `gh copilot` does not 
 
 Claude and Codex personas consume the persona prompt separately from `$PROMPT_FILE`. Copilot and Agy personas consume their combined input file.
 
+When a persona is routed to Agy, create its combined input file using the same format above before launching Agy. Agy receives the persona instructions and canonical review prompt as one positional prompt.
+
 Do not re-run `review-code`.
 
 ## Execution
@@ -305,8 +311,9 @@ fi
 
 Fallback order for an oversized Copilot prompt:
 
-1. `codex`
-2. `claude`
+1. `codex`, or `claude` if the audit is already running inside Codex (where `codex` is unavailable)
+2. the other of `codex`/`claude`
+3. `agy`, only if both `codex` and `claude` have failed
 
 When a persona is rerouted, record the actual backend used in the summary. Do not include the failed Copilot attempt in `Failed personas`; it was never invoked.
 
@@ -317,10 +324,48 @@ When a persona is rerouted, record the actual backend used in the summary. Do no
 ```bash
 (
   cd "$REVIEWER_CWD" && \
-  codex exec --sandbox read-only --ephemeral \
+  codex exec --sandbox read-only --ephemeral --skip-git-repo-check \
     -o "$OUTPUT_DIR/audit-output-NN" \
     "$(cat "$PERSONA_DIR/auditor.txt")" < "$PROMPT_FILE" \
     2> "$OUTPUT_DIR/auditor.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "auditor" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
+```
+
+`$REVIEWER_CWD` is a bare `mktemp -d` directory, not a git repository — without `--skip-git-repo-check`, `codex exec` refuses to start there ("Not inside a trusted directory"), failing every single invocation. This is not an edge case; omit the flag and Auditor never runs.
+
+When Codex is unavailable because the audit is running inside Codex, reroute Auditor to `claude` first; only use `agy` if `claude` is also unavailable or fails.
+
+**Auditor rerouted to claude:**
+
+```bash
+(
+  cd "$REVIEWER_CWD" && \
+  env -u ANTHROPIC_API_KEY claude --system-prompt "$(cat "$PERSONA_DIR/auditor.txt")" \
+    --print < "$PROMPT_FILE" \
+    > "$OUTPUT_DIR/audit-output-NN" \
+    2> "$OUTPUT_DIR/auditor-claude.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "auditor" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
+```
+
+**Auditor rerouted to agy (last resort):**
+
+```bash
+(
+  cd "$REVIEWER_CWD" && \
+  agy --sandbox --print \
+    "$(cat "$OUTPUT_DIR/input-auditor")" \
+    --print-timeout 600s \
+    --log-file "$OUTPUT_DIR/auditor-agy.log" \
+    > "$OUTPUT_DIR/audit-output-NN" \
+    2> "$OUTPUT_DIR/auditor-agy.stderr"
 )
 if [ $? -eq 0 ]; then
   printf '%s\t%s\n' "auditor" "$OUTPUT_DIR/audit-output-NN" \
@@ -333,7 +378,7 @@ fi
 ```bash
 (
   cd "$REVIEWER_CWD" && \
-  claude --system-prompt "$(cat "$PERSONA_DIR/adversary.txt")" \
+  env -u ANTHROPIC_API_KEY claude --system-prompt "$(cat "$PERSONA_DIR/adversary.txt")" \
     --print < "$PROMPT_FILE" \
     > "$OUTPUT_DIR/audit-output-NN" \
     2> "$OUTPUT_DIR/adversary.stderr"
@@ -359,14 +404,51 @@ if [ $? -eq 0 ]; then
 fi
 ```
 
-If the Copilot process exits nonzero and its stdout or `pragmatist.stderr` indicates exhausted quota or tokens, run the same combined prompt through Agy:
+If the Copilot process exits nonzero and its stdout or `pragmatist.stderr` indicates exhausted quota or tokens, reroute that persona using the same persona prompt and canonical review prompt.
+
+Same fallback order as an [oversized Copilot prompt](#copilot-prompt-limit-and-fallback): `codex`, then `claude`, then `agy` only as a last resort — see that section for the nested-Codex adjustment. Agy has been unreliable for this use case (see the Agy row in [Error Handling](#error-handling)) — even a clean exit code does not mean it produced a usable review. Treat its output with more scrutiny than the other backends, and do not be surprised if it produces nothing usable at all.
+
+**Pragmatist rerouted to codex:**
 
 ```bash
 (
   cd "$REVIEWER_CWD" && \
-  agy --sandbox --print --print-timeout 600 \
-    --log-file "$OUTPUT_DIR/pragmatist-agy.log" \
+  codex exec --sandbox read-only --ephemeral --skip-git-repo-check \
+    -o "$OUTPUT_DIR/audit-output-NN" \
+    "$(cat "$PERSONA_DIR/pragmatic.txt")" < "$PROMPT_FILE" \
+    2> "$OUTPUT_DIR/pragmatist-codex.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "pragmatist" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
+```
+
+**Pragmatist rerouted to claude:**
+
+```bash
+(
+  cd "$REVIEWER_CWD" && \
+  env -u ANTHROPIC_API_KEY claude --system-prompt "$(cat "$PERSONA_DIR/pragmatic.txt")" \
+    --print < "$PROMPT_FILE" \
+    > "$OUTPUT_DIR/audit-output-NN" \
+    2> "$OUTPUT_DIR/pragmatist-claude.stderr"
+)
+if [ $? -eq 0 ]; then
+  printf '%s\t%s\n' "pragmatist" "$OUTPUT_DIR/audit-output-NN" \
+    >> "$OUTPUT_DIR/manifest.tsv"
+fi
+```
+
+**Pragmatist rerouted to agy (last resort):**
+
+```bash
+(
+  cd "$REVIEWER_CWD" && \
+  agy --sandbox --print \
     "$(cat "$OUTPUT_DIR/input-pragmatist")" \
+    --print-timeout 600s \
+    --log-file "$OUTPUT_DIR/pragmatist-agy.log" \
     > "$OUTPUT_DIR/audit-output-NN" \
     2> "$OUTPUT_DIR/pragmatist-agy.stderr"
 )
@@ -378,7 +460,7 @@ fi
 
 An exit code of 0 with empty stdout is a valid result: the persona found nothing. A nonzero exit code is always a failure, regardless of what was written to stdout — never report it as "no findings." Read the matching `.stderr` file to report or diagnose the failure.
 
-If a persona is assigned or rerouted to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt, `codex` → instruction prompt, `copilot-gemini` → combined prompt, `agy` → combined positional prompt).
+If a persona is assigned or rerouted to a backend other than its default, use that backend's persona-delivery mechanism from the [Backends](#backends) table, following the invocation shape of the matching example above (`claude` → system prompt with `ANTHROPIC_API_KEY` removed unless API-key auth was explicitly requested, `codex` → instruction prompt, `copilot-gemini` → combined prompt, `agy` → combined positional prompt).
 
 ## Execution Quorum
 
@@ -619,9 +701,13 @@ If aggregation fails:
 | `agy: command not found`        | Tell user to install or enable the Agy CLI.                            |
 | `claude: command not found`     | Tell user to install Claude Code.                                       |
 | `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
-| Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If it still fails, treat as a genuine failure and report the exact startup error from `auditor.stderr` — do not retry inside the repo root. |
-| Copilot prompt exceeds limit   | Reroute that persona to `codex`, then `claude` if needed. Treat as failed only if every non-Copilot fallback fails. |
-| Copilot quota exhausted        | Reroute that persona to `agy`. Treat it as failed if Agy is unavailable or exits nonzero. |
+| Codex nested inside an existing Codex sandbox (`CODEX_SANDBOX` or `CODEX_THREAD_ID` set) | Skip nested Codex and reroute to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails. |
+| Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If the audit is nested inside Codex, use the nested-Codex fallback above. Otherwise treat as a genuine failure and report the exact startup error from `auditor.stderr`. |
+| Claude login authentication | Run Claude with `ANTHROPIC_API_KEY` removed. If `claude auth status --json` does not report a logged-in session, tell the user to run `claude login`. |
+| Copilot prompt exceeds limit   | Reroute that persona to `codex`, or `claude` if nested inside Codex; try the other of the two next; `agy` only if both have failed. Treat as failed only if every non-Copilot fallback fails. |
+| Copilot quota exhausted        | Reroute that persona to `codex`, then `claude`, then `agy` as a last resort. Treat it as failed only if every fallback is unavailable or fails. |
+| Agy produces no usable review even with a correct invocation | Known issue, tracked in an open GitHub issue (search for "agy" review-backend reliability). `agy --print` is a full agentic CLI, not a stateless text-completion tool: given a prompt that references a real file path, it has been observed to go search the filesystem for that file — in an unrelated local project it already knew about, not this repo and not `$REVIEWER_CWD` — instead of reviewing the supplied diff text, and finish with no findings and no verdict line despite exit 0. This is why `agy` is now a last-resort fallback rather than Pragmatist's first fallback. |
+| Agy output is unrelated to the supplied prompt (exit 0) | The positional prompt must come immediately after `--print`, before any other flag. If a value-taking flag such as `--print-timeout` precedes the prompt, `agy` fails to bind the prompt argument and instead returns an unrelated self-referential response (e.g. explaining its own `--print-timeout` flag) — silently, with exit 0. The invocations above already use the correct order; if a future edit reorders them, this is the symptom to watch for. This is a separate failure mode from the filesystem-exploration issue above — fixing the argument order does not fix that one. |
 | Reviewer timeout                | Exclude reviewer; continue if quorum remains.                           |
 | Reviewer exits nonzero          | Treat as failed regardless of stdout content; report exit code and stderr.|
 | Fewer than 2 successful reviews | Abort adversarial audit.                                                |
