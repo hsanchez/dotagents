@@ -99,6 +99,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert not (tmp_path / ".agents" / "skills" / "review-saga").exists()
   assert not (tmp_path / ".agents" / "skills" / "saga").exists()
   assert (tmp_path / ".agents" / "skills" / "startup").is_dir()
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
   assert (tmp_path / ".agents" / "skills" / "unpack").is_dir()
   assert (tmp_path / ".agents" / "providers" / "copilot" / "review.prompt.md").exists()
   assert not (tmp_path / ".agents" / "agent").exists()
@@ -111,6 +112,8 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".claude" / "commands").readlink() == Path("../.agents/scripts")
   assert (tmp_path / ".claude" / "skills").is_symlink()
   assert (tmp_path / ".claude" / "skills").readlink() == Path("../.agents/skills")
+  assert (tmp_path / ".claude" / "hooks" / "session-start.sh").is_symlink()
+  assert (tmp_path / ".github" / "hooks" / "dotagents-discovery.json").is_symlink()
   assert (tmp_path / ".github" / "hooks" / "block-dangerous-git").is_symlink()
   runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   link_destinations = {link.destination for link in runtime_lock.links}
@@ -320,7 +323,7 @@ def test_init_materializes_only_skillfile_selection(
   assert not (tmp_path / ".github" / "hooks" / "block-dangerous-git").exists()
   assert not (tmp_path / ".claude" / "hooks" / "block-dangerous-git").exists()
   lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
-  assert lock.skills == ("research",)
+  assert lock.skills == ("dotagents-discovery", "research")
   assert lock.skillfile_sha256 is not None
 
 
@@ -1531,6 +1534,9 @@ def test_init_all_providers_creates_expected_provider_outputs(
   assert (tmp_path / "GEMINI.md").is_symlink()
   assert (tmp_path / ".codex" / "config.toml").is_symlink()
   assert (tmp_path / ".gemini" / "settings.json").is_symlink()
+  assert (tmp_path / ".codex" / "hooks.json").is_symlink()
+  assert (tmp_path / ".codex" / "hooks" / "session-start.sh").is_symlink()
+  assert (tmp_path / ".gemini" / "hooks" / "session-start.sh").is_symlink()
 
 
 def test_runtime_destination_rejects_unknown_source_root(tmp_path: Path) -> None:

@@ -205,6 +205,25 @@ def doctor(root: RootOption = None, global_scope: GlobalOption = False) -> None:
 
 
 @app.command()
+def discover(
+  json_output: bool = typer.Option(False, "--json", help="Print the capability index JSON."),
+  root: RootOption = None,
+  global_scope: GlobalOption = False,
+) -> None:
+  """Show skills materialized by the dotagents runtime."""
+  repo_root = _resolve_root_or_exit(root, global_scope)
+  index = capability_index(repo_root)
+  if json_output:
+    console.print_json(json.dumps(capability_index_payload(index)))
+    return
+  if not index.skills:
+    console.print("No materialized skills found.")
+    return
+  for skill in index.skills:
+    console.print(f"{skill.name}: {skill.status} ({skill.path})")
+
+
+@app.command()
 def sync(
   locked: bool = typer.Option(False, "--locked", help="Require Skillfile and lockfile to match."),
   dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),

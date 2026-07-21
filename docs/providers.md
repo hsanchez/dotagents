@@ -24,6 +24,20 @@ CLAUDE.md -> .rules
 The exact output depends on selected providers and skills. Shared skills are
 canonical under `.agents/skills`; provider-facing paths point to that runtime.
 
+## Skill discovery
+
+Each initialized provider receives the same `dotagents-discovery` meta-skill.
+It is required runtime output and remains installed when the `Skillfile` or
+preset changes. The meta-skill routes a task only to skills materialized under
+`.agents/skills`.
+
+Claude injects it at session start through `.claude/hooks/session-start.sh`.
+Gemini injects it through `.gemini/hooks/session-start.sh`. Copilot receives a
+session-start prompt hook plus the shared instruction file. Codex uses the
+generated `AGENTS.md`/`CODEX.md` instructions and a `.codex/hooks.json`
+`SessionStart` hook. The instruction files remain repository guidance; skill
+discovery is provided by the native hooks and the `.agents/skills` directory.
+
 ## Provider selection
 
 Initialize all approved providers with:

@@ -9,6 +9,7 @@ from pathlib import Path
 from dotagents.errors import DotagentsError
 
 SKILLFILE_NAME = "Skillfile"
+REQUIRED_SKILLS = ("dotagents-discovery",)
 
 # Renamed presets - old name maps to current name for backward compatibility.
 PRESET_ALIASES: dict[str, str] = {
@@ -90,7 +91,10 @@ def render_template(asset_root: Path) -> str:
   lines = ["# Uncomment presets and skills to install.", ""]
   if presets:
     lines.extend(["# Presets:", *(f"# use {preset}" for preset in presets), ""])
-  lines.extend(["# Skills:", *(f"# skill {skill}" for skill in available_skills(asset_root)), ""])
+  selectable_skills = tuple(
+    skill for skill in available_skills(asset_root) if skill not in REQUIRED_SKILLS
+  )
+  lines.extend(["# Skills:", *(f"# skill {skill}" for skill in selectable_skills), ""])
   return "\n".join(lines)
 
 

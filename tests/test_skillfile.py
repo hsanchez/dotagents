@@ -66,9 +66,9 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
 
 def test_full_preset_resolves_all_skills() -> None:
   selected = resolve_preset("full", asset_root())
-  opt_in_skills = {"prek-bootstrap", "review-saga", "saga"}
+  excluded_skills = {"dotagents-discovery", "prek-bootstrap", "review-saga", "saga"}
 
-  assert set(selected) == set(available_skills(asset_root())) - opt_in_skills
+  assert set(selected) == set(available_skills(asset_root())) - excluded_skills
   assert "prek-bootstrap" not in selected
   assert "review-saga" not in selected
   assert "saga" not in selected
@@ -131,6 +131,7 @@ def test_template_lists_presets_and_skills() -> None:
   assert "# skill review-pr" in template
   assert "# skill review-saga" in template
   assert "# skill saga" in template
+  assert "dotagents-discovery" not in template
 
 
 def test_skill_docs_have_valid_toml_fences() -> None:
