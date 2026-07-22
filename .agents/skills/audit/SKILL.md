@@ -133,7 +133,7 @@ Any persona can run on any backend in this table. A persona is not tied to its d
 
 If `gh copilot` is missing, fall back to the standalone `copilot` binary (same flags, no `gh copilot --` wrapper); if neither is present, treat it as missing per [Error Handling](#error-handling) — do not auto-install.
 
-If `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set, the audit is already running inside Codex. Treat `codex` as unavailable for this run because a nested Codex cannot initialize its app-server client under the parent seatbelt sandbox. Reroute Codex personas to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails — `agy` is unreliable for this use case (see [Error Handling](#error-handling)) and should never be the first fallback tried. Do not retry nested Codex from another working directory.
+If `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set, the audit is already running inside Codex. Treat `codex` as unavailable for this run. This is a confirmed sandbox limitation, not a precautionary assumption: a nested `codex exec` fails before running any review, with `Error: failed to initialize in-process app-server client: Operation not permitted (os error 1)` — the child process inherits the parent Seatbelt sandbox regardless of working directory, session, or environment-variable changes, so no wrapper (`bash`, `env -u`, `cd`, `nohup`, `setsid`) escapes it. Reroute Codex personas to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails — `agy` is unreliable for this use case (see [Error Handling](#error-handling)) and should never be the first fallback tried. Do not retry nested Codex from another working directory or via a subprocess wrapper.
 
 Default Claude reviews use the user's Claude login/OAuth session. Run them with `ANTHROPIC_API_KEY` removed from the subprocess environment; an inherited API key otherwise takes precedence over login auth. If the user explicitly requests API-key authentication, honor that override.
 
@@ -142,6 +142,13 @@ If a Copilot invocation fails because its quota or token allowance is exhausted,
 If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `claude` when nested inside Codex (where `codex` is unavailable); otherwise use `codex`. This is a backend fallback, not a persona failure. If the selected fallback is unavailable or fails to start, try the other of `codex`/`claude`; only fall back to `agy` if both have failed. Only mark the persona failed after every fallback has failed.
 
 If the user asks for a backend not in this table, tell them it is unsupported and list the table above.
+
+## Execution Environment
+
+Adversarial audit behaves differently depending on what launched it:
+
+- **External orchestration** — launched from a normal terminal, a Zed task, or any other process that is not itself Codex. `codex exec` runs as an independent subprocess and receives only the canonical review prompt and its persona instructions, matching the Reviewer Independence Invariant exactly. Use this when independent Codex, Claude, and Copilot reviewers are all required.
+- **Orchestration from inside Codex** — `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set. Nested `codex exec` is unavailable (see [Backends](#backends)); Codex personas reroute per the documented fallback order. This reduces model diversity for those personas — report both the requested and effective backend in the summary (see [Summary](#summary)) so the reduction is visible, not silent.
 
 ## Gather Context
 
@@ -755,7 +762,7 @@ At the end report:
 - Verdict line synthesized from persona verdicts
 - Audit mode
 - Personas selected
-- Backends used
+- Backends used — for any rerouted persona, show both the requested default backend and the effective backend actually used (for example, `auditor: codex → claude, nested Codex`), so a reduction in model diversity is visible rather than silently reported as if it were the default
 - Successful personas
 - Failed personas
 - Execution quorum
