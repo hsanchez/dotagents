@@ -133,7 +133,7 @@ Any persona can run on any backend in this table. A persona is not tied to its d
 
 If `gh copilot` is missing, fall back to the standalone `copilot` binary (same flags, no `gh copilot --` wrapper); if neither is present, treat it as missing per [Error Handling](#error-handling) — do not auto-install.
 
-If `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set, the audit is already running inside Codex. Treat `codex` as unavailable for this run because a nested Codex cannot initialize its app-server client under the parent seatbelt sandbox. Reroute Codex personas to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails — `agy` is unreliable for this use case (see [Error Handling](#error-handling)) and should never be the first fallback tried. Do not retry nested Codex from another working directory.
+If `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set, the audit is already running inside Codex. Treat `codex` as unavailable for this run. This is a confirmed sandbox limitation, not a precautionary assumption: a nested `codex exec` fails before running any review, with `Error: failed to initialize in-process app-server client: Operation not permitted (os error 1)` — the child process inherits the parent Seatbelt sandbox regardless of working directory, session, or environment-variable changes, so no wrapper (`bash`, `env -u`, `cd`, `nohup`, `setsid`) escapes it. Reroute Codex personas to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails — `agy` is unreliable for this use case (see [Error Handling](#error-handling)) and should never be the first fallback tried. Do not retry nested Codex from another working directory or via a subprocess wrapper.
 
 Default Claude reviews use the user's Claude login/OAuth session. Run them with `ANTHROPIC_API_KEY` removed from the subprocess environment; an inherited API key otherwise takes precedence over login auth. If the user explicitly requests API-key authentication, honor that override.
 
@@ -142,6 +142,13 @@ If a Copilot invocation fails because its quota or token allowance is exhausted,
 If a Copilot backend cannot accept the combined prompt because the prompt is too large, reroute that persona to `claude` when nested inside Codex (where `codex` is unavailable); otherwise use `codex`. This is a backend fallback, not a persona failure. If the selected fallback is unavailable or fails to start, try the other of `codex`/`claude`; only fall back to `agy` if both have failed. Only mark the persona failed after every fallback has failed.
 
 If the user asks for a backend not in this table, tell them it is unsupported and list the table above.
+
+## Execution Environment
+
+Adversarial audit behaves differently depending on what launched it:
+
+- **External orchestration** — launched from a normal terminal, a Zed task, or any other process that is not itself Codex. `codex exec` runs as an independent subprocess and receives only the canonical review prompt and its persona instructions, matching the Reviewer Independence Invariant exactly. Use this when independent Codex, Claude, and Copilot reviewers are all required.
+- **Orchestration from inside Codex** — `CODEX_SANDBOX` or `CODEX_THREAD_ID` is set. Nested `codex exec` is unavailable (see [Backends](#backends)); Codex personas reroute per the documented fallback order. This reduces model diversity for those personas — report both the requested and effective backend in the summary (see [Summary](#summary)) so the reduction is visible, not silent.
 
 ## Gather Context
 
@@ -282,6 +289,15 @@ Output filenames are opaque identifiers. Each persona writes to a unique file in
 Run selected personas independently. Prefer parallel execution when supported. Set a timeout of 600000 milliseconds for each reviewer process.
 
 Only write a manifest entry on success, determined by exit code, not by whether stdout is empty. A failed persona's output, including partial stdout, is not a valid review result and must not receive a manifest entry.
+
+### Preflight Auth Check
+
+Before launching any persona, check auth once for each backend actually selected — do not discover an auth failure after personas have already been timing out for up to 600s each:
+
+- If any selected backend is `claude`: run `env -u ANTHROPIC_API_KEY claude auth status --json` once. If it does not report a logged-in session, stop and tell the user to run `claude login` (unless the user explicitly requested API-key auth, in which case a non-empty `ANTHROPIC_API_KEY` is sufficient — see [Backends](#backends)).
+- If any selected backend is `copilot-gemini` (or another `gh copilot`-backed override): run `gh auth status` once. If it exits nonzero, stop and tell the user to run `gh auth login`.
+
+Report both checks' failures immediately, before launching any backend. Do not retry the checks.
 
 ### Reviewer Working Directory
 
@@ -703,11 +719,14 @@ If aggregation fails:
 | `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
 | Codex nested inside an existing Codex sandbox (`CODEX_SANDBOX` or `CODEX_THREAD_ID` set) | Skip nested Codex and reroute to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails. |
 | Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If the audit is nested inside Codex, use the nested-Codex fallback above. Otherwise treat as a genuine failure and report the exact startup error from `auditor.stderr`. |
-| Claude login authentication | Run Claude with `ANTHROPIC_API_KEY` removed. If `claude auth status --json` does not report a logged-in session, tell the user to run `claude login`. |
+| Claude login authentication | Caught by the [Preflight Auth Check](#preflight-auth-check) before any persona launches. Run Claude with `ANTHROPIC_API_KEY` removed. If `claude auth status --json` does not report a logged-in session, tell the user to run `claude login`. |
+| `gh` not authenticated (`gh auth status` exits nonzero) | Caught by the [Preflight Auth Check](#preflight-auth-check) before any persona launches. Tell the user to run `gh auth login`. |
 | Copilot prompt exceeds limit   | Reroute that persona to `codex`, or `claude` if nested inside Codex; try the other of the two next; `agy` only if both have failed. Treat as failed only if every non-Copilot fallback fails. |
 | Copilot quota exhausted        | Reroute that persona to `codex`, then `claude`, then `agy` as a last resort. Treat it as failed only if every fallback is unavailable or fails. |
 | Agy produces no usable review even with a correct invocation | Known issue, tracked in an open GitHub issue (search for "agy" review-backend reliability). `agy --print` is a full agentic CLI, not a stateless text-completion tool: given a prompt that references a real file path, it has been observed to go search the filesystem for that file — in an unrelated local project it already knew about, not this repo and not `$REVIEWER_CWD` — instead of reviewing the supplied diff text, and finish with no findings and no verdict line despite exit 0. This is why `agy` is now a last-resort fallback rather than Pragmatist's first fallback. |
 | Agy output is unrelated to the supplied prompt (exit 0) | The positional prompt must come immediately after `--print`, before any other flag. If a value-taking flag such as `--print-timeout` precedes the prompt, `agy` fails to bind the prompt argument and instead returns an unrelated self-referential response (e.g. explaining its own `--print-timeout` flag) — silently, with exit 0. The invocations above already use the correct order; if a future edit reorders them, this is the symptom to watch for. This is a separate failure mode from the filesystem-exploration issue above — fixing the argument order does not fix that one. |
+| Agy's prompt is visible to other local processes | Confirmed: `agy` requires the prompt as a positional value after `--print` (stdin alone does not work — it falls into the flag-explanation failure above instead), so the full canonical prompt, diff content included, sits in `agy`'s argv for the life of the process and is readable via `ps`/`/proc/<pid>/cmdline` by anyone else who can list processes on that host. There is no verified mitigation for this; treat `agy` as unsuitable for auditing diffs that may contain secrets on a shared or multi-tenant host. |
+| Agy misparses a prompt that starts with a flag-shaped token | Confirmed by direct test: prefixing the positional prompt with `--` does not make `agy` treat the following text as a literal value — it still attempted to parse tokens inside the prompt as flags and failed with `flags provided but not defined`. If a diff-derived prompt happens to contain text resembling a known `agy` flag in that position, the invocation can fail outright. No verified guard exists; this is inherent to `agy` being the last-resort fallback rather than a primary reviewer. |
 | Reviewer timeout                | Exclude reviewer; continue if quorum remains.                           |
 | Reviewer exits nonzero          | Treat as failed regardless of stdout content; report exit code and stderr.|
 | Fewer than 2 successful reviews | Abort adversarial audit.                                                |
@@ -745,7 +764,7 @@ At the end report:
 - Verdict line synthesized from persona verdicts
 - Audit mode
 - Personas selected
-- Backends used
+- Backends used — for any rerouted persona, show both the requested default backend and the effective backend actually used (for example, `auditor: codex → claude, nested Codex`), so a reduction in model diversity is visible rather than silently reported as if it were the default
 - Successful personas
 - Failed personas
 - Execution quorum
