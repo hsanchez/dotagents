@@ -32,8 +32,20 @@ def main [
   let parsed_agents = ($agents | each {|spec| parse_agent_spec $spec })
   let backends = ($parsed_agents | each {|agent| $agent.backend } | uniq)
 
-  let claude_auth_mode = (preflight_claude_auth $backends)
-  preflight_gh_auth $backends
+  # Collect both preflight results before exiting, so a broken `claude` and a
+  # broken `gh` are both reported in one run instead of one at a time.
+  let claude_auth = (preflight_claude_auth $backends)
+  let gh_auth_error = (preflight_gh_auth $backends)
+  let preflight_errors = (
+    [$claude_auth.error $gh_auth_error] | where {|error| not ($error | is-empty) }
+  )
+  if ($preflight_errors | length) > 0 {
+    for error in $preflight_errors {
+      print $error
+    }
+    exit 1
+  }
+  let claude_auth_mode = $claude_auth.auth_mode
 
   mkdir .scratch
 
@@ -93,21 +105,24 @@ def parse_agent_spec [spec: string] {
 
 # Checked once up front, before launching any persona, so an auth problem is
 # reported immediately instead of after up to 600s per persona timing out.
+# Returns a result record instead of exiting directly, so the caller can run
+# preflight_gh_auth too and report both failures in one pass.
 def preflight_claude_auth [backends: list<string>] {
   if not ("claude" in $backends) {
-    return "unused"
+    return { auth_mode: "unused", error: "" }
   }
 
   let status = (claude_auth_status)
 
   if $status == "logged_in" {
-    return "login"
+    return { auth_mode: "login", error: "" }
   }
 
   if $status == "unknown" {
-    print "could not determine claude auth status (claude auth status --json did not return a usable result)."
-    print "Run `claude auth status` to diagnose, or run `claude login`."
-    exit 1
+    return {
+      auth_mode: "",
+      error: "could not determine claude auth status (claude auth status --json did not return a usable result). Run `claude auth status` to diagnose, or run `claude login`."
+    }
   }
 
   # status == "not_logged_in", confirmed by a parsed response, not just a
@@ -115,25 +130,26 @@ def preflight_claude_auth [backends: list<string>] {
   # through to an ambient ANTHROPIC_API_KEY.
   let api_key = ($env.ANTHROPIC_API_KEY? | default "")
   if ($api_key | is-not-empty) {
-    return "api-key"
+    return { auth_mode: "api-key", error: "" }
   }
 
-  print "claude is not logged in and ANTHROPIC_API_KEY is not set."
-  print "Run `claude login`, or export ANTHROPIC_API_KEY, then retry."
-  exit 1
+  {
+    auth_mode: "",
+    error: "claude is not logged in and ANTHROPIC_API_KEY is not set. Run `claude login`, or export ANTHROPIC_API_KEY, then retry."
+  }
 }
 
 def preflight_gh_auth [backends: list<string>] {
   let copilot_requested = ($backends | any {|backend| $backend in ($_COPILOT_MODELS | columns) })
   if not $copilot_requested {
-    return
+    return ""
   }
 
   if not (gh_auth_status) {
-    print "gh is not authenticated."
-    print "Run `gh auth login`, then retry."
-    exit 1
+    return "gh is not authenticated. Run `gh auth login`, then retry."
   }
+
+  ""
 }
 
 # `claude auth status --json` exits nonzero even for a genuine, confirmed
