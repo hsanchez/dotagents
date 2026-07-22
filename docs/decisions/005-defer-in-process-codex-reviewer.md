@@ -12,8 +12,9 @@ review in-process instead of spawning a subprocess, to preserve three-way
 model coverage even when nested. Rejected for now: the orchestrating agent
 already holds context a subprocess reviewer never sees — prior tool calls,
 orchestration decisions, other personas' state. Even instructed not to read
-other outputs before finishing its own, it isn't isolated the way `codex
-exec` is, so labeling it an independent reviewer would be misleading and
-would weaken the skill's Reviewer Independence Invariant. Revisit only if
+other outputs before finishing its own, it retains that prior context
+throughout the review, unlike `codex exec`'s real process isolation, so
+labeling it an independent reviewer would be misleading and would weaken
+the skill's Reviewer Independence Invariant. Revisit only if
 diversity-under-nesting becomes a recurring practical problem; it would need
 its own execution-mode model and manifest schema, not a quick patch.

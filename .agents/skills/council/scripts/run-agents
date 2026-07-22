@@ -125,9 +125,9 @@ def preflight_claude_auth [backends: list<string>] {
     }
   }
 
-  # status == "not_logged_in", confirmed by a parsed response, not just a
-  # nonzero exit code — a status-check failure must not silently fall
-  # through to an ambient ANTHROPIC_API_KEY.
+  # status == "not_logged_in", confirmed by a parsed response. Exit code alone
+  # is ambiguous between this and a real failure — a status-check failure
+  # must not silently fall through to an ambient ANTHROPIC_API_KEY.
   let api_key = ($env.ANTHROPIC_API_KEY? | default "")
   if ($api_key | is-not-empty) {
     return { auth_mode: "api-key", error: "" }
