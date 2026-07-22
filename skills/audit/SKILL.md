@@ -283,6 +283,15 @@ Run selected personas independently. Prefer parallel execution when supported. S
 
 Only write a manifest entry on success, determined by exit code, not by whether stdout is empty. A failed persona's output, including partial stdout, is not a valid review result and must not receive a manifest entry.
 
+### Preflight Auth Check
+
+Before launching any persona, check auth once for each backend actually selected — do not discover an auth failure after personas have already been timing out for up to 600s each:
+
+- If any selected backend is `claude`: run `env -u ANTHROPIC_API_KEY claude auth status --json` once. If it does not report a logged-in session, stop and tell the user to run `claude login` (unless the user explicitly requested API-key auth, in which case a non-empty `ANTHROPIC_API_KEY` is sufficient — see [Backends](#backends)).
+- If any selected backend is `copilot-gemini` (or another `gh copilot`-backed override): run `gh auth status` once. If it exits nonzero, stop and tell the user to run `gh auth login`.
+
+Report both checks' failures immediately, before launching any backend. Do not retry the checks.
+
 ### Reviewer Working Directory
 
 Backend CLIs (notably `codex`) auto-load configuration from the current working directory on startup — `.codex/config.toml`, `.agents/`, etc. Running them from the audited repo's root means they load that repo's own agent configuration, which can break sandboxed startup (for example, `--sandbox read-only` rejecting the PATH-alias step Codex performs during init).
@@ -703,7 +712,8 @@ If aggregation fails:
 | `codex: command not found`      | Tell user: `npm i -g @openai/codex`                                     |
 | Codex nested inside an existing Codex sandbox (`CODEX_SANDBOX` or `CODEX_THREAD_ID` set) | Skip nested Codex and reroute to `claude`. Only fall back to `agy` if `claude` is also unavailable or fails. |
 | Codex fails to initialize under `--sandbox read-only` (PATH-alias or app-server errors) | Confirm the invocation ran from `$REVIEWER_CWD`, not the repo root. If the audit is nested inside Codex, use the nested-Codex fallback above. Otherwise treat as a genuine failure and report the exact startup error from `auditor.stderr`. |
-| Claude login authentication | Run Claude with `ANTHROPIC_API_KEY` removed. If `claude auth status --json` does not report a logged-in session, tell the user to run `claude login`. |
+| Claude login authentication | Caught by the [Preflight Auth Check](#preflight-auth-check) before any persona launches. Run Claude with `ANTHROPIC_API_KEY` removed. If `claude auth status --json` does not report a logged-in session, tell the user to run `claude login`. |
+| `gh` not authenticated (`gh auth status` exits nonzero) | Caught by the [Preflight Auth Check](#preflight-auth-check) before any persona launches. Tell the user to run `gh auth login`. |
 | Copilot prompt exceeds limit   | Reroute that persona to `codex`, or `claude` if nested inside Codex; try the other of the two next; `agy` only if both have failed. Treat as failed only if every non-Copilot fallback fails. |
 | Copilot quota exhausted        | Reroute that persona to `codex`, then `claude`, then `agy` as a last resort. Treat it as failed only if every fallback is unavailable or fails. |
 | Agy produces no usable review even with a correct invocation | Known issue, tracked in an open GitHub issue (search for "agy" review-backend reliability). `agy --print` is a full agentic CLI, not a stateless text-completion tool: given a prompt that references a real file path, it has been observed to go search the filesystem for that file — in an unrelated local project it already knew about, not this repo and not `$REVIEWER_CWD` — instead of reviewing the supplied diff text, and finish with no findings and no verdict line despite exit 0. This is why `agy` is now a last-resort fallback rather than Pragmatist's first fallback. |

@@ -29,6 +29,12 @@ def main [
     exit 1
   }
 
+  let parsed_agents = ($agents | each {|spec| parse_agent_spec $spec })
+  let backends = ($parsed_agents | each {|agent| $agent.backend } | uniq)
+
+  let claude_auth_mode = (preflight_claude_auth $backends)
+  preflight_gh_auth $backends
+
   mkdir .scratch
 
   let output_dir = (mktemp -d --tmpdir-path ".scratch" "council-outputs.XXXXXX")
@@ -42,8 +48,7 @@ def main [
 
   mut index = 1
 
-  for spec in $agents {
-    let parsed = (parse_agent_spec $spec)
+  for parsed in $parsed_agents {
     let backend = $parsed.backend
     let perspective = $parsed.perspective
     let output_file = $"($output_dir)/agent-output-($index | into string | fill --alignment right --character '0' --width 2).md"
@@ -52,7 +57,7 @@ def main [
 
     print $"Launching ($backend) as ($perspective) → ($output_file)"
 
-    let result = (run_backend $backend $prompt $output_file)
+    let result = (run_backend $backend $prompt $output_file $claude_auth_mode)
 
     if $result.success {
       $"($backend)\t($perspective)\t($output_file)\n" | save --append $manifest
@@ -83,6 +88,78 @@ def parse_agent_spec [spec: string] {
   {
     backend: ($parts | get 0),
     perspective: ($parts | get 1)
+  }
+}
+
+# Checked once up front, before launching any persona, so an auth problem is
+# reported immediately instead of after up to 600s per persona timing out.
+def preflight_claude_auth [backends: list<string>] {
+  if not ("claude" in $backends) {
+    return "unused"
+  }
+
+  let status = (claude_auth_status)
+
+  if $status == "logged_in" {
+    return "login"
+  }
+
+  if $status == "unknown" {
+    print "could not determine claude auth status (claude auth status --json did not return a usable result)."
+    print "Run `claude auth status` to diagnose, or run `claude login`."
+    exit 1
+  }
+
+  # status == "not_logged_in", confirmed by a parsed response, not just a
+  # nonzero exit code — a status-check failure must not silently fall
+  # through to an ambient ANTHROPIC_API_KEY.
+  let api_key = ($env.ANTHROPIC_API_KEY? | default "")
+  if ($api_key | is-not-empty) {
+    return "api-key"
+  }
+
+  print "claude is not logged in and ANTHROPIC_API_KEY is not set."
+  print "Run `claude login`, or export ANTHROPIC_API_KEY, then retry."
+  exit 1
+}
+
+def preflight_gh_auth [backends: list<string>] {
+  let copilot_requested = ($backends | any {|backend| $backend in ($_COPILOT_MODELS | columns) })
+  if not $copilot_requested {
+    return
+  }
+
+  if not (gh_auth_status) {
+    print "gh is not authenticated."
+    print "Run `gh auth login`, then retry."
+    exit 1
+  }
+}
+
+# `claude auth status --json` exits nonzero even for a genuine, confirmed
+# "not logged in" (still valid JSON on stdout), so exit code alone can't
+# distinguish that from a real failure (crash, malformed output, missing
+# binary). Parse stdout first; only trust "not logged in" when that parse
+# succeeds.
+def claude_auth_status [] {
+  try {
+    let result = (env -u ANTHROPIC_API_KEY claude auth status --json | complete)
+    let parsed = ($result.stdout | from json)
+    if ($parsed.loggedIn? | default false) {
+      "logged_in"
+    } else {
+      "not_logged_in"
+    }
+  } catch {
+    "unknown"
+  }
+}
+
+def gh_auth_status [] {
+  try {
+    (gh auth status | complete).exit_code == 0
+  } catch {
+    false
   }
 }
 
@@ -163,6 +240,7 @@ def run_backend [
   backend: string
   prompt: string
   output_file: string
+  claude_auth_mode: string
 ] {
   if ($backend in ($_COPILOT_MODELS | columns)) {
     return (run_copilot ($_COPILOT_MODELS | get $backend) $prompt $output_file)
@@ -170,7 +248,7 @@ def run_backend [
 
   match $backend {
     "claude" => {
-      run_claude $prompt $output_file
+      run_claude $prompt $output_file $claude_auth_mode
     }
     "codex" => {
       run_codex $prompt $output_file
@@ -190,7 +268,14 @@ def run_backend [
 def run_claude [
   prompt: string
   output_file: string
+  auth_mode: string
 ] {
+  # An inherited ANTHROPIC_API_KEY otherwise takes precedence over login auth.
+  # preflight_claude_auth already confirmed a login session exists in this case.
+  if $auth_mode == "login" and ("ANTHROPIC_API_KEY" in $env) {
+    hide-env ANTHROPIC_API_KEY
+  }
+
   run_timed_backend $prompt $output_file "claude" [
     "--print"
     "--no-session-persistence"
@@ -223,7 +308,11 @@ def run_agy [
   output_file: string
 ] {
   let log_file = ($output_file | path dirname | path join "agy.log")
-  run_timed_backend $prompt $output_file "agy" [
+  # agy takes the prompt as a positional argument after --print (see the
+  # argument-order note in the Error Handling table). Do not also pipe it
+  # over stdin — duplicate delivery of the same untrusted prompt through two
+  # channels risks confusing agy's argument parsing.
+  run_timed_backend "" $output_file "agy" [
     "--sandbox"
     "--print"
     $prompt
@@ -263,7 +352,7 @@ def timeout_executable [] {
 }
 
 def run_timed_backend [
-  prompt: string
+  stdin_content: string
   output_file: string
   backend: string
   arguments: list<string>
@@ -285,7 +374,7 @@ def run_timed_backend [
     ...$arguments
   ]
   let completed = (
-    $prompt
+    $stdin_content
     | run-external $timeout_command ...$command_arguments
     | complete
   )
