@@ -4,7 +4,8 @@ set -eu
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 fake_home="$(mktemp -d)"
 tmp_clone="$(mktemp -d)"
-trap 'rm -rf "$fake_home" "$tmp_clone"' EXIT INT TERM
+never_synced_project="$(mktemp -d)"
+trap 'rm -rf "$fake_home" "$tmp_clone" "$never_synced_project"' EXIT INT TERM
 
 git clone --quiet "$repo_root" "$tmp_clone"
 
@@ -21,6 +22,21 @@ test -L "$fake_home/.claude/commands"
 test -L "$fake_home/.claude/skills"
 test -L "$fake_home/.claude/settings.json"
 test -L "$fake_home/.gemini/GEMINI.md"
+test -f "$fake_home/.agents/skills/dotagents-discovery/SKILL.md"
+test -f "$fake_home/.agents/hooks/discovery-common.sh"
+test -L "$fake_home/.claude/hooks/session-start.sh"
+
+# The bug this guards against: a global-only install (nothing synced into
+# the project itself) used to point at a project-relative hook path that
+# never existed there, so discovery silently never ran. Invoke the real
+# installed hook against a project that was never dotagents-synced at all,
+# and confirm the $HOME fallback still finds and injects the meta-skill.
+CLAUDE_PROJECT_DIR="$never_synced_project" HOME="$fake_home" \
+  "$fake_home/.claude/hooks/session-start.sh" |
+  grep -q '"hookEventName":"SessionStart"'
+CLAUDE_PROJECT_DIR="$never_synced_project" HOME="$fake_home" \
+  "$fake_home/.claude/hooks/session-start.sh" |
+  grep -q 'dotagents discovery is enabled'
 
 echo "bin/dot smoke test passed"
 
