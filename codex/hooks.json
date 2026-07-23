@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh .codex/hooks/session-start.sh",
+            "command": "sh -c 'cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && sh .codex/hooks/session-start.sh'",
             "statusMessage": "Loading dotagents skill discovery"
           }
         ]

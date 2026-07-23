@@ -24,6 +24,7 @@ from dotagents.runtime import (
   build_context,
   capability_compiled_groups,
   copy_file,
+  effective_skills,
   init_runtime,
   migrate_legacy_backup,
   remove_locked_asset,
@@ -49,7 +50,10 @@ def write_fixture_asset_root(root: Path) -> Path:
   root.mkdir()
   (root / "rules").mkdir()
   (root / "rules" / "rules.md").write_text("shared rules\n", encoding="utf-8")
-  (root / "skills").mkdir()
+  (root / "skills" / "dotagents-discovery").mkdir(parents=True)
+  (root / "skills" / "dotagents-discovery" / "SKILL.md").write_text(
+    "# Dotagents Skill Discovery\n", encoding="utf-8"
+  )
   (root / "fixture").mkdir()
   (root / "fixture" / "fixture-global-only.txt").write_text("fixture content", encoding="utf-8")
   (root / "agents.toml").write_text(
@@ -310,6 +314,90 @@ def test_capability_compiled_groups_uses_single_manifest_snapshot(
   assert groups[0].output_prefix == ".agents/skills/generated"
 
 
+def test_effective_skills_fails_loudly_when_required_asset_missing(tmp_path: Path) -> None:
+  # A required skill's asset directory missing from the package is a broken
+  # or incomplete package -- it must fail compilation, not silently produce
+  # a valid-looking runtime with the skill quietly absent.
+  broken_assets = tmp_path / "broken-assets"
+  (broken_assets / "skills").mkdir(parents=True)
+
+  with pytest.raises(DotagentsError, match="dotagents-discovery"):
+    effective_skills(broken_assets, ())
+
+
+def test_effective_skills_passes_selection_through_unchanged(tmp_path: Path) -> None:
+  assets = tmp_path / "assets"
+  (assets / "skills" / "dotagents-discovery").mkdir(parents=True)
+  (assets / "skills" / "other").mkdir(parents=True)
+
+  assert effective_skills(assets, ("other",)) == ("other",)
+  assert effective_skills(assets, ()) == ()
+
+
+def test_dotagents_discovery_survives_sync_with_no_skillfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+  sync_existing(Path.cwd())
+
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+
+def test_dotagents_discovery_survives_sync_with_preset_skillfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  (tmp_path / "Skillfile").write_text("use dev\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+  sync_existing(Path.cwd())
+
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+
+def test_dotagents_discovery_survives_update(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+  update_existing(Path.cwd())
+
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+
+def test_dotagents_discovery_survives_preset_change(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  (tmp_path / "Skillfile").write_text("use safety\n", encoding="utf-8")
+  init_runtime(Path.cwd(), ("claude",))
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+  (tmp_path / "Skillfile").write_text("use full\n", encoding="utf-8")
+  sync_existing(Path.cwd())
+
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+
+def test_dotagents_discovery_removed_cleanly_on_uninstall(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  assert (tmp_path / ".agents" / "skills" / "dotagents-discovery").is_dir()
+
+  uninstall_existing(Path.cwd())
+
+  assert not (tmp_path / ".agents").exists()
+  assert not (tmp_path / ".claude" / "hooks" / "session-start.sh").exists()
+
+
 def test_init_materializes_only_skillfile_selection(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,7 +411,9 @@ def test_init_materializes_only_skillfile_selection(
   assert not (tmp_path / ".github" / "hooks" / "block-dangerous-git").exists()
   assert not (tmp_path / ".claude" / "hooks" / "block-dangerous-git").exists()
   lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
-  assert lock.skills == ("dotagents-discovery", "research")
+  # A Skillfile is explicit, opt-in control -- omitting dotagents-discovery
+  # here is respected the same as omitting any other skill, not overridden.
+  assert lock.skills == ("research",)
   assert lock.skillfile_sha256 is not None
 
 

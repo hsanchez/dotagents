@@ -764,13 +764,10 @@ def test_compile_status_json_reports_packaged_skills(
   payload = compile_status_json_payload()
 
   assert payload["schema_version"] == 1
+  # A Skillfile explicitly selecting only "research" excludes
+  # dotagents-discovery too -- an explicit Skillfile is respected the same
+  # as it is for any other skill, not overridden.
   assert payload["skills"] == [
-    {
-      "name": "dotagents-discovery",
-      "kind": "packaged",
-      "path": ".agents/skills/dotagents-discovery",
-      "status": "ok",
-    },
     {
       "name": "research",
       "kind": "packaged",

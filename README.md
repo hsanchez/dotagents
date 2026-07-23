@@ -106,11 +106,17 @@ owns.
 
 ### Skill discovery
 
-Every runtime includes the required `dotagents-discovery` meta-skill. It routes
-new tasks to the selected skills under `.agents/skills/`; unselected package
-skills are not advertised. Claude receives the meta-skill through a
-`SessionStart` hook. Codex, Gemini, and Copilot receive provider-native
-discovery hooks; the selected skills remain available under `.agents/skills/`.
+The `dotagents-discovery` meta-skill is included by default and routes new
+tasks to the selected skills under `.agents/skills/`; unselected package
+skills are not advertised. It's included automatically when using the
+default skill set or a preset; a hand-written `Skillfile` can omit it like
+any other skill.
+
+Claude, Codex, and Gemini inject the meta-skill via a `SessionStart` hook at
+the start of every session. Copilot's discovery hook only fires for new
+interactive CLI sessions — it does not fire under `copilot -p`, on resume,
+or for cloud-agent jobs; the selected skills remain available under
+`.agents/skills/` regardless.
 
 Inspect the active runtime with:
 

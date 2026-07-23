@@ -24,7 +24,9 @@ def test_skillfile_resolves_presets_and_explicit_skills(tmp_path: Path) -> None:
 
   selected = resolve_skillfile(tmp_path, asset_root())
 
-  assert selected == ("startup", "git-guardrails", "research")
+  # "use safety" pulls in dotagents-discovery (presets always carry required
+  # skills forward); "skill research" is the Skillfile's own explicit line.
+  assert selected == ("dotagents-discovery", "startup", "git-guardrails", "research")
 
 
 def test_skillfile_rejects_unknown_skill(tmp_path: Path) -> None:
@@ -50,6 +52,7 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
   selected = resolve_preset("dev", asset_root())
 
   assert selected == (
+    "dotagents-discovery",
     "audit",
     "clarify",
     "council",
@@ -66,9 +69,10 @@ def test_dev_preset_resolves_all_supported_skills() -> None:
 
 def test_full_preset_resolves_all_skills() -> None:
   selected = resolve_preset("full", asset_root())
-  excluded_skills = {"dotagents-discovery", "prek-bootstrap", "review-saga", "saga"}
+  excluded_skills = {"prek-bootstrap", "review-saga", "saga"}
 
   assert set(selected) == set(available_skills(asset_root())) - excluded_skills
+  assert "dotagents-discovery" in selected
   assert "prek-bootstrap" not in selected
   assert "review-saga" not in selected
   assert "saga" not in selected
@@ -93,6 +97,7 @@ def test_review_preset_resolves_review_pr() -> None:
   assert "review-pr" in selected
   assert "pr-comments" in selected
   assert selected == (
+    "dotagents-discovery",
     "audit",
     "review-pr",
     "pr-comments",
@@ -109,6 +114,7 @@ def test_contribute_preset_resolves_skills() -> None:
   selected = resolve_preset("contribute", asset_root())
 
   assert selected == (
+    "dotagents-discovery",
     "startup",
     "create-pr",
     "review-pr",
@@ -131,7 +137,11 @@ def test_template_lists_presets_and_skills() -> None:
   assert "# skill review-pr" in template
   assert "# skill review-saga" in template
   assert "# skill saga" in template
-  assert "dotagents-discovery" not in template
+  # Required by default, but listed and pre-selected -- not hidden -- so it
+  # is visible and can be deliberately commented out, unlike a hard-wired
+  # skill with no override.
+  assert "skill dotagents-discovery" in template
+  assert "# skill dotagents-discovery" not in template
 
 
 def test_skill_docs_have_valid_toml_fences() -> None:

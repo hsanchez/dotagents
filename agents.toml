@@ -26,6 +26,12 @@ destination = "scripts/review-code"
 always_copy = true
 
 [[sync]]
+source = "hooks/discovery-common.sh"
+destination = ".agents/hooks/discovery-common.sh"
+always_copy = true
+link = false
+
+[[sync]]
 source = ".rules"
 destination = "AGENTS.md"
 

@@ -26,17 +26,22 @@ canonical under `.agents/skills`; provider-facing paths point to that runtime.
 
 ## Skill discovery
 
-Each initialized provider receives the same `dotagents-discovery` meta-skill.
-It is required runtime output and remains installed when the `Skillfile` or
-preset changes. The meta-skill routes a task only to skills materialized under
-`.agents/skills`.
+Each initialized provider receives the same `dotagents-discovery` meta-skill
+by default. It routes a task only to skills materialized under
+`.agents/skills`. It's included automatically for the default skill set and
+for every preset (presets carry it forward even across a preset change); a
+hand-written `Skillfile` can omit it explicitly, the same as any other skill.
 
-Claude injects it at session start through `.claude/hooks/session-start.sh`.
-Gemini injects it through `.gemini/hooks/session-start.sh`. Copilot receives a
-session-start prompt hook plus the shared instruction file. Codex uses the
-generated `AGENTS.md`/`CODEX.md` instructions and a `.codex/hooks.json`
-`SessionStart` hook. The instruction files remain repository guidance; skill
-discovery is provided by the native hooks and the `.agents/skills` directory.
+Claude, Gemini, and Codex inject it at session start through
+`claude/hooks/session-start.sh`, `gemini/hooks/session-start.sh`, and
+`codex/hooks.json`'s `SessionStart` hook, respectively — each a thin
+provider-specific wrapper delegating to the shared
+`.agents/hooks/discovery-common.sh`. Copilot receives a session-start prompt
+hook plus the shared instruction file, but Copilot's hook only fires for new
+interactive CLI sessions — it does not fire under `copilot -p`, on resume, or
+for cloud-agent jobs. The instruction files (`AGENTS.md`/`CODEX.md` etc.)
+remain repository guidance; skill discovery itself is provided by the native
+hooks and the `.agents/skills` directory.
 
 ## Provider selection
 
