@@ -9,6 +9,7 @@ from pathlib import Path
 from dotagents.errors import DotagentsError
 
 SKILLFILE_NAME = "Skillfile"
+REQUIRED_SKILLS = ("dotagents-discovery",)
 
 # Renamed presets - old name maps to current name for backward compatibility.
 PRESET_ALIASES: dict[str, str] = {
@@ -40,7 +41,7 @@ def resolve_preset(name: str, asset_root: Path) -> tuple[str, ...]:
       raise DotagentsError(f"--with accepts presets only: {name} is a skill")
     available = ", ".join(available_presets(asset_root))
     raise DotagentsError(f"unknown preset: {name}. Available presets: {available}")
-  return _resolve(path, asset_root, set())
+  return _resolve_preset(path, asset_root, set())
 
 
 def write_preset_skillfile(repo_root: Path, asset_root: Path, preset: str) -> None:
@@ -85,12 +86,29 @@ def edit_skillfile(repo_root: Path, asset_root: Path) -> None:
     return
 
 
+def _packaged_required_skills(asset_root: Path) -> tuple[str, ...]:
+  available = set(available_skills(asset_root))
+  return tuple(skill for skill in REQUIRED_SKILLS if skill in available)
+
+
 def render_template(asset_root: Path) -> str:
   presets = available_presets(asset_root)
   lines = ["# Uncomment presets and skills to install.", ""]
   if presets:
     lines.extend(["# Presets:", *(f"# use {preset}" for preset in presets), ""])
-  lines.extend(["# Skills:", *(f"# skill {skill}" for skill in available_skills(asset_root)), ""])
+  required = _packaged_required_skills(asset_root)
+  if required:
+    lines.extend(
+      [
+        "# Required by default; comment out to opt out.",
+        *(f"skill {skill}" for skill in required),
+        "",
+      ]
+    )
+  selectable_skills = tuple(
+    skill for skill in available_skills(asset_root) if skill not in REQUIRED_SKILLS
+  )
+  lines.extend(["# Skills:", *(f"# skill {skill}" for skill in selectable_skills), ""])
   return "\n".join(lines)
 
 
@@ -137,6 +155,23 @@ def _resolve(path: Path, asset_root: Path, visited: set[Path]) -> tuple[str, ...
       raise DotagentsError(
         f"{path.name}:{line_number}: unknown preset: {name}. Available presets: {available}"
       )
-    selected.extend(_resolve(preset, asset_root, visited))
+    selected.extend(_resolve_preset(preset, asset_root, visited))
   visited.remove(path)
   return tuple(dict.fromkeys(selected))
+
+
+def _resolve_preset(path: Path, asset_root: Path, visited: set[Path]) -> tuple[str, ...]:
+  """Resolve a preset file and force-include required skills.
+
+  Presets are dotagents' own curated bundles, not arbitrary user config, so
+  they always carry required skills forward -- unlike a hand-written
+  Skillfile's own `skill` lines, which are respected exactly as written
+  (see `resolve_skillfile`).
+
+  Raises:
+    DotagentsError: `path` names an unreadable file, references a recursive
+      or unknown preset, or lists an unknown skill.
+  """
+  selected = _resolve(path, asset_root, visited)
+  required = _packaged_required_skills(asset_root)
+  return tuple(dict.fromkeys((*required, *selected)))

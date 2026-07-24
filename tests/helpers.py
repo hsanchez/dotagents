@@ -1,9 +1,11 @@
 import importlib.util
+import shutil
 import tarfile
 import types
 from io import BytesIO
 from pathlib import Path
 
+from dotagents.assets import asset_root
 from dotagents.compiler import (
   BuildManifest,
   BuildManifestEntry,
@@ -14,6 +16,14 @@ from dotagents.compiler import (
 from dotagents.lockfile import read_lock
 
 DEFAULT_COMPILED_ARTIFACTS = {".agents/skills/generated/SKILL.md": "# generated\n"}
+
+
+def install_discovery_common_hook(project_root: Path) -> None:
+  """Copy the shared discovery hook to where a provider's thin wrapper expects it."""
+  destination = project_root / ".agents" / "hooks" / "discovery-common.sh"
+  destination.parent.mkdir(parents=True)
+  shutil.copy2(asset_root() / "hooks" / "discovery-common.sh", destination)
+  destination.chmod(0o755)
 
 
 def github_tarball(files: dict[str, str]) -> bytes:

@@ -104,6 +104,27 @@ package or `Skillfile`, then run `sync` or `update`.
 Commands use it to detect drift and remove only output that dotagents still
 owns.
 
+### Skill discovery
+
+The `dotagents-discovery` meta-skill is included by default and routes new
+tasks to the selected skills under `.agents/skills/`; unselected package
+skills are not advertised. It's included automatically when using the
+default skill set or a preset; a hand-written `Skillfile` can omit it like
+any other skill.
+
+Claude, Codex, and Gemini inject the meta-skill via a `SessionStart` hook at
+the start of every session. Copilot's discovery hook only fires for new
+interactive CLI sessions — it does not fire under `copilot -p`, on resume,
+or for cloud-agent jobs; the selected skills remain available under
+`.agents/skills/` regardless.
+
+Inspect the active runtime with:
+
+```bash
+uv run dotagents discover
+uv run dotagents discover --json
+```
+
 `.rules.local` extends generated rules with repository-specific guidance and
 is preserved during uninstall.
 

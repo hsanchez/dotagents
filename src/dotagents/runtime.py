@@ -38,7 +38,7 @@ from dotagents.manifest import (
   selected_entries,
   selected_providers,
 )
-from dotagents.skillfile import available_skills, resolve_skillfile, skillfile_path
+from dotagents.skillfile import REQUIRED_SKILLS, available_skills, resolve_skillfile, skillfile_path
 from dotagents.version import package_version
 
 OPT_IN_SKILLS = frozenset({"prek-bootstrap", "review-saga", "saga"})
@@ -167,6 +167,28 @@ def default_skills(asset_root: Path) -> tuple[str, ...]:
   return tuple(skill for skill in available_skills(asset_root) if skill not in OPT_IN_SKILLS)
 
 
+def effective_skills(asset_root: Path, selected: tuple[str, ...]) -> tuple[str, ...]:
+  """Validate required-skill packaging integrity, then pass `selected` through unchanged.
+
+  `dotagents-discovery` is not force-added here: `default_skills` already
+  includes it (it is not in `OPT_IN_SKILLS`), and `render_template` lists it
+  pre-selected in freshly generated Skillfiles. A Skillfile that omits it is
+  an explicit, auditable choice — the same as omitting any other skill —
+  not something this function should silently override.
+
+  Raises:
+    DotagentsError: a skill in `REQUIRED_SKILLS` has no matching asset
+      directory, indicating a broken or incomplete package.
+  """
+  available = set(available_skills(asset_root))
+  missing_required = [skill for skill in REQUIRED_SKILLS if skill not in available]
+  if missing_required:
+    raise DotagentsError(
+      f"required skill(s) missing from packaged assets: {', '.join(missing_required)}"
+    )
+  return selected
+
+
 def is_global_root(root: Path) -> bool:
   return root.resolve() == Path.home().resolve()
 
@@ -177,9 +199,10 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
   manifest = load_manifest(assets)
   configured = requested_providers or configured_providers(root, manifest)
   providers = selected_providers(manifest, configured)
-  skills = (
+  selected_skills = (
     resolve_skillfile(root, assets) if (root / "Skillfile").exists() else default_skills(assets)
   )
+  skills = effective_skills(assets, selected_skills)
   return RuntimeContext(
     repo_root=root,
     runtime_dir=root / ".agents",
@@ -1056,7 +1079,7 @@ def runtime_destination(runtime_dir: Path, entry: SyncEntry) -> Path:
     return runtime_dir / "skills"
   source = Path(entry.source)
   first = source.parts[0]
-  if first in {"scripts", "skills"}:
+  if first in {"scripts", "skills", "hooks"}:
     return runtime_dir / source
   if entry.provider and first == entry.provider:
     suffix = Path(*source.parts[1:]) if len(source.parts) > 1 else Path()

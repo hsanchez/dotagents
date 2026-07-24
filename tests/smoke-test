@@ -30,7 +30,7 @@ skill council
 skill cross-critique
 skill research
 EOF
-uv run dotagents init --for claude --for copilot
+uv run dotagents init --for claude --for codex --for gemini --for copilot
 uv run dotagents doctor
 uv run dotagents list providers
 uv run dotagents status
@@ -69,6 +69,19 @@ test ! -f .agents/agent
 test ! -d .agents/claude
 test ! -d .agents/copilot
 
+# Skill discovery: dotagents-discovery is required by default (the Skillfile
+# above pulls it in via "use safety"), and each provider that gets a
+# SessionStart-style hook delegates to the one shared script.
+test -f .agents/skills/dotagents-discovery/SKILL.md
+test -f .agents/hooks/discovery-common.sh
+test -L .claude/hooks/session-start.sh
+test -L .claude/settings.json
+test -L .codex/hooks/session-start.sh
+test -L .codex/hooks.json
+test -L .gemini/hooks/session-start.sh
+test -L .gemini/settings.json
+test -L .github/hooks/dotagents-discovery.json
+
 printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
   uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git >"$smoke_dir/claude-hook.out" 2>&1 &&
   exit 1 || test "$?" -eq 2
@@ -76,6 +89,25 @@ printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
 printf '%s' '{"toolInput":{"command":"git clean -fd"}}' |
   uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot |
   grep -q '"permissionDecision": "deny"'
+
+# Discovery hooks must actually run and inject the meta-skill, not just
+# exist -- the wrong JSON shape (or a broken delegation path) fails silently
+# from Claude's perspective, so check the real output.
+CLAUDE_PROJECT_DIR="$smoke_dir" .claude/hooks/session-start.sh |
+  grep -q '"hookEventName":"SessionStart"'
+CLAUDE_PROJECT_DIR="$smoke_dir" .claude/hooks/session-start.sh |
+  grep -q 'dotagents discovery is enabled'
+
+.codex/hooks/session-start.sh |
+  grep -q '"hookEventName":"SessionStart"'
+
+GEMINI_PROJECT_DIR="$smoke_dir" .gemini/hooks/session-start.sh |
+  grep -q '"hookEventName":"SessionStart"'
+
+# Copilot's discovery hook is a static prompt, not a script -- verify shape
+# and content instead of invoking it.
+grep -q '"type": "prompt"' .github/hooks/dotagents-discovery.json
+grep -q '.agents/skills/dotagents-discovery/SKILL.md' .github/hooks/dotagents-discovery.json
 
 uv run dotagents uninstall --dry-run
 test -d .agents
@@ -85,5 +117,7 @@ test ! -e .rules
 test ! -e AGENTS.md
 test ! -e CLAUDE.md
 test ! -e .github
+test ! -e .codex
+test ! -e .gemini
 
 echo "dotagents smoke test passed"

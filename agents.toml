@@ -26,6 +26,12 @@ destination = "scripts/review-code"
 always_copy = true
 
 [[sync]]
+source = "hooks/discovery-common.sh"
+destination = ".agents/hooks/discovery-common.sh"
+always_copy = true
+link = false
+
+[[sync]]
 source = ".rules"
 destination = "AGENTS.md"
 
@@ -38,6 +44,7 @@ sync = [
   { source = "scripts", destination = ".claude/commands", scope = "both" },
   { source = "skills", destination = ".claude/skills", scope = "both" },
   { source = "claude/settings.json", destination = ".claude/settings.json", scope = "both" },
+  { source = "claude/hooks/session-start.sh", destination = ".claude/hooks/session-start.sh", scope = "both" },
   { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".claude/hooks/block-dangerous-git", skill = "git-guardrails" }
 ]
 
@@ -46,6 +53,7 @@ sync = [
   { source = ".rules", destination = ".github/copilot-instructions.md" },
   { source = "copilot/review.prompt.md", destination = ".github/prompts/dotagents-review.prompt.md" },
   { source = "copilot/agents/reviewer.agent.md", destination = ".github/agents/dotagents-reviewer.agent.md" },
+  { source = "copilot/hooks/dotagents-discovery.json", destination = ".github/hooks/dotagents-discovery.json" },
   { source = "copilot/hooks/git-guardrails.json", destination = ".github/hooks/git-guardrails.json" },
   { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".github/hooks/block-dangerous-git", skill = "git-guardrails" }
 ]
@@ -54,12 +62,15 @@ sync = [
 sync = [
   { source = ".rules", destination = "GEMINI.md" },
   { source = ".rules", destination = ".gemini/GEMINI.md", scope = "global" },
-  { source = "gemini/settings.json", destination = ".gemini/settings.json" }
+  { source = "gemini/settings.json", destination = ".gemini/settings.json" },
+  { source = "gemini/hooks/session-start.sh", destination = ".gemini/hooks/session-start.sh" }
 ]
 
 [providers.codex]
 sync = [
   { source = ".rules", destination = "CODEX.md" },
   { source = "codex/config.toml", destination = ".codex/config.toml" },
-  { source = "codex/agents/reviewer.toml", destination = ".codex/agents/reviewer.toml" }
+  { source = "codex/agents/reviewer.toml", destination = ".codex/agents/reviewer.toml" },
+  { source = "codex/hooks.json", destination = ".codex/hooks.json" },
+  { source = "codex/hooks/session-start.sh", destination = ".codex/hooks/session-start.sh" }
 ]

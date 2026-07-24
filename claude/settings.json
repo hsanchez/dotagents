@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'for candidate in \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\" \"$HOME/.claude/hooks/session-start.sh\"; do if [ -x \"$candidate\" ]; then exec \"$candidate\"; fi; done; exit 0'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

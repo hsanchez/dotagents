@@ -33,6 +33,30 @@ def test_list_skills_command_outputs_bundled_skills() -> None:
   assert "startup" in result.output
 
 
+def test_discover_command_reports_materialized_skills(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["discover"])
+
+  assert result.exit_code == 0
+  assert "dotagents-discovery: ok" in result.output
+  assert "startup: ok" in result.output
+
+
+def test_discover_command_supports_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["discover", "--json"])
+
+  assert result.exit_code == 0
+  payload = json.loads(result.output)
+  assert any(skill["name"] == "dotagents-discovery" for skill in payload["skills"])
+
+
 def test_init_dry_run_command_does_not_write_runtime(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -740,13 +764,16 @@ def test_compile_status_json_reports_packaged_skills(
   payload = compile_status_json_payload()
 
   assert payload["schema_version"] == 1
+  # A Skillfile explicitly selecting only "research" excludes
+  # dotagents-discovery too -- an explicit Skillfile is respected the same
+  # as it is for any other skill, not overridden.
   assert payload["skills"] == [
     {
       "name": "research",
       "kind": "packaged",
       "path": ".agents/skills/research",
       "status": "ok",
-    }
+    },
   ]
   assert payload["compiled_groups"] == [
     {
