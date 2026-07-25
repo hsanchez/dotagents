@@ -28,3 +28,9 @@ accepted
   hidden flag.
 - The source checkout and normal consumers intentionally materialize slightly
   different root-link behavior.
+- A pre-existing non-empty `.agents/` directory is moved to `.agents.bak`, and
+  self-host initialization also fingerprints/restores existing `.rules` and
+  provider-facing files through the normal backup machinery.
+- Uninstall restores those backups only when the generated runtime can be
+  removed safely; changed generated files or tampered backups remain in place
+  with manual-recovery guidance.

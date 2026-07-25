@@ -41,6 +41,12 @@ any repository other than the dotagents source checkout. The self-host mode is
 recorded in `.agents/dotagents.lock`; subsequent `sync`, `update`, and
 `doctor` commands preserve it automatically.
 
+If the checkout already contains a non-empty `.agents/`, self-host
+initialization moves it to `.agents.bak` and records its fingerprint. Existing
+`.rules` and provider-facing files use the same fingerprinted backup behavior.
+Uninstall restores these backups only after generated output is removed safely;
+changed generated files or modified backups are preserved for manual recovery.
+
 The global bootstrap has a separate smoke test using a fake home directory:
 
 ```bash

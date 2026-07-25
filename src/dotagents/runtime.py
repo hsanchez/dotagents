@@ -264,6 +264,28 @@ def init_runtime(
   return sync_runtime(runtime_context, dry_run=dry_run, locked=locked)
 
 
+def prepare_runtime_backup(
+  repo_root: Path,
+  runtime_dir: Path,
+  previous_lock: RuntimeLock | None,
+  self_host: bool,
+  operation_log: OperationLog,
+) -> BackupRecord | None:
+  if previous_lock is not None and previous_lock.self_host:
+    if previous_lock.runtime_backup is None:
+      return None
+    return BackupRecord(previous_lock.runtime_backup, previous_lock.runtime_backup_fingerprint)
+  if not self_host:
+    return None
+  if not runtime_dir.exists(follow_symlinks=False):
+    return None
+  if runtime_dir.is_dir() and not any(runtime_dir.iterdir()):
+    return None
+
+  backup_path = runtime_dir.with_name(runtime_dir.name + ".bak")
+  return create_backup(repo_root, runtime_dir, backup_path, operation_log)
+
+
 def build_context_for_existing_runtime(
   repo_root: Path,
 ) -> tuple[RuntimeContext, RuntimeLock | None]:
@@ -365,6 +387,14 @@ def uninstall_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
   remove_lockfile(root, lock_path, operation_log)
   collect_parents(root, lock_path, prune_candidates)
   prune_empty_dirs(root, prune_candidates, operation_log)
+  if runtime_lock.runtime_backup:
+    restore_runtime_backup(
+      root,
+      root / runtime_lock.runtime_backup,
+      runtime_dir,
+      operation_log,
+      runtime_lock.runtime_backup_fingerprint,
+    )
   operation_log.add(
     "would uninstall dotagents runtime"
     if operation_log.dry_run
@@ -472,6 +502,8 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       skillfile_sha256=current_lock.skillfile_sha256,
       rules_backup=rules_backup_record.path if rules_backup_record else None,
       rules_backup_fingerprint=rules_backup_record.fingerprint if rules_backup_record else None,
+      runtime_backup=current_lock.runtime_backup,
+      runtime_backup_fingerprint=current_lock.runtime_backup_fingerprint,
       self_host=current_lock.self_host,
     )
     operation_log.add(f"removed provider: {provider}")
@@ -582,6 +614,13 @@ def _sync_runtime_body(
   locked_links: list[LockedLink] = []
   lock_path = runtime_context.runtime_dir / "dotagents.lock"
   previous_lock = read_lock(lock_path) if lock_path.exists() else None
+  runtime_backup = prepare_runtime_backup(
+    runtime_context.repo_root,
+    runtime_context.runtime_dir,
+    previous_lock,
+    runtime_context.self_host,
+    operation_log,
+  )
   compiled_assets = compiled_lock_entries(runtime_context.repo_root, previous_lock)
   validate_compiled_assets_do_not_conflict(runtime_context, compiled_assets)
 
@@ -702,6 +741,8 @@ def _sync_runtime_body(
       generated_at=generated_at,
       rules_backup=rules_backup.path if rules_backup else None,
       rules_backup_fingerprint=rules_backup.fingerprint if rules_backup else None,
+      runtime_backup=runtime_backup.path if runtime_backup else None,
+      runtime_backup_fingerprint=runtime_backup.fingerprint if runtime_backup else None,
       self_host=runtime_context.self_host,
     )
     operation_log.add("wrote .agents/dotagents.lock")
@@ -1179,7 +1220,7 @@ def render_rules(
     runtime_context.repo_root / ".rules",
     "\n".join(chunks) + "\n",
     operation_log,
-    backup_existing=runtime_context.is_global,
+    backup_existing=runtime_context.is_global or runtime_context.self_host,
     known_backup=known_backup,
   )
 
@@ -1305,6 +1346,33 @@ def migrate_legacy_link_backup(repo_root: Path, link: LockedLink) -> LockedLink:
   )
 
 
+def create_backup(
+  repo_root: Path, destination: Path, backup: Path, operation_log: OperationLog
+) -> BackupRecord:
+  """Move `destination` aside to `backup`, recording the action in `operation_log`.
+
+  Raises:
+    DotagentsError: if `backup` already exists.
+  """
+  if backup.exists(follow_symlinks=False):
+    raise DotagentsError(
+      f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
+    )
+  backup_record = BackupRecord(relative(repo_root, backup), backup_fingerprint(destination))
+  if operation_log.dry_run:
+    operation_log.add(
+      f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+    )
+    operation_log.planned_backups.append((destination, backup))
+  else:
+    destination.rename(backup)
+    operation_log.add(
+      f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
+    )
+    operation_log.created_backups.append((destination, backup))
+  return backup_record
+
+
 def write_text(
   repo_root: Path,
   destination: Path,
@@ -1341,16 +1409,7 @@ def write_text(
   backup_rel = relative(repo_root, backup)
   already_tracked = known_backup is not None and known_backup.path == backup_rel
   if backup_existing and destination.exists() and not already_tracked:
-    if backup.exists(follow_symlinks=False):
-      raise DotagentsError(f"backup already exists: {backup_rel}; resolve manually and re-run")
-    backup_record = BackupRecord(backup_rel, backup_fingerprint(destination))
-    if operation_log.dry_run:
-      operation_log.add(f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {backup_rel}")
-      operation_log.planned_backups.append((destination, backup))
-    else:
-      destination.rename(backup)
-      operation_log.add(f"backed up {relative(repo_root, destination)} -> {backup_rel}")
-      operation_log.created_backups.append((destination, backup))
+    backup_record = create_backup(repo_root, destination, backup, operation_log)
   if operation_log.dry_run:
     operation_log.add(f"would write {relative(repo_root, destination)}")
     return backup_record
@@ -1383,25 +1442,9 @@ def link_path(
   # follow_symlinks=False: a pre-existing entry that isn't already our link — a
   # regular file, a symlink to something else, or a broken symlink — must be
   # backed up before replacement, not silently overwritten.
+  backup_record: BackupRecord | None
   if destination.exists(follow_symlinks=False) and not already_linked:
-    if backup.exists(follow_symlinks=False):
-      raise DotagentsError(
-        f"backup already exists: {relative(repo_root, backup)}; resolve manually and re-run"
-      )
-    backup_record: BackupRecord | None = BackupRecord(
-      relative(repo_root, backup), backup_fingerprint(destination)
-    )
-    if operation_log.dry_run:
-      operation_log.add(
-        f"{WOULD_BACK_UP_PREFIX}{relative(repo_root, destination)} -> {relative(repo_root, backup)}"
-      )
-      operation_log.planned_backups.append((destination, backup))
-    else:
-      destination.rename(backup)
-      operation_log.add(
-        f"backed up {relative(repo_root, destination)} -> {relative(repo_root, backup)}"
-      )
-      operation_log.created_backups.append((destination, backup))
+    backup_record = create_backup(repo_root, destination, backup, operation_log)
   else:
     backup_record = migrate_legacy_backup(repo_root, known_backup, backup)
 
@@ -1536,14 +1579,17 @@ def restore_backup(
       )
       return
 
-  def fingerprint_mismatch() -> bool:
-    return (
-      expected_fingerprint is not None and backup_fingerprint(backup_path) != expected_fingerprint
-    )
+  def fingerprint_mismatch() -> tuple[bool, str | None]:
+    if expected_fingerprint is None:
+      return False, None
+    actual_fingerprint = backup_fingerprint(backup_path)
+    return actual_fingerprint != expected_fingerprint, actual_fingerprint
 
-  if fingerprint_mismatch():
+  mismatch, actual_fingerprint = fingerprint_mismatch()
+  if mismatch:
     operation_log.add(
       f"backup fingerprint mismatch {relative(repo_root, backup_path)}; "
+      f"expected {expected_fingerprint}, found {actual_fingerprint}; "
       "skipped restore, resolve manually"
     )
     return
@@ -1557,9 +1603,11 @@ def restore_backup(
   # single file's hash — this doesn't eliminate the race (no OS-level atomicity is used, and
   # the same race exists between this check and the rename call below), but shrinks it to
   # the minimum achievable without one.
-  if fingerprint_mismatch():
+  mismatch, actual_fingerprint = fingerprint_mismatch()
+  if mismatch:
     operation_log.add(
       f"backup fingerprint mismatch {relative(repo_root, backup_path)}; "
+      f"expected {expected_fingerprint}, found {actual_fingerprint}; "
       "skipped restore, resolve manually"
     )
     return
@@ -1567,6 +1615,43 @@ def restore_backup(
   operation_log.add(
     f"restored {relative(repo_root, backup_path)} -> {relative(repo_root, destination)}"
   )
+
+
+def restore_runtime_backup(
+  repo_root: Path,
+  backup_path: Path,
+  destination: Path,
+  operation_log: OperationLog,
+  expected_fingerprint: str | None = None,
+) -> None:
+  """Restore a self-host runtime backup only when generated output is gone.
+
+  A changed generated runtime is user-owned until it is resolved explicitly. Leaving it
+  in place avoids replacing those files with the older pre-install `.agents` tree.
+
+  Raises:
+    DotagentsError: if a filesystem path escapes `repo_root`.
+  """
+  if operation_log.dry_run:
+    if destination not in operation_log.pending_removals:
+      operation_log.add(
+        f"skip restoring {relative(repo_root, backup_path)}; "
+        f"{relative(repo_root, destination)} still contains managed or changed files; "
+        "resolve manually"
+      )
+      return
+    restore_backup(repo_root, backup_path, destination, operation_log, expected_fingerprint)
+    return
+  if destination.exists(follow_symlinks=False):
+    if destination.is_symlink() or not destination.is_dir() or any(destination.iterdir()):
+      operation_log.add(
+        f"skip restoring {relative(repo_root, backup_path)}; "
+        f"{relative(repo_root, destination)} still contains managed or changed files; "
+        "resolve manually"
+      )
+      return
+    destination.rmdir()
+  restore_backup(repo_root, backup_path, destination, operation_log, expected_fingerprint)
 
 
 def remove_link_with_backup(

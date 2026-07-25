@@ -26,6 +26,11 @@ test ! -e Skillfile
 test ! -e .agents/dotagents.lock
 test ! -e .rules
 
+mkdir -p .agents
+printf 'legacy runtime\n' > .agents/legacy.txt
+printf 'human rules\n' > .rules
+printf 'human agents\n' > AGENTS.md
+
 uv run dotagents init --self-host --for claude --for codex
 uv run dotagents doctor
 uv run dotagents sync
@@ -42,6 +47,10 @@ grep -q '^self_host = true' .agents/dotagents.lock
 # Provider-facing output retains normal managed-link behavior.
 test -L .claude/commands
 test -L .codex/config.toml
+test -f .agents.bak/legacy.txt
+test "$(cat .agents.bak/legacy.txt)" = 'legacy runtime'
+test "$(cat .rules.bak)" = 'human rules'
+test "$(cat AGENTS.md.bak)" = 'human agents'
 
 # The hidden option is guarded against accidental use in another repository.
 if uv run dotagents init --self-host --root "$other_dir" --for claude >other-root.out 2>&1; then
@@ -56,7 +65,13 @@ test ! -e "$other_dir/.rules"
 uv run dotagents uninstall
 test -f scripts/review-code
 test ! -L scripts/review-code
-test ! -e .agents
+test -f .agents/legacy.txt
+test "$(cat .agents/legacy.txt)" = 'legacy runtime'
+test "$(cat .rules)" = 'human rules'
+test "$(cat AGENTS.md)" = 'human agents'
+test ! -e .agents.bak
+test ! -e .rules.bak
+test ! -e AGENTS.md.bak
 test ! -e .claude
 test ! -e .codex
 
