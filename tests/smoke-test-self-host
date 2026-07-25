@@ -1,0 +1,84 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+self_host_dir="$(mktemp -d)"
+other_dir="$(mktemp -d)"
+trap 'rm -rf "$self_host_dir" "$other_dir"' EXIT INT TERM
+
+# Build a source checkout fixture from the current working tree so this test
+# validates uncommitted self-hosting changes without touching this checkout.
+cp "$repo_root/pyproject.toml" "$repo_root/uv.lock" "$repo_root/README.md" "$self_host_dir/"
+cp "$repo_root/agents.toml" "$self_host_dir/"
+for directory in src rules scripts skills presets hooks claude codex copilot gemini; do
+  cp -R "$repo_root/$directory" "$self_host_dir/$directory"
+done
+
+cd "$self_host_dir"
+uv sync --reinstall-package dotagents
+
+# A source checkout requires explicit maintainer mode before any files are created.
+if uv run dotagents init --for claude >plain-init.out 2>&1; then
+  echo "expected plain init to fail in source checkout" >&2
+  exit 1
+fi
+test ! -e Skillfile
+test ! -e .agents/dotagents.lock
+test ! -e .rules
+
+mkdir -p .agents
+printf 'legacy runtime\n' > .agents/legacy.txt
+printf 'human rules\n' > .rules
+printf 'human agents\n' > AGENTS.md
+ln -s .rules CODEX.md
+
+uv run dotagents init --self-host --for claude --for codex
+uv run dotagents doctor
+uv run dotagents sync
+uv run dotagents update
+
+# Self-host mode preserves package source files and still materializes runtime copies.
+test -f scripts/review-code
+test ! -L scripts/review-code
+test -f .agents/scripts/review-code
+test ! -L .agents/scripts/review-code
+cmp scripts/review-code .agents/scripts/review-code
+grep -q '^self_host = true' .agents/dotagents.lock
+
+# Provider-facing output retains normal managed-link behavior.
+test -L .claude/commands
+test -L .codex/config.toml
+test -f .agents.bak/legacy.txt
+test "$(cat .agents.bak/legacy.txt)" = 'legacy runtime'
+test "$(cat .rules.bak)" = 'human rules'
+test "$(cat AGENTS.md.bak)" = 'human agents'
+test -L CODEX.md.bak
+test "$(readlink CODEX.md.bak)" = '.rules'
+
+# The hidden option is guarded against accidental use in another repository.
+if uv run dotagents init --self-host --root "$other_dir" --for claude >other-root.out 2>&1; then
+  echo "expected self-host outside source checkout to fail" >&2
+  exit 1
+fi
+test ! -e "$other_dir/Skillfile"
+test ! -e "$other_dir/.agents"
+test ! -e "$other_dir/.rules"
+
+# Uninstall removes generated output without touching source scripts.
+uv run dotagents uninstall
+test -f scripts/review-code
+test ! -L scripts/review-code
+test -f .agents/legacy.txt
+test "$(cat .agents/legacy.txt)" = 'legacy runtime'
+test "$(cat .rules)" = 'human rules'
+test "$(cat AGENTS.md)" = 'human agents'
+test -L CODEX.md
+test "$(readlink CODEX.md)" = '.rules'
+test ! -e .agents.bak
+test ! -e .rules.bak
+test ! -e AGENTS.md.bak
+test ! -e CODEX.md.bak
+test ! -e .claude
+test ! -e .codex
+
+echo "dotagents self-host smoke test passed"

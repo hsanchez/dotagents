@@ -20,3 +20,5 @@ MEMORY_LOG.md
 .env.local
 
 PLAN.md
+.agents.bak/
+*.bak

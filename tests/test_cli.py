@@ -69,6 +69,38 @@ def test_init_dry_run_command_does_not_write_runtime(
   assert not (tmp_path / ".agents").exists()
 
 
+def test_self_host_option_is_hidden_from_init_help() -> None:
+  result = CliRunner().invoke(app, ["init", "--help"])
+
+  assert result.exit_code == 0
+  assert "--self-host" not in result.output
+
+
+def test_self_host_is_rejected_outside_dotagents_checkout(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["init", "--self-host", "--for", "claude"])
+
+  assert result.exit_code == 1
+  assert "only valid when targeting the dotagents source checkout" in result.output
+  assert not (tmp_path / "Skillfile").exists()
+  assert not (tmp_path / ".agents").exists()
+
+
+def test_source_checkout_requires_self_host_mode(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.setattr("dotagents.cli.is_dotagents_source_checkout", lambda _root: True)
+
+  result = CliRunner().invoke(app, ["init", "--root", str(tmp_path), "--for", "claude"])
+
+  assert result.exit_code == 1
+  assert "requires the maintainer-only --self-host option" in result.output
+  assert not (tmp_path / "Skillfile").exists()
+
+
 def test_init_without_skillfile_writes_default_skillfile(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

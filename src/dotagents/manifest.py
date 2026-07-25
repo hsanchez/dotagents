@@ -15,6 +15,7 @@ class SyncEntry:
   source: str
   destination: str
   link: bool = True
+  preserve_source: bool = False
   provider: str | None = None
   skill: str | None = None
   scope: str = "repo"
@@ -108,6 +109,9 @@ def _parse_entries(section: str, entries: object, provider: str | None) -> list[
     link = entry.get("link", True)
     if not isinstance(link, bool):
       raise DotagentsError(f"agents.toml: {section}.link must be a boolean")
+    preserve_source = entry.get("preserve_source", False)
+    if not isinstance(preserve_source, bool):
+      raise DotagentsError(f"agents.toml: {section}.preserve_source must be a boolean")
     skill = entry.get("skill")
     if skill is not None and (not isinstance(skill, str) or not skill):
       raise DotagentsError(f"agents.toml: {section}.skill must be a non-empty string")
@@ -122,6 +126,7 @@ def _parse_entries(section: str, entries: object, provider: str | None) -> list[
         source=source,
         destination=destination,
         link=link,
+        preserve_source=preserve_source,
         provider=provider,
         skill=skill,
         scope=scope,
@@ -149,6 +154,8 @@ def validate_manifest(manifest: Manifest, asset_root: Path) -> None:
   for entry in entries:
     _validate_path("source", entry.source, errors)
     _validate_path("destination", entry.destination, errors)
+    if entry.preserve_source and not entry.always_copy:
+      errors.append(f"preserve_source requires always_copy: {entry.source}")
     if entry.source != ".rules" and not (asset_root / entry.source).exists():
       errors.append(f"source does not exist: {entry.source}")
     for previous in destinations.get(entry.destination, ()):

@@ -1,10 +1,12 @@
 import os
+import shutil
 from pathlib import Path
 
 import pytest
 from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
 import dotagents.runtime as runtime_module
+from dotagents.assets import asset_root
 from dotagents.compiler import BuildGroup, BuildManifest
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
@@ -31,6 +33,7 @@ from dotagents.runtime import (
   remove_provider,
   resolve_within_root,
   restore_backup,
+  restore_runtime_backup,
   rollback_created_backups,
   runtime_destination,
   sync_existing,
@@ -70,6 +73,321 @@ sync = [
     encoding="utf-8",
   )
   return root
+
+
+def write_source_checkout(root: Path) -> Path:
+  assets = asset_root()
+  root.mkdir()
+  (root / "pyproject.toml").write_text(
+    '[project]\nname = "dotagents"\nversion = "0.0.0"\n', encoding="utf-8"
+  )
+  for name in (
+    "agents.toml",
+    "claude",
+    "codex",
+    "copilot",
+    "gemini",
+    "hooks",
+    "presets",
+    "rules",
+    "scripts",
+    "skills",
+  ):
+    source = assets / name
+    destination = root / name
+    if source.is_dir():
+      shutil.copytree(source, destination)
+    else:
+      shutil.copy2(source, destination)
+  return root
+
+
+def test_self_host_keeps_source_scripts_regular_and_persists_mode(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  source_script = source_checkout / "scripts" / "review-code"
+  runtime_script = source_checkout / ".agents" / "scripts" / "review-code"
+  runtime_lock = read_lock(source_checkout / ".agents" / "dotagents.lock")
+  assert source_script.is_file()
+  assert not source_script.is_symlink()
+  assert runtime_script.is_file()
+  assert not runtime_script.is_symlink()
+  assert runtime_lock.self_host is True
+  for script_name in ("simplify-code", "gh-issue", "memlog", "review-branch", "review-code"):
+    source_script = source_checkout / "scripts" / script_name
+    runtime_script = source_checkout / ".agents" / "scripts" / script_name
+    assert source_script.is_file()
+    assert not source_script.is_symlink()
+    assert runtime_script.is_file()
+    assert not runtime_script.is_symlink()
+    assert source_script.read_bytes() == runtime_script.read_bytes()
+    assert not any(link.destination == f"scripts/{script_name}" for link in runtime_lock.links)
+
+  sync_existing(source_checkout)
+  update_existing(source_checkout)
+  assert not source_script.is_symlink()
+  assert doctor(source_checkout).passed
+
+
+def test_self_host_backs_up_and_uninstalls_preexisting_runtime_files(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".agents").mkdir()
+  (source_checkout / ".agents" / "legacy.txt").write_text("legacy runtime\n", encoding="utf-8")
+  (source_checkout / ".rules").write_text("human rules\n", encoding="utf-8")
+  (source_checkout / "AGENTS.md").write_text("human agents\n", encoding="utf-8")
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  assert (source_checkout / ".agents.bak" / "legacy.txt").read_text(encoding="utf-8") == (
+    "legacy runtime\n"
+  )
+  assert (source_checkout / ".rules.bak").read_text(encoding="utf-8") == "human rules\n"
+  assert (source_checkout / "AGENTS.md.bak").read_text(encoding="utf-8") == "human agents\n"
+  lock = read_lock(source_checkout / ".agents" / "dotagents.lock")
+  assert lock.runtime_backup == ".agents.bak"
+  assert lock.runtime_backup_fingerprint is not None
+
+  uninstall_existing(source_checkout)
+
+  assert (source_checkout / ".agents" / "legacy.txt").read_text(encoding="utf-8") == (
+    "legacy runtime\n"
+  )
+  assert (source_checkout / ".rules").read_text(encoding="utf-8") == "human rules\n"
+  assert (source_checkout / "AGENTS.md").read_text(encoding="utf-8") == "human agents\n"
+  assert not (source_checkout / ".agents.bak").exists()
+  assert not (source_checkout / ".rules.bak").exists()
+  assert not (source_checkout / "AGENTS.md.bak").exists()
+
+
+def test_self_host_restores_preexisting_correct_provider_symlinks(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".rules").write_text("human rules\n", encoding="utf-8")
+  for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+    (source_checkout / name).symlink_to(".rules")
+
+  init_runtime(source_checkout, ("claude", "codex"), self_host=True)
+
+  for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+    backup = source_checkout / f"{name}.bak"
+    assert backup.is_symlink()
+    assert backup.readlink() == Path(".rules")
+    assert (source_checkout / name).is_symlink()
+    assert (source_checkout / name).readlink() == Path(".rules")
+
+  uninstall_existing(source_checkout)
+
+  for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+    restored = source_checkout / name
+    assert restored.is_symlink()
+    assert restored.readlink() == Path(".rules")
+    assert not (source_checkout / f"{name}.bak").exists()
+
+
+def test_self_host_uninstall_preserves_changed_runtime_instead_of_restoring_over_it(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".agents").mkdir()
+  (source_checkout / ".agents" / "legacy.txt").write_text("legacy runtime\n", encoding="utf-8")
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  (source_checkout / ".agents" / "scripts" / "review-code").write_text(
+    "maintainer changes\n", encoding="utf-8"
+  )
+
+  operation_log = uninstall_existing(source_checkout)
+
+  assert (source_checkout / ".agents" / "scripts" / "review-code").read_text(
+    encoding="utf-8"
+  ) == "maintainer changes\n"
+  assert (source_checkout / ".agents.bak" / "legacy.txt").exists()
+  assert any("still contains managed or changed files" in line for line in operation_log.lines)
+
+
+def test_self_host_rejects_preexisting_runtime_backup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".agents").mkdir()
+  (source_checkout / ".agents" / "legacy.txt").write_text("legacy runtime\n", encoding="utf-8")
+  (source_checkout / ".agents.bak").mkdir()
+
+  with pytest.raises(DotagentsError, match="backup already exists"):
+    init_runtime(source_checkout, ("claude",), self_host=True)
+
+  assert (source_checkout / ".agents" / "legacy.txt").read_text(encoding="utf-8") == (
+    "legacy runtime\n"
+  )
+
+
+def test_self_host_dry_run_does_not_move_preexisting_runtime_files(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".agents").mkdir()
+  (source_checkout / ".agents" / "legacy.txt").write_text("legacy runtime\n", encoding="utf-8")
+  (source_checkout / ".rules").write_text("human rules\n", encoding="utf-8")
+
+  operation_log = init_runtime(source_checkout, ("claude",), dry_run=True, self_host=True)
+
+  assert (source_checkout / ".agents" / "legacy.txt").exists()
+  assert (source_checkout / ".rules").read_text(encoding="utf-8") == "human rules\n"
+  assert not (source_checkout / ".agents.bak").exists()
+  assert not (source_checkout / ".rules.bak").exists()
+  assert any("would back up .agents" in line for line in operation_log.lines)
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  uninstall_log = uninstall_existing(source_checkout, dry_run=True)
+
+  assert any("would restore .agents.bak -> .agents" in line for line in uninstall_log.lines)
+  assert (source_checkout / ".agents" / "dotagents.lock").exists()
+
+
+def test_self_host_uninstall_skips_tampered_runtime_backup(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".agents").mkdir()
+  (source_checkout / ".agents" / "legacy.txt").write_text("legacy runtime\n", encoding="utf-8")
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  (source_checkout / ".agents.bak" / "legacy.txt").write_text("tampered\n", encoding="utf-8")
+
+  operation_log = uninstall_existing(source_checkout)
+
+  assert not (source_checkout / ".agents" / "scripts" / "review-code").exists()
+  assert (source_checkout / ".agents.bak" / "legacy.txt").read_text(encoding="utf-8") == (
+    "tampered\n"
+  )
+  assert any("backup fingerprint mismatch .agents.bak" in line for line in operation_log.lines)
+
+
+def test_self_host_uninstall_skips_symlinked_runtime_directory(tmp_path: Path) -> None:
+  destination = tmp_path / ".agents"
+  target = tmp_path / "target"
+  target.mkdir()
+  (target / "keep.txt").write_text("keep\n", encoding="utf-8")
+  destination.symlink_to(target, target_is_directory=True)
+  backup = tmp_path / ".agents.bak"
+  backup.mkdir()
+  (backup / "legacy.txt").write_text("legacy\n", encoding="utf-8")
+
+  operation_log = OperationLog()
+  restore_runtime_backup(tmp_path, backup, destination, operation_log, backup_fingerprint(backup))
+
+  assert destination.is_symlink()
+  assert (target / "keep.txt").exists()
+  assert backup.exists()
+  assert any("still contains managed or changed files" in line for line in operation_log.lines)
+
+
+def test_init_runtime_rejects_source_checkout_without_self_host(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  with pytest.raises(DotagentsError, match="requires the maintainer-only --self-host option"):
+    init_runtime(source_checkout, ("claude",))
+
+  assert not (source_checkout / ".agents").exists()
+
+
+def test_sync_runtime_rejects_source_checkout_without_self_host(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  with pytest.raises(DotagentsError, match="requires the maintainer-only --self-host option"):
+    sync_existing(source_checkout)
+
+  assert not (source_checkout / ".agents").exists()
+
+
+def test_update_runtime_rejects_source_checkout_without_self_host(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  with pytest.raises(DotagentsError, match="requires the maintainer-only --self-host option"):
+    update_existing(source_checkout)
+
+  assert not (source_checkout / ".agents").exists()
+
+
+def test_existing_runtime_rejects_self_host_lock_in_consumer_repository(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace(
+      "generated_at =", "self_host = true\ngenerated_at =", 1
+    ),
+    encoding="utf-8",
+  )
+
+  with pytest.raises(DotagentsError, match="lockfile self_host=true is only valid"):
+    sync_existing(Path.cwd())
+
+  result = doctor(Path.cwd())
+  assert not result.passed
+  assert (
+    "runtime: error: lockfile self_host=true is only valid when targeting the dotagents source checkout"
+    in result.lines
+  )
+
+
+def test_self_host_provider_operations_preserve_mode(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  add_provider(source_checkout, "codex")
+  remove_provider(source_checkout, "codex")
+
+  lock = read_lock(source_checkout / ".agents" / "dotagents.lock")
+  assert lock.self_host is True
+  assert lock.providers == ("claude",)
+  assert not (source_checkout / "scripts" / "review-code").is_symlink()
+
+
+def test_doctor_reports_self_host_source_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  source_script = source_checkout / "scripts" / "review-code"
+  source_script.write_text(
+    source_script.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8"
+  )
+
+  result = doctor(source_checkout)
+
+  assert not result.passed
+  assert "source differs from runtime: scripts/review-code" in result.lines
 
 
 def test_init_dry_run_does_not_write_runtime(
@@ -632,7 +950,7 @@ def test_doctor_reports_changed_managed_asset(
   result = doctor(Path.cwd())
 
   assert not result.passed
-  assert "changed: .agents/scripts/review-code" in result.lines
+  assert "runtime changed: .agents/scripts/review-code" in result.lines
 
 
 def test_rules_local_is_composed_into_generated_rules(
@@ -981,13 +1299,19 @@ def test_uninstall_skips_restoring_link_backup_with_tampered_fingerprint(
   monkeypatch.chdir(tmp_path)
   Path("CLAUDE.md").write_text("human-owned\n", encoding="utf-8")
   init_runtime(Path.cwd(), ("claude",))
+  expected_fingerprint = f"sha256:{sha256_file(tmp_path / 'CLAUDE.md.bak')}"
   (tmp_path / "CLAUDE.md.bak").write_text("tampered content\n", encoding="utf-8")
+  actual_fingerprint = f"sha256:{sha256_file(tmp_path / 'CLAUDE.md.bak')}"
 
   operation_log = uninstall_existing(Path.cwd())
 
   assert (tmp_path / "CLAUDE.md.bak").read_text(encoding="utf-8") == "tampered content\n"
   assert not (tmp_path / "CLAUDE.md").exists()
-  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+  assert any(
+    f"fingerprint mismatch CLAUDE.md.bak; expected {expected_fingerprint}, "
+    f"found {actual_fingerprint}" in line
+    for line in operation_log.lines
+  )
 
 
 def test_uninstall_skips_external_symlink_for_locked_asset(
@@ -1012,13 +1336,19 @@ def test_uninstall_skips_restoring_rules_backup_with_tampered_fingerprint(
   monkeypatch.setenv("HOME", str(tmp_path))
   (tmp_path / ".rules").write_text("human-owned rules\n", encoding="utf-8")
   init_runtime(tmp_path, ("claude",))
+  expected_fingerprint = f"sha256:{sha256_file(tmp_path / '.rules.bak')}"
   (tmp_path / ".rules.bak").write_text("tampered rules\n", encoding="utf-8")
+  actual_fingerprint = f"sha256:{sha256_file(tmp_path / '.rules.bak')}"
 
   operation_log = uninstall_existing(tmp_path)
 
   assert (tmp_path / ".rules.bak").read_text(encoding="utf-8") == "tampered rules\n"
   assert not (tmp_path / ".rules").exists()
-  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+  assert any(
+    f"fingerprint mismatch .rules.bak; expected {expected_fingerprint}, "
+    f"found {actual_fingerprint}" in line
+    for line in operation_log.lines
+  )
 
 
 def test_restore_backup_rejects_directory_at_backup_path(tmp_path: Path) -> None:
@@ -1075,13 +1405,18 @@ def test_restore_backup_skips_changed_directory_backup(tmp_path: Path) -> None:
   (backup_path / "original.md").write_text("original", encoding="utf-8")
   expected_fingerprint = backup_fingerprint(backup_path)
   (backup_path / "original.md").write_text("changed", encoding="utf-8")
+  actual_fingerprint = backup_fingerprint(backup_path)
   operation_log = OperationLog()
 
   restore_backup(tmp_path, backup_path, destination, operation_log, expected_fingerprint)
 
   assert backup_path.is_dir()
   assert not destination.exists()
-  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+  assert any(
+    f"fingerprint mismatch skills.bak; expected {expected_fingerprint}, "
+    f"found {actual_fingerprint}" in line
+    for line in operation_log.lines
+  )
 
 
 def test_restore_backup_rechecks_fingerprint_immediately_before_rename(
@@ -1115,7 +1450,12 @@ def test_restore_backup_rechecks_fingerprint_immediately_before_rename(
   assert call_count == 2
   assert not destination.exists()
   assert backup_path.read_text(encoding="utf-8") == "swapped content\n"
-  assert any("fingerprint mismatch" in line for line in operation_log.lines)
+  actual_fingerprint = f"sha256:{sha256_file(backup_path)}"
+  assert any(
+    f"fingerprint mismatch CLAUDE.md.bak; expected {expected_fingerprint}, "
+    f"found {actual_fingerprint}" in line
+    for line in operation_log.lines
+  )
 
 
 def test_legacy_backup_migration_rejects_symlinked_parent_escape(tmp_path: Path) -> None:
