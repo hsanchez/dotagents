@@ -14,6 +14,7 @@ from dotagents.runtime import (
   compute_skillfile_sha256,
   manifest_drift,
   relative,
+  validate_self_host_lock,
   version_drift,
 )
 from dotagents.version import package_version
@@ -36,20 +37,26 @@ def doctor(repo_root: Path) -> DoctorResult:
       lines.append(f"{command}: missing")
       passed = False
 
+  root = repo_root.resolve()
+  lock_path = root / ".agents" / "dotagents.lock"
+  lock = None
+  if lock_path.exists():
+    try:
+      lock = read_lock(lock_path)
+    except DotagentsError as exc:
+      return DoctorResult(False, (*lines, f"lockfile: error: {exc}"))
   try:
-    runtime_context = build_context(repo_root)
+    if lock is not None:
+      validate_self_host_lock(repo_root, lock)
+    runtime_context = build_context(repo_root, self_host=lock.self_host if lock else False)
     lines.append("agents.toml: ok")
   except DotagentsError as exc:
-    return DoctorResult(False, tuple([*lines, f"agents.toml: error: {exc}"]))
+    return DoctorResult(False, (*lines, f"runtime: error: {exc}"))
 
-  lock_path = runtime_context.runtime_dir / "dotagents.lock"
   if not lock_path.exists():
     return DoctorResult(False, tuple([*lines, "runtime: missing .agents/dotagents.lock"]))
-
-  try:
-    lock = read_lock(lock_path)
-  except DotagentsError as exc:
-    return DoctorResult(False, tuple([*lines, f"lockfile: error: {exc}"]))
+  if lock is None:
+    return DoctorResult(False, tuple([*lines, "lockfile: error: lockfile could not be loaded"]))
 
   drift = version_drift(lock)
   if drift:
@@ -102,8 +109,16 @@ def doctor(repo_root: Path) -> DoctorResult:
       lines.append(f"missing: {asset.destination}")
       passed = False
     elif sha256_file(path) != asset.sha256:
-      lines.append(f"changed: {asset.destination}")
+      lines.append(f"runtime changed: {asset.destination}")
       passed = False
+    if lock.self_host:
+      source = runtime_context.asset_root / asset.source
+      if not source.exists():
+        lines.append(f"source missing: {asset.source}")
+        passed = False
+      elif path.exists() and sha256_file(source) != sha256_file(path):
+        lines.append(f"source differs from runtime: {asset.source}")
+        passed = False
 
   for link in lock.links:
     destination = repo_root / link.destination

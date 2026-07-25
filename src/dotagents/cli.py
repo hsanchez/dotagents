@@ -23,6 +23,7 @@ from dotagents.compiler import (
 )
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
+from dotagents.lockfile import read_lock
 from dotagents.manifest import load_manifest
 from dotagents.runtime import (
   CompiledGroupStatus,
@@ -32,12 +33,14 @@ from dotagents.runtime import (
   capability_index_payload,
   compiled_group_statuses,
   init_runtime,
+  is_dotagents_source_checkout,
   is_global_root,
   relative,
   remove_provider,
   sync_existing,
   uninstall_existing,
   update_existing,
+  validate_self_host_root,
 )
 from dotagents.skillfile import (
   available_skills,
@@ -113,6 +116,14 @@ YesOption = Annotated[
     "--yes", "-y", help="Skip confirmation before replacing existing files at global scope."
   ),
 ]
+SelfHostOption = Annotated[
+  bool,
+  typer.Option(
+    "--self-host",
+    hidden=True,
+    help="Maintain the dotagents source checkout without root script symlinks.",
+  ),
+]
 
 
 def _resolve_root(root: Path | None, global_scope: bool) -> Path:
@@ -128,6 +139,32 @@ def _resolve_root_or_exit(root: Path | None, global_scope: bool) -> Path:
     return _resolve_root(root, global_scope).resolve()
   except DotagentsError as exc:
     _exit_with_error(exc)
+
+
+def _validate_init_mode(root: Path, global_scope: bool, self_host: bool) -> None:
+  if global_scope and self_host:
+    raise DotagentsError("cannot combine --self-host and --global")
+  if self_host:
+    validate_self_host_root(root)
+    return
+  if is_dotagents_source_checkout(root):
+    raise DotagentsError(
+      "dotagents source checkout requires the maintainer-only --self-host option"
+    )
+
+
+def _validate_existing_source_mode(root: Path) -> None:
+  if not is_dotagents_source_checkout(root):
+    return
+  lock_path = root / ".agents" / "dotagents.lock"
+  if not lock_path.exists():
+    raise DotagentsError(
+      "dotagents source checkout is not initialized; use the maintainer-only --self-host option"
+    )
+  if not read_lock(lock_path).self_host:
+    raise DotagentsError(
+      "dotagents source checkout requires a self-hosted runtime; re-run init with --self-host"
+    )
 
 
 def _confirm_global_replacements(repo_root: Path, preview: OperationLog, assume_yes: bool) -> None:
@@ -161,10 +198,12 @@ def init(
   root: RootOption = None,
   global_scope: GlobalOption = False,
   assume_yes: YesOption = False,
+  self_host: SelfHostOption = False,
 ) -> None:
   """Initialize the managed .agents runtime."""
   repo_root = _resolve_root_or_exit(root, global_scope)
   try:
+    _validate_init_mode(repo_root, global_scope, self_host)
     if with_preset and not with_skills:
       raise DotagentsError("preset selection requires --with")
     if locked and with_skills:
@@ -187,7 +226,13 @@ def init(
     if not dry_run and is_global_root(repo_root):
       preview = init_runtime(repo_root, resolved_providers, dry_run=True, locked=locked)
       _confirm_global_replacements(repo_root, preview, assume_yes)
-    operation_log = init_runtime(repo_root, resolved_providers, dry_run=dry_run, locked=locked)
+    operation_log = init_runtime(
+      repo_root,
+      resolved_providers,
+      dry_run=dry_run,
+      locked=locked,
+      self_host=self_host,
+    )
   except DotagentsError as exc:
     _exit_with_error(exc)
   _finish(operation_log, dry_run, "Initialized dotagents runtime.")
@@ -234,6 +279,7 @@ def sync(
   """Repair generated runtime state from current configuration."""
   repo_root = _resolve_root_or_exit(root, global_scope)
   try:
+    _validate_existing_source_mode(repo_root)
     if not dry_run and is_global_root(repo_root):
       preview = sync_existing(repo_root, dry_run=True, locked=locked)
       _confirm_global_replacements(repo_root, preview, assume_yes)
@@ -253,6 +299,7 @@ def update(
   """Refresh runtime assets after a dotagents dependency update."""
   repo_root = _resolve_root_or_exit(root, global_scope)
   try:
+    _validate_existing_source_mode(repo_root)
     if not dry_run and is_global_root(repo_root):
       preview = update_existing(repo_root, dry_run=True)
       _confirm_global_replacements(repo_root, preview, assume_yes)

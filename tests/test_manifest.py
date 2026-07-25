@@ -67,6 +67,50 @@ link = false
   assert not manifest.global_sync[0].link
 
 
+def test_load_manifest_reads_preserve_source_entry(tmp_path: Path) -> None:
+  (tmp_path / "scripts").mkdir()
+  (tmp_path / "scripts" / "review").write_text("", encoding="utf-8")
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "scripts/review"
+destination = "scripts/review"
+always_copy = true
+preserve_source = true
+
+[providers]
+""",
+  )
+
+  manifest = load_manifest(tmp_path)
+
+  assert manifest.global_sync[0].preserve_source
+
+
+def test_load_manifest_rejects_preserve_source_without_always_copy(tmp_path: Path) -> None:
+  (tmp_path / "scripts").mkdir()
+  (tmp_path / "scripts" / "review").write_text("", encoding="utf-8")
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[[sync]]
+source = "scripts/review"
+destination = "scripts/review"
+preserve_source = true
+
+[providers]
+""",
+  )
+
+  with pytest.raises(DotagentsError, match="preserve_source requires always_copy"):
+    load_manifest(tmp_path)
+
+
 @pytest.mark.parametrize(
   ("source", "destination", "message"),
   [

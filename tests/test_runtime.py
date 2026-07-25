@@ -1,10 +1,12 @@
 import os
+import shutil
 from pathlib import Path
 
 import pytest
 from helpers import make_lock_stale, make_manifest_stale, write_compiled_manifest
 
 import dotagents.runtime as runtime_module
+from dotagents.assets import asset_root
 from dotagents.compiler import BuildGroup, BuildManifest
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
@@ -70,6 +72,159 @@ sync = [
     encoding="utf-8",
   )
   return root
+
+
+def write_source_checkout(root: Path) -> Path:
+  assets = asset_root()
+  root.mkdir()
+  (root / "pyproject.toml").write_text(
+    '[project]\nname = "dotagents"\nversion = "0.0.0"\n', encoding="utf-8"
+  )
+  for name in (
+    "agents.toml",
+    "claude",
+    "codex",
+    "copilot",
+    "gemini",
+    "hooks",
+    "presets",
+    "rules",
+    "scripts",
+    "skills",
+  ):
+    source = assets / name
+    destination = root / name
+    if source.is_dir():
+      shutil.copytree(source, destination)
+    else:
+      shutil.copy2(source, destination)
+  return root
+
+
+def test_self_host_keeps_source_scripts_regular_and_persists_mode(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  source_script = source_checkout / "scripts" / "review-code"
+  runtime_script = source_checkout / ".agents" / "scripts" / "review-code"
+  runtime_lock = read_lock(source_checkout / ".agents" / "dotagents.lock")
+  assert source_script.is_file()
+  assert not source_script.is_symlink()
+  assert runtime_script.is_file()
+  assert not runtime_script.is_symlink()
+  assert runtime_lock.self_host is True
+  for script_name in ("simplify-code", "gh-issue", "memlog", "review-branch", "review-code"):
+    source_script = source_checkout / "scripts" / script_name
+    runtime_script = source_checkout / ".agents" / "scripts" / script_name
+    assert source_script.is_file()
+    assert not source_script.is_symlink()
+    assert runtime_script.is_file()
+    assert not runtime_script.is_symlink()
+    assert source_script.read_bytes() == runtime_script.read_bytes()
+    assert not any(link.destination == f"scripts/{script_name}" for link in runtime_lock.links)
+
+  sync_existing(source_checkout)
+  update_existing(source_checkout)
+  assert not source_script.is_symlink()
+  assert doctor(source_checkout).passed
+
+
+def test_init_runtime_rejects_source_checkout_without_self_host(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  with pytest.raises(DotagentsError, match="requires the maintainer-only --self-host option"):
+    init_runtime(source_checkout, ("claude",))
+
+  assert not (source_checkout / ".agents").exists()
+
+
+def test_sync_runtime_rejects_source_checkout_without_self_host(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  with pytest.raises(DotagentsError, match="requires the maintainer-only --self-host option"):
+    sync_existing(source_checkout)
+
+  assert not (source_checkout / ".agents").exists()
+
+
+def test_update_runtime_rejects_source_checkout_without_self_host(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  with pytest.raises(DotagentsError, match="requires the maintainer-only --self-host option"):
+    update_existing(source_checkout)
+
+  assert not (source_checkout / ".agents").exists()
+
+
+def test_existing_runtime_rejects_self_host_lock_in_consumer_repository(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  lock_path = tmp_path / ".agents" / "dotagents.lock"
+  lock_path.write_text(
+    lock_path.read_text(encoding="utf-8").replace(
+      "generated_at =", "self_host = true\ngenerated_at =", 1
+    ),
+    encoding="utf-8",
+  )
+
+  with pytest.raises(DotagentsError, match="lockfile self_host=true is only valid"):
+    sync_existing(Path.cwd())
+
+  result = doctor(Path.cwd())
+  assert not result.passed
+  assert (
+    "runtime: error: lockfile self_host=true is only valid when targeting the dotagents source checkout"
+    in result.lines
+  )
+
+
+def test_self_host_provider_operations_preserve_mode(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  add_provider(source_checkout, "codex")
+  remove_provider(source_checkout, "codex")
+
+  lock = read_lock(source_checkout / ".agents" / "dotagents.lock")
+  assert lock.self_host is True
+  assert lock.providers == ("claude",)
+  assert not (source_checkout / "scripts" / "review-code").is_symlink()
+
+
+def test_doctor_reports_self_host_source_drift(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  source_script = source_checkout / "scripts" / "review-code"
+  source_script.write_text(
+    source_script.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8"
+  )
+
+  result = doctor(source_checkout)
+
+  assert not result.passed
+  assert "source differs from runtime: scripts/review-code" in result.lines
 
 
 def test_init_dry_run_does_not_write_runtime(
@@ -632,7 +787,7 @@ def test_doctor_reports_changed_managed_asset(
   result = doctor(Path.cwd())
 
   assert not result.passed
-  assert "changed: .agents/scripts/review-code" in result.lines
+  assert "runtime changed: .agents/scripts/review-code" in result.lines
 
 
 def test_rules_local_is_composed_into_generated_rules(

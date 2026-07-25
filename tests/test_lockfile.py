@@ -44,6 +44,15 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
   assert runtime_lock.generated_at == "2026-06-26T00:00:00+00:00"
   assert runtime_lock.assets == tuple(assets)
   assert runtime_lock.links == tuple(links)
+  assert runtime_lock.self_host is False
+
+
+def test_write_and_read_lock_round_trips_self_host_mode(tmp_path: Path) -> None:
+  lock_path = tmp_path / "dotagents.lock"
+
+  write_lock(lock_path, "f" * 64, (), [], [], self_host=True)
+
+  assert read_lock(lock_path).self_host is True
 
 
 def test_read_lock_accepts_legacy_v1_link_backup_without_fingerprint(tmp_path: Path) -> None:
@@ -298,6 +307,11 @@ def test_directory_fingerprint_rejects_too_deep_nesting(
       'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
       '[[assets]]\nsource = "x"\ndestination = "/etc/passwd"\nsha256 = "abc"\n',
       "asset destination must be a relative path with no '..' segments",
+    ),
+    (
+      'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[[assets]]\nsource = "../../etc/passwd"\ndestination = "x"\nsha256 = "abc"\n',
+      "asset source must be a relative path with no '..' segments",
     ),
     (
       'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'

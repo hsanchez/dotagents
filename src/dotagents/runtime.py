@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from dotagents.assets import asset_root
+from dotagents.assets import asset_root, is_source_checkout
 from dotagents.compiler import (
   BuildGroup,
   BuildManifest,
@@ -83,6 +83,7 @@ class RuntimeContext:
   providers: tuple[str, ...]
   skills: tuple[str, ...]
   is_global: bool
+  self_host: bool
 
 
 @dataclass(frozen=True)
@@ -193,9 +194,37 @@ def is_global_root(root: Path) -> bool:
   return root.resolve() == Path.home().resolve()
 
 
-def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) -> RuntimeContext:
+def is_dotagents_source_checkout(repo_root: Path, assets: Path | None = None) -> bool:
+  root = repo_root.resolve()
+  asset_path = (assets or asset_root()).resolve()
+  return root == asset_path and is_source_checkout(root)
+
+
+def validate_self_host_root(repo_root: Path) -> None:
+  if not is_dotagents_source_checkout(repo_root):
+    raise DotagentsError("--self-host is only valid when targeting the dotagents source checkout")
+
+
+def validate_self_host_lock(repo_root: Path, runtime_lock: RuntimeLock) -> None:
+  if runtime_lock.self_host and not is_dotagents_source_checkout(repo_root):
+    raise DotagentsError(
+      "lockfile self_host=true is only valid when targeting the dotagents source checkout"
+    )
+
+
+def build_context(
+  repo_root: Path,
+  requested_providers: tuple[str, ...] = (),
+  self_host: bool = False,
+) -> RuntimeContext:
   root = repo_root.resolve()
   assets = asset_root()
+  if self_host:
+    validate_self_host_root(root)
+  elif is_dotagents_source_checkout(root, assets):
+    raise DotagentsError(
+      "dotagents source checkout requires the maintainer-only --self-host option"
+    )
   manifest = load_manifest(assets)
   configured = requested_providers or configured_providers(root, manifest)
   providers = selected_providers(manifest, configured)
@@ -211,6 +240,7 @@ def build_context(repo_root: Path, requested_providers: tuple[str, ...] = ()) ->
     providers=providers,
     skills=skills,
     is_global=is_global_root(root),
+    self_host=self_host,
   )
 
 
@@ -222,19 +252,40 @@ def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]
 
 
 def init_runtime(
-  repo_root: Path, providers: tuple[str, ...], dry_run: bool = False, locked: bool = False
+  repo_root: Path,
+  providers: tuple[str, ...],
+  dry_run: bool = False,
+  locked: bool = False,
+  self_host: bool = False,
 ) -> OperationLog:
-  runtime_context = build_context(repo_root, providers)
+  runtime_context = build_context(repo_root, providers, self_host=self_host)
   if locked:
     validate_locked_runtime(runtime_context)
   return sync_runtime(runtime_context, dry_run=dry_run, locked=locked)
 
 
+def build_context_for_existing_runtime(
+  repo_root: Path,
+) -> tuple[RuntimeContext, RuntimeLock | None]:
+  """Build a `RuntimeContext` for a runtime that may already have a lockfile.
+
+  Preserves the previous run's self-host mode, since a lockfile records that choice and
+  `build_context` would otherwise default it back to `False`.
+  """
+  root = repo_root.resolve()
+  lock_path = root / ".agents" / "dotagents.lock"
+  previous_lock = read_lock(lock_path) if lock_path.exists() else None
+  if previous_lock is not None:
+    validate_self_host_lock(root, previous_lock)
+  runtime_context = build_context(
+    root, self_host=previous_lock.self_host if previous_lock else False
+  )
+  return runtime_context, previous_lock
+
+
 def sync_existing(repo_root: Path, dry_run: bool = False, locked: bool = False) -> OperationLog:
-  runtime_context = build_context(repo_root)
-  lock_path = runtime_context.runtime_dir / "dotagents.lock"
-  if lock_path.exists():
-    runtime_lock = read_lock(lock_path)
+  runtime_context, runtime_lock = build_context_for_existing_runtime(repo_root)
+  if runtime_lock is not None:
     drift = version_drift(runtime_lock)
     if drift:
       raise DotagentsError(drift.update_guidance())
@@ -272,9 +323,8 @@ def validate_locked_runtime(runtime_context: RuntimeContext) -> RuntimeLock:
 
 
 def update_existing(repo_root: Path, dry_run: bool = False) -> OperationLog:
-  runtime_context = build_context(repo_root)
-  lock_path = runtime_context.runtime_dir / "dotagents.lock"
-  previous_version = read_lock(lock_path).version if lock_path.exists() else None
+  runtime_context, previous_lock = build_context_for_existing_runtime(repo_root)
+  previous_version = previous_lock.version if previous_lock else None
   operation_log = sync_runtime(runtime_context, dry_run=dry_run)
   installed_version = package_version()
   if previous_version is None:
@@ -330,7 +380,10 @@ def read_provider_operation_state(
   drift = version_drift(current_lock)
   if drift:
     raise DotagentsError(drift.update_guidance())
-  runtime_context = build_context(repo_root, current_lock.providers)
+  validate_self_host_lock(repo_root, current_lock)
+  runtime_context = build_context(
+    repo_root, current_lock.providers, self_host=current_lock.self_host
+  )
   manifest = manifest_drift(runtime_context, current_lock)
   if manifest:
     raise DotagentsError(manifest.update_guidance())
@@ -350,7 +403,9 @@ def add_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Opera
     operation_log.add(f"provider already configured: {provider}")
     return operation_log
   new_providers = (*current_lock.providers, provider)
-  return sync_runtime(build_context(root, new_providers), dry_run=dry_run)
+  return sync_runtime(
+    build_context(root, new_providers, self_host=current_lock.self_host), dry_run=dry_run
+  )
 
 
 def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> OperationLog:
@@ -417,6 +472,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       skillfile_sha256=current_lock.skillfile_sha256,
       rules_backup=rules_backup_record.path if rules_backup_record else None,
       rules_backup_fingerprint=rules_backup_record.fingerprint if rules_backup_record else None,
+      self_host=current_lock.self_host,
     )
     operation_log.add(f"removed provider: {provider}")
   else:
@@ -594,6 +650,8 @@ def _sync_runtime_body(
       continue
     if not scope_applies(entry.scope, runtime_context.is_global):
       continue
+    if runtime_context.self_host and entry.preserve_source:
+      continue
     source = (
       runtime_context.repo_root / ".rules"
       if entry.source == ".rules"
@@ -644,6 +702,7 @@ def _sync_runtime_body(
       generated_at=generated_at,
       rules_backup=rules_backup.path if rules_backup else None,
       rules_backup_fingerprint=rules_backup.fingerprint if rules_backup else None,
+      self_host=runtime_context.self_host,
     )
     operation_log.add("wrote .agents/dotagents.lock")
 

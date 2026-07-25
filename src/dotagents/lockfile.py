@@ -60,6 +60,7 @@ class RuntimeLock:
   links: tuple[LockedLink, ...]
   rules_backup: str | None
   rules_backup_fingerprint: str | None
+  self_host: bool
 
 
 def validate_contained_relative_path(value: str, description: str) -> None:
@@ -199,6 +200,7 @@ def write_lock(
   generated_at: str | None = None,
   rules_backup: str | None = None,
   rules_backup_fingerprint: str | None = None,
+  self_host: bool = False,
 ) -> None:
   payload = {
     "lockfile_version": SUPPORTED_LOCKFILE_VERSION,
@@ -210,6 +212,7 @@ def write_lock(
     **({"skillfile_sha256": skillfile_sha256} if skillfile_sha256 is not None else {}),
     **({"rules_backup": rules_backup} if rules_backup else {}),
     **({"rules_backup_fingerprint": rules_backup_fingerprint} if rules_backup_fingerprint else {}),
+    **({"self_host": True} if self_host else {}),
     "generated_at": generated_at or datetime.now(UTC).isoformat(),
     "assets": [
       {
@@ -283,6 +286,7 @@ def read_lock(path: Path) -> RuntimeLock:
       raise DotagentsError("lockfile asset entries require source, destination, sha256")
     if not isinstance(sha256, str) or not sha256:
       raise DotagentsError("lockfile asset entries require source, destination, sha256")
+    validate_contained_relative_path(source, "asset source")
     validate_contained_relative_path(destination, "asset destination")
     assets.append(LockedAsset(source, destination, sha256))
 
@@ -356,6 +360,10 @@ def read_lock(path: Path) -> RuntimeLock:
       "lockfile rules_backup requires rules_backup_fingerprint; run: uv run dotagents update"
     )
 
+  self_host = data.get("self_host", False)
+  if not isinstance(self_host, bool):
+    raise DotagentsError("lockfile self_host must be a boolean")
+
   return RuntimeLock(
     lockfile_version=lockfile_version,
     version=version,
@@ -368,4 +376,5 @@ def read_lock(path: Path) -> RuntimeLock:
     links=tuple(links),
     rules_backup=rules_backup,
     rules_backup_fingerprint=rules_backup_fingerprint,
+    self_host=self_host,
   )
