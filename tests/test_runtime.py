@@ -167,6 +167,33 @@ def test_self_host_backs_up_and_uninstalls_preexisting_runtime_files(
   assert not (source_checkout / "AGENTS.md.bak").exists()
 
 
+def test_self_host_restores_preexisting_correct_provider_symlinks(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  (source_checkout / ".rules").write_text("human rules\n", encoding="utf-8")
+  for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+    (source_checkout / name).symlink_to(".rules")
+
+  init_runtime(source_checkout, ("claude", "codex"), self_host=True)
+
+  for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+    backup = source_checkout / f"{name}.bak"
+    assert backup.is_symlink()
+    assert backup.readlink() == Path(".rules")
+    assert (source_checkout / name).is_symlink()
+    assert (source_checkout / name).readlink() == Path(".rules")
+
+  uninstall_existing(source_checkout)
+
+  for name in ("AGENTS.md", "CLAUDE.md", "CODEX.md"):
+    restored = source_checkout / name
+    assert restored.is_symlink()
+    assert restored.readlink() == Path(".rules")
+    assert not (source_checkout / f"{name}.bak").exists()
+
+
 def test_self_host_uninstall_preserves_changed_runtime_instead_of_restoring_over_it(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

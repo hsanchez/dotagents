@@ -702,6 +702,7 @@ def _sync_runtime_body(
       runtime_context.repo_root / entry.destination,
       operation_log,
       known_backup=previous_link_backups.get(entry.destination),
+      backup_existing=runtime_context.self_host and previous_lock is None,
     )
     locked_links.append(
       LockedLink(
@@ -1424,12 +1425,15 @@ def link_path(
   destination: Path,
   operation_log: OperationLog,
   known_backup: BackupRecord | None = None,
+  backup_existing: bool = False,
 ) -> BackupRecord | None:
   """Return the backup record for `destination` if one was created or already tracked, else None.
 
   `known_backup` is the backup previously recorded in the lock, if any. A `.bak` file found
   on disk is only ever reported back if it was created by this call or was already tracked —
   an unrelated pre-existing `.bak` file is never adopted as dotagents-owned.
+  `backup_existing` also backs up an already-correct symlink, which protects source-owned
+  symlinks during self-hosting.
 
   Raises:
     DotagentsError: if a `.bak` file already exists at the backup path (conflict must be resolved manually).
@@ -1439,12 +1443,17 @@ def link_path(
   target = os.path.relpath(source, destination.parent)
   already_linked = destination.is_symlink() and os.readlink(destination) == target
 
-  # follow_symlinks=False: a pre-existing entry that isn't already our link — a
-  # regular file, a symlink to something else, or a broken symlink — must be
-  # backed up before replacement, not silently overwritten.
+  # follow_symlinks=False: a pre-existing entry must be backed up before replacement,
+  # including an already-correct symlink in self-host mode. Source checkouts can track
+  # those symlinks, so uninstall must restore them rather than remove them permanently.
   backup_record: BackupRecord | None
-  if destination.exists(follow_symlinks=False) and not already_linked:
+  already_tracked = known_backup is not None and known_backup.path == relative(repo_root, backup)
+  should_backup_existing = destination.exists(follow_symlinks=False) and (
+    not already_linked or (backup_existing and not already_tracked)
+  )
+  if should_backup_existing:
     backup_record = create_backup(repo_root, destination, backup, operation_log)
+    already_linked = False
   else:
     backup_record = migrate_legacy_backup(repo_root, known_backup, backup)
 

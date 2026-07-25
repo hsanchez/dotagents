@@ -30,6 +30,7 @@ mkdir -p .agents
 printf 'legacy runtime\n' > .agents/legacy.txt
 printf 'human rules\n' > .rules
 printf 'human agents\n' > AGENTS.md
+ln -s .rules CODEX.md
 
 uv run dotagents init --self-host --for claude --for codex
 uv run dotagents doctor
@@ -51,6 +52,8 @@ test -f .agents.bak/legacy.txt
 test "$(cat .agents.bak/legacy.txt)" = 'legacy runtime'
 test "$(cat .rules.bak)" = 'human rules'
 test "$(cat AGENTS.md.bak)" = 'human agents'
+test -L CODEX.md.bak
+test "$(readlink CODEX.md.bak)" = '.rules'
 
 # The hidden option is guarded against accidental use in another repository.
 if uv run dotagents init --self-host --root "$other_dir" --for claude >other-root.out 2>&1; then
@@ -69,9 +72,12 @@ test -f .agents/legacy.txt
 test "$(cat .agents/legacy.txt)" = 'legacy runtime'
 test "$(cat .rules)" = 'human rules'
 test "$(cat AGENTS.md)" = 'human agents'
+test -L CODEX.md
+test "$(readlink CODEX.md)" = '.rules'
 test ! -e .agents.bak
 test ! -e .rules.bak
 test ! -e AGENTS.md.bak
+test ! -e CODEX.md.bak
 test ! -e .claude
 test ! -e .codex
 
