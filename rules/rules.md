@@ -179,7 +179,7 @@ Never used:
 - `MEMORY_LOG.local.md`
 
 Bootstrapping (if files are absent):
-- `MEMORY.md`: create with content `# PROJECT MEMORY\n\n- Initialized memory files.`
+- `MEMORY.md`: create with content `# PROJECT MEMORY\n\n## Entries\n`
 - `MEMORY_LOG.md`: create with content `# MEMORY LOG\n\n## Entries\n`
 
 # Pull request hygiene
@@ -252,3 +252,4 @@ Project tools live in `scripts/`. Run them directly.
 - `review-branch [issue]` — review committed changes on the current branch
 - `review-code` — review uncommitted working-tree changes
 - `gh-issue <issue>` — diagnose a GitHub issue and produce a resolution plan (issue number or URL)
+- `simplify-code [scope]` — simplify code while preserving behavior (defaults to uncommitted changes; pass a file, directory, symbol, or plain-language scope to target existing code)
