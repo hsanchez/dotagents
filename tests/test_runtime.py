@@ -1,5 +1,7 @@
+import json
 import os
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from dotagents.compiler import BuildGroup, BuildManifest
 from dotagents.doctor import doctor
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import (
+  DEFAULT_AUTONOMY_LEVEL,
   LockedAsset,
   LockedLink,
   backup_fingerprint,
@@ -27,7 +30,9 @@ from dotagents.runtime import (
   capability_compiled_groups,
   copy_file,
   effective_skills,
+  expected_managed_settings_content,
   init_runtime,
+  merge_autonomy_fragment,
   migrate_legacy_backup,
   remove_locked_asset,
   remove_provider,
@@ -36,6 +41,7 @@ from dotagents.runtime import (
   restore_runtime_backup,
   rollback_created_backups,
   runtime_destination,
+  set_provider_autonomy,
   sync_existing,
   sync_runtime,
   uninstall_existing,
@@ -1822,13 +1828,13 @@ def test_update_migrates_legacy_v1_lockfile_to_v2(
   init_runtime(Path.cwd(), ("claude",))
   lock_path = tmp_path / ".agents" / "dotagents.lock"
   lock_path.write_text(
-    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 3", "lockfile_version = 1"),
     encoding="utf-8",
   )
 
   update_existing(Path.cwd())
 
-  assert read_lock(lock_path).lockfile_version == 2
+  assert read_lock(lock_path).lockfile_version == 3
 
 
 def test_uninstall_succeeds_on_legacy_v1_lockfile(
@@ -1839,7 +1845,7 @@ def test_uninstall_succeeds_on_legacy_v1_lockfile(
   init_runtime(Path.cwd(), ("claude",))
   lock_path = tmp_path / ".agents" / "dotagents.lock"
   lock_path.write_text(
-    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 3", "lockfile_version = 1"),
     encoding="utf-8",
   )
 
@@ -1875,7 +1881,7 @@ def test_update_migrates_legacy_v1_link_backup_to_fingerprinted_v2(
     rules_backup_fingerprint=lock.rules_backup_fingerprint,
   )
   lock_path.write_text(
-    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 3", "lockfile_version = 1"),
     encoding="utf-8",
   )
   assert read_lock(lock_path).links[0].backup_fingerprint is None
@@ -1883,7 +1889,7 @@ def test_update_migrates_legacy_v1_link_backup_to_fingerprinted_v2(
   update_existing(Path.cwd())
 
   migrated = read_lock(lock_path)
-  assert migrated.lockfile_version == 2
+  assert migrated.lockfile_version == 3
   migrated_link = next(link for link in migrated.links if link.destination == "CLAUDE.md")
   assert migrated_link.backup == "CLAUDE.md.bak"
   assert migrated_link.backup_fingerprint is not None
@@ -1911,7 +1917,7 @@ def test_sync_migrates_legacy_v1_rules_backup_to_fingerprinted_v2(
     rules_backup_fingerprint=None,
   )
   lock_path.write_text(
-    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 3", "lockfile_version = 1"),
     encoding="utf-8",
   )
   assert read_lock(lock_path).rules_backup_fingerprint is None
@@ -1919,7 +1925,7 @@ def test_sync_migrates_legacy_v1_rules_backup_to_fingerprinted_v2(
   sync_existing(tmp_path)
 
   migrated = read_lock(lock_path)
-  assert migrated.lockfile_version == 2
+  assert migrated.lockfile_version == 3
   assert migrated.rules_backup == ".rules.bak"
   assert migrated.rules_backup_fingerprint is not None
 
@@ -2364,7 +2370,7 @@ def test_remove_provider_migrates_legacy_v1_backup_on_retained_link(
     rules_backup_fingerprint=lock.rules_backup_fingerprint,
   )
   lock_path.write_text(
-    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 2", "lockfile_version = 1"),
+    lock_path.read_text(encoding="utf-8").replace("lockfile_version = 3", "lockfile_version = 1"),
     encoding="utf-8",
   )
   downgraded_claude_link = next(
@@ -2375,10 +2381,236 @@ def test_remove_provider_migrates_legacy_v1_backup_on_retained_link(
   remove_provider(Path.cwd(), "copilot")
 
   migrated = read_lock(lock_path)
-  assert migrated.lockfile_version == 2
+  assert migrated.lockfile_version == 3
   claude_link = next(link for link in migrated.links if link.destination == "CLAUDE.md")
   assert claude_link.backup == "CLAUDE.md.bak"
   assert claude_link.backup_fingerprint is not None
+
+
+def test_sync_merges_default_autonomy_level_into_claude_settings(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("claude",))
+
+  settings = json.loads((tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8"))
+  assert settings["permissions"]["defaultMode"] == "default"
+  assert "Bash(git push *)" in settings["permissions"]["deny"]
+  assert "hooks" in settings
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy == {"claude": DEFAULT_AUTONOMY_LEVEL}
+
+
+def test_sync_merges_default_autonomy_level_into_codex_config(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("codex",))
+
+  config = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text(encoding="utf-8"))
+  assert config["approval_policy"] == "on-request"
+  assert config["sandbox_mode"] == "workspace-write"
+  assert config["agents"]["max_threads"] == 6
+  raw_text = (tmp_path / ".codex" / "config.toml").read_text(encoding="utf-8")
+  assert raw_text.startswith("# Project-scoped Codex settings")
+
+
+def test_set_provider_autonomy_updates_only_target_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude", "codex"))
+
+  set_provider_autonomy(Path.cwd(), "claude", "scoped")
+
+  settings = json.loads((tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8"))
+  assert settings["permissions"]["defaultMode"] == "acceptEdits"
+  config = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text(encoding="utf-8"))
+  assert config["approval_policy"] == "on-request"
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy == {"claude": "scoped", "codex": "supervised"}
+
+
+def test_set_provider_autonomy_requires_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  with pytest.raises(DotagentsError, match="cannot set autonomy: missing"):
+    set_provider_autonomy(Path.cwd(), "claude", "scoped")
+
+
+def test_set_provider_autonomy_rejects_unconfigured_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  with pytest.raises(DotagentsError, match="provider not configured: codex"):
+    set_provider_autonomy(Path.cwd(), "codex", "scoped")
+
+
+def test_set_provider_autonomy_rejects_unknown_level(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  with pytest.raises(DotagentsError, match="autonomy level must be one of"):
+    set_provider_autonomy(Path.cwd(), "claude", "unlimited")
+
+
+def test_set_provider_autonomy_rejects_provider_without_fragments(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("gemini",))
+
+  with pytest.raises(DotagentsError, match="provider has no permission fragments defined: gemini"):
+    set_provider_autonomy(Path.cwd(), "gemini", "scoped")
+
+
+def test_set_provider_autonomy_no_op_when_already_set(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  operation_log = set_provider_autonomy(Path.cwd(), "claude", DEFAULT_AUTONOMY_LEVEL)
+
+  assert "autonomy already set: claude=supervised" in operation_log.lines
+
+
+def test_set_provider_autonomy_dry_run_does_not_write(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  before = (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+
+  operation_log = set_provider_autonomy(Path.cwd(), "claude", "scoped", dry_run=True)
+
+  assert (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8") == before
+  assert any("would" in line for line in operation_log.lines)
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy == {"claude": DEFAULT_AUTONOMY_LEVEL}
+
+
+def test_init_dry_run_does_not_crash_computing_merged_settings_hash(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """`--dry-run` never writes the merged file, so hashing it must not depend on it existing."""
+  monkeypatch.chdir(tmp_path)
+
+  operation_log = init_runtime(Path.cwd(), ("claude", "codex"), dry_run=True)
+
+  assert not (tmp_path / ".claude" / "settings.json").exists()
+  assert any("would copy" in line and "settings.json" in line for line in operation_log.lines)
+
+
+def test_doctor_detects_self_host_staleness_for_managed_provider_settings(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  assert doctor(source_checkout).passed
+
+  (source_checkout / "claude" / "permissions" / "supervised.json").write_text(
+    '{"permissions": {"defaultMode": "acceptEdits"}}\n', encoding="utf-8"
+  )
+
+  result = doctor(source_checkout)
+
+  assert not result.passed
+  assert "source differs from runtime: claude/settings.json" in result.lines
+
+
+def test_doctor_reports_error_instead_of_crashing_on_missing_base(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A base source file missing entirely is caught by manifest validation before doctor's
+  per-asset loop ever runs — see the dedicated `expected_managed_settings_content` test below
+  for the same guard exercised directly (it also protects callers where the base file
+  disappears after manifest load, not just this doctor-at-rest snapshot)."""
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  (source_checkout / "claude" / "settings.json").unlink()
+
+  result = doctor(source_checkout)
+
+  assert not result.passed
+  assert any("source does not exist: claude/settings.json" in line for line in result.lines)
+
+
+def test_expected_managed_settings_content_rejects_missing_base_file(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  init_runtime(source_checkout, ("claude",), self_host=True)
+  runtime_context = build_context(source_checkout, self_host=True)
+  (source_checkout / "claude" / "settings.json").unlink()
+
+  with pytest.raises(DotagentsError, match="missing base settings source"):
+    expected_managed_settings_content(runtime_context, "claude/settings.json")
+
+
+def test_doctor_reports_source_error_instead_of_crashing_on_malformed_fragment(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  source_checkout = write_source_checkout(tmp_path / "dotagents")
+  monkeypatch.setattr(runtime_module, "asset_root", lambda: source_checkout)
+  init_runtime(source_checkout, ("claude",), self_host=True)
+
+  (source_checkout / "claude" / "permissions" / "supervised.json").write_text(
+    "not valid json", encoding="utf-8"
+  )
+
+  result = doctor(source_checkout)
+
+  assert not result.passed
+  assert any(line.startswith("source error: claude/settings.json") for line in result.lines)
+
+
+def test_sync_recorded_hash_matches_actual_bytes_for_managed_settings(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Regression: the lockfile hash is computed from the in-memory LF-only merged string, so
+  the on-disk write must not apply platform newline translation (e.g. LF -> CRLF on Windows)
+  or `sha256_file()` of the actual bytes would permanently diverge from the recorded hash."""
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("claude", "codex"))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  for suffix in ("providers/claude/settings.json", "providers/codex/config.toml"):
+    asset = next(a for a in lock.assets if a.destination.endswith(suffix))
+    actual_path = tmp_path / asset.destination
+    assert sha256_file(actual_path) == asset.sha256
+    assert b"\r\n" not in actual_path.read_bytes()
+
+
+def test_merge_autonomy_fragment_rejects_colliding_keys() -> None:
+  with pytest.raises(DotagentsError, match="redefines existing key"):
+    merge_autonomy_fragment('{"a": 1}', '{"a": 2}', "json")
+
+
+@pytest.mark.parametrize("malformed_fragment", ["[]", "null", '"a string"', "1"])
+def test_merge_autonomy_fragment_rejects_non_mapping_fragment(malformed_fragment: str) -> None:
+  """Valid-but-wrong-shaped JSON (an array, null, a scalar) must not reach `{**base,
+  **fragment}` — that raises an uncaught TypeError rather than the promised DotagentsError."""
+  with pytest.raises(DotagentsError, match="must be a JSON/TOML object"):
+    merge_autonomy_fragment('{"a": 1}', malformed_fragment, "json")
+
+
+def test_merge_autonomy_fragment_rejects_non_mapping_base() -> None:
+  with pytest.raises(DotagentsError, match="must be a JSON/TOML object"):
+    merge_autonomy_fragment("[]", '{"a": 1}', "json")
 
 
 def test_resolve_within_root_rejects_symlinked_parent_escape(tmp_path: Path) -> None:

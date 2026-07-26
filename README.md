@@ -155,6 +155,7 @@ uv run dotagents list providers
 uv run dotagents list skills
 uv run dotagents providers add gemini
 uv run dotagents providers remove copilot
+uv run dotagents providers set-autonomy claude scoped
 uv run dotagents uninstall --dry-run
 uv run dotagents uninstall
 ```

@@ -23,7 +23,7 @@ from dotagents.compiler import (
 )
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import read_lock
+from dotagents.lockfile import AUTONOMY_LEVELS, read_lock
 from dotagents.manifest import load_manifest
 from dotagents.runtime import (
   CompiledGroupStatus,
@@ -37,6 +37,7 @@ from dotagents.runtime import (
   is_global_root,
   relative,
   remove_provider,
+  set_provider_autonomy,
   sync_existing,
   uninstall_existing,
   update_existing,
@@ -547,6 +548,22 @@ def providers_remove(
   except DotagentsError as exc:
     _exit_with_error(exc)
   _finish(operation_log, dry_run, f"Removed provider: {provider}.")
+
+
+@providers_app.command("set-autonomy")
+def providers_set_autonomy(
+  provider: str = typer.Argument(..., help="Configured provider name."),
+  level: str = typer.Argument(
+    ..., help=f"Autonomy level to set. One of: {', '.join(AUTONOMY_LEVELS)}."
+  ),
+  dry_run: bool = typer.Option(False, "--dry-run", help="Show planned changes without writing."),
+) -> None:
+  """Set a provider's autonomy level, compiled into its native permission config."""
+  try:
+    operation_log = set_provider_autonomy(Path.cwd(), provider, level, dry_run=dry_run)
+  except DotagentsError as exc:
+    _exit_with_error(exc)
+  _finish(operation_log, dry_run, f"Set autonomy: {provider}={level}.")
 
 
 def _run_log(operation_log: OperationLog) -> None:

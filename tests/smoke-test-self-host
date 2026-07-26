@@ -48,6 +48,12 @@ grep -q '^self_host = true' .agents/dotagents.lock
 # Provider-facing output retains normal managed-link behavior.
 test -L .claude/commands
 test -L .codex/config.toml
+
+# Default autonomy level is merged into provider settings at sync time.
+grep -q '"permissions"' .claude/settings.json
+grep -q '^approval_policy = "on-request"' .codex/config.toml
+uv run dotagents providers set-autonomy claude scoped
+grep -q '"acceptEdits"' .claude/settings.json
 test -f .agents.bak/legacy.txt
 test "$(cat .agents.bak/legacy.txt)" = 'legacy runtime'
 test "$(cat .rules.bak)" = 'human rules'

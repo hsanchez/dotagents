@@ -1146,3 +1146,55 @@ def test_providers_remove_command_rejects_unconfigured(
 
   assert result.exit_code == 1
   assert "provider not configured: copilot" in result.output
+
+
+def test_providers_set_autonomy_command_sets_level(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "set-autonomy", "claude", "scoped"])
+
+  assert result.exit_code == 0
+  assert "Set autonomy: claude=scoped." in result.output
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy["claude"] == "scoped"
+
+
+def test_providers_set_autonomy_command_dry_run(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+  before = (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8")
+
+  result = CliRunner().invoke(app, ["providers", "set-autonomy", "--dry-run", "claude", "scoped"])
+
+  assert result.exit_code == 0
+  assert "Dry run complete." in result.output
+  assert (tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8") == before
+
+
+def test_providers_set_autonomy_command_rejects_unknown_level(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "set-autonomy", "claude", "unlimited"])
+
+  assert result.exit_code == 1
+  assert "autonomy level must be one of" in result.output
+
+
+def test_providers_set_autonomy_command_rejects_unconfigured_provider(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "set-autonomy", "codex", "scoped"])
+
+  assert result.exit_code == 1
+  assert "provider not configured: codex" in result.output

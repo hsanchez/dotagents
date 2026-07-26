@@ -26,9 +26,20 @@ from dotagents.version import package_version
 # rewrite `lockfile_version` down to bypass the requirement. Versioning here defends against
 # an *incomplete* migration (a genuinely old lockfile), not a fully hostile one — the broader
 # "attacker fully controls the local lockfile" threat model was never in scope (see #21/#22).
-SUPPORTED_LOCKFILE_VERSION = 2
+#
+# Version 3 adds `provider_autonomy`. Unlike backup_fingerprint, it has no "required since"
+# gate: a lockfile missing the field simply has no recorded level for any provider, and
+# runtime.py treats that the same as an explicit empty mapping (every provider resolves to
+# DEFAULT_AUTONOMY_LEVEL) — so version-2 lockfiles remain fully readable with no migration step.
+SUPPORTED_LOCKFILE_VERSION = 3
 MIN_READABLE_LOCKFILE_VERSION = 1
 FINGERPRINT_REQUIRED_SINCE_VERSION = 2
+
+# The permission-compiler autonomy levels a provider can be set to (L0-L2 of the
+# agentic-autonomy-levels framing). Levels 3-5 are not permission settings and are handled by
+# skill/preset selection instead — see docs/decisions/007-per-provider-autonomy-levels.md.
+AUTONOMY_LEVELS = ("assist", "supervised", "scoped")
+DEFAULT_AUTONOMY_LEVEL = "supervised"
 
 
 @dataclass(frozen=True)
@@ -53,6 +64,7 @@ class RuntimeLock:
   version: str
   manifest_sha256: str
   providers: tuple[str, ...]
+  provider_autonomy: dict[str, str]
   skills: tuple[str, ...] | None
   skillfile_sha256: str | None
   generated_at: str
@@ -197,6 +209,7 @@ def write_lock(
   providers: tuple[str, ...],
   assets: list[LockedAsset],
   links: list[LockedLink],
+  provider_autonomy: dict[str, str] | None = None,
   skills: tuple[str, ...] | None = None,
   skillfile_sha256: str | None = None,
   generated_at: str | None = None,
@@ -212,6 +225,7 @@ def write_lock(
     "package": "dotagents",
     "manifest_sha256": manifest_sha256,
     "providers": list(providers),
+    "provider_autonomy": dict(sorted((provider_autonomy or {}).items())),
     **({"skills": list(skills)} if skills is not None else {}),
     **({"skillfile_sha256": skillfile_sha256} if skillfile_sha256 is not None else {}),
     **({"rules_backup": rules_backup} if rules_backup else {}),
@@ -260,6 +274,19 @@ def read_lock(path: Path) -> RuntimeLock:
     isinstance(provider, str) for provider in providers
   ):
     raise DotagentsError("lockfile providers must be a string array")
+
+  raw_provider_autonomy = data.get("provider_autonomy", {})
+  if not isinstance(raw_provider_autonomy, dict):
+    raise DotagentsError("lockfile provider_autonomy must be a table")
+  provider_autonomy: dict[str, str] = {}
+  for provider, level in raw_provider_autonomy.items():
+    if not isinstance(provider, str) or not provider:
+      raise DotagentsError("lockfile provider_autonomy keys must be non-empty strings")
+    if level not in AUTONOMY_LEVELS:
+      raise DotagentsError(
+        f"lockfile provider_autonomy.{provider} must be one of {', '.join(AUTONOMY_LEVELS)}"
+      )
+    provider_autonomy[provider] = level
 
   raw_skills = data.get("skills")
   if raw_skills is not None and (
@@ -399,6 +426,7 @@ def read_lock(path: Path) -> RuntimeLock:
     version=version,
     manifest_sha256=manifest_sha256,
     providers=tuple(providers),
+    provider_autonomy=provider_autonomy,
     skills=tuple(raw_skills) if raw_skills is not None else None,
     skillfile_sha256=skillfile_sha256,
     generated_at=generated_at,

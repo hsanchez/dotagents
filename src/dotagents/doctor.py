@@ -1,17 +1,21 @@
 """Runtime validation."""
 
+import hashlib
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotagents.errors import DotagentsError
-from dotagents.lockfile import read_lock, sha256_file
+from dotagents.lockfile import DEFAULT_AUTONOMY_LEVEL, read_lock, sha256_file
 from dotagents.runtime import (
+  AUTONOMY_MANAGED_PROVIDERS,
+  AUTONOMY_MANAGED_SOURCE_INFO,
   BUILD_MANIFEST_DESTINATION,
   build_context,
   compiled_group_statuses,
   compute_skillfile_sha256,
+  expected_managed_settings_content,
   manifest_drift,
   relative,
   validate_self_host_lock,
@@ -73,7 +77,13 @@ def doctor(repo_root: Path) -> DoctorResult:
     passed = False
   else:
     lines.append("lockfile: ok")
-  lines.append(f"providers: {', '.join(lock.providers)}")
+  provider_labels = [
+    f"{provider}={lock.provider_autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL)}"
+    if provider in AUTONOMY_MANAGED_PROVIDERS
+    else provider
+    for provider in lock.providers
+  ]
+  lines.append(f"providers: {', '.join(provider_labels)}")
   council_launcher = runtime_context.runtime_dir / "skills" / "council" / "scripts" / "run-agents"
   if council_launcher.exists() and shutil.which("nu") is None:
     lines.append(
@@ -111,14 +121,29 @@ def doctor(repo_root: Path) -> DoctorResult:
     elif sha256_file(path) != asset.sha256:
       lines.append(f"runtime changed: {asset.destination}")
       passed = False
-    if lock.self_host:
-      source = runtime_context.asset_root / asset.source
-      if not source.exists():
-        lines.append(f"source missing: {asset.source}")
-        passed = False
-      elif path.exists() and sha256_file(source) != sha256_file(path):
-        lines.append(f"source differs from runtime: {asset.source}")
-        passed = False
+    if not lock.self_host:
+      continue
+    if asset.source in AUTONOMY_MANAGED_SOURCE_INFO:
+      # The runtime file is a merge of the source and a permission fragment, not a copy, so
+      # compare against a freshly recomputed merge instead of raw source bytes.
+      if path.exists():
+        try:
+          expected_content = expected_managed_settings_content(runtime_context, asset.source)
+        except DotagentsError as exc:
+          lines.append(f"source error: {asset.source}: {exc}")
+          passed = False
+          continue
+        if hashlib.sha256(expected_content.encode("utf-8")).hexdigest() != sha256_file(path):
+          lines.append(f"source differs from runtime: {asset.source}")
+          passed = False
+      continue
+    source = runtime_context.asset_root / asset.source
+    if not source.exists():
+      lines.append(f"source missing: {asset.source}")
+      passed = False
+    elif path.exists() and sha256_file(source) != sha256_file(path):
+      lines.append(f"source differs from runtime: {asset.source}")
+      passed = False
 
   for link in lock.links:
     destination = repo_root / link.destination
