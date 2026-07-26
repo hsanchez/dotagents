@@ -115,14 +115,41 @@ follow-up ([#33](https://github.com/hsanchez/dotagents/issues/33)) rather
 than guessed at here. Until then, treat Codex `scoped` as
 materially weaker than Claude `scoped`, primarily around `git clean`.
 
+**Copilot CLI and Gemini are not covered by `set-autonomy` yet.** Neither has
+a native, persisted, repo-local permission setting this mechanism can
+compile a level into:
+
+- **Copilot CLI** (`copilot`, already targeted elsewhere in this repo via
+  `.github/hooks/git-guardrails.json` — not the GitHub PR-review bot) has
+  tool allow/deny that's session-flag-only; `~/.copilot/permissions-config.json`
+  is explicitly documented as not supporting deny rules or repository-local
+  shared policy. Its only repo-shareable lever is the hooks mechanism,
+  already wired here as a level-invariant deny ceiling (same four commands
+  as Claude's, via `PreToolUse` hooks rather than a `permissions.deny`
+  array). A real per-level dial is designed — `preToolUse` hooks can return
+  a `permissionDecision` of `allow` or `deny`, so `assist`/`scoped` could
+  plausibly deny/auto-allow `Edit`/`Write` the way Claude's `defaultMode`
+  does — but it isn't shipped because it hasn't been verified live against
+  the CLI yet. Tracked in [#34](https://github.com/hsanchez/dotagents/issues/34).
+- **Gemini** splits in two. `agy` (Google's Antigravity CLI, effectively
+  Gemini's successor) has a real `permissions.allow`/`permissions.deny` rule
+  engine, but it lives in a per-user-machine global file
+  (`~/.gemini/antigravity-cli/settings.json`, keyed by trusted workspace
+  paths), not a repo-local file — writing into it would mean mutating
+  state shared across every other project the user has trusted with agy, a
+  materially different and riskier class of operation than anything
+  `sync_runtime` does today. The plain `gemini` CLI's permission schema
+  remains genuinely unverified — it wasn't installed or tested in the
+  session that produced this mechanism.
+
 This covers levels 0-2 of the agentic-autonomy-levels framing (suggest-only
 through bounded-task delegation). Levels 3-5 (goal-driven, parallel,
 managed-by-exception) aren't permission settings — they depend on which
 skills and presets a repository enables (e.g. `loop`, `schedule`, `audit`,
 `council`), not on how permissive a provider's settings file is. See
 [docs/decisions/007-per-provider-autonomy-levels.md](decisions/007-per-provider-autonomy-levels.md)
-for why the mechanism is scoped this way and why only Claude and Codex are
-supported today.
+for why the mechanism is scoped this way and what's confirmed vs. deferred
+for each unsupported provider.
 
 ## Existing files
 

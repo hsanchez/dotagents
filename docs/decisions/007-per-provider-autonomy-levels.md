@@ -32,11 +32,25 @@ accepted
   `validate_manifest`'s duplicate-destination check, needing exemption logic
   for a case that only exists to route around not having a merge step.
 - Cover all providers (Claude, Codex, Gemini, Copilot) in the first cut;
-  rejected because only Claude and Codex have a native permission schema
-  this codebase currently manages and can verify. Gemini's `settings.json`
-  has no confirmed permission schema here, and "copilot" in this repo is the
-  GitHub PR-review coding agent, not the `copilot CLI`'s `--allow-tool`
-  mechanism GPT's writeup covered.
+  rejected because only Claude and Codex have a native, persisted,
+  repo-local permission setting this mechanism can compile a fragment
+  into. Copilot CLI (`copilot` — already targeted elsewhere in this repo,
+  e.g. `.github/hooks/git-guardrails.json`, not the GitHub PR-review bot)
+  has no such setting: tool allow/deny is session-flag-only, and
+  `~/.copilot/permissions-config.json` is explicitly documented as not
+  supporting deny rules or repository-local shared policy. Its only
+  repo-shareable lever is the hooks mechanism, already wired as a
+  level-invariant deny ceiling; a real per-level dial on top of it is
+  designed but deferred pending live verification against the CLI
+  ([#34](https://github.com/hsanchez/dotagents/issues/34)). Gemini splits
+  in two: `agy` (Google's Antigravity CLI, effectively Gemini's successor)
+  has a real `permissions.allow`/`permissions.deny` rule engine, but it
+  lives in a per-user-machine global file
+  (`~/.gemini/antigravity-cli/settings.json`, keyed by trusted workspace
+  paths), not a repo-local file this project's sync model can safely
+  write into — a structural mismatch, not a missing schema. The plain
+  `gemini` CLI's permission schema remains genuinely unverified; it
+  wasn't installed or tested this session.
 
 ## Consequences
 
