@@ -86,7 +86,9 @@ printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
   uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git >"$smoke_dir/claude-hook.out" 2>&1 &&
   exit 1 || test "$?" -eq 2
 
-printf '%s' '{"toolInput":{"command":"git clean -fd"}}' |
+# Copilot CLI's real preToolUse payload sends toolArgs as a JSON-encoded string, not a
+# nested object -- see github/copilot-cli#3349.
+printf '%s' '{"toolName":"bash","toolArgs":"{\"command\":\"git clean -fd\"}"}' |
   uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot |
   grep -q '"permissionDecision": "deny"'
 

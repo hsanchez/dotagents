@@ -218,6 +218,19 @@ def _extract_command(payload: dict[str, Any]) -> str:
     command = _nested_get(payload, path)
     if command:
       return command
+  # Copilot CLI's preToolUse sends the tool arguments under "toolArgs" as a JSON-encoded
+  # string rather than a nested object (confirmed against real invocations, not just its
+  # docs — see github/copilot-cli#3349), so it can't be expressed as a plain path above.
+  tool_args = payload.get("toolArgs")
+  if isinstance(tool_args, str):
+    try:
+      tool_args = json.loads(tool_args)
+    except json.JSONDecodeError:
+      return ""
+  if isinstance(tool_args, dict):
+    command = tool_args.get("command")
+    if isinstance(command, str):
+      return command
   return ""
 
 

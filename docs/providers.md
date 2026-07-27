@@ -116,19 +116,26 @@ than guessed at here. Until then, treat Codex `scoped` as
 materially weaker than Claude `scoped`, primarily around `git clean`.
 
 **Copilot CLI and Gemini are not covered by `set-autonomy` yet.** Neither has
-a native, persisted, repo-local permission setting this mechanism can
-compile a level into:
+a native, persisted, repo-local permission-*level* setting this mechanism
+can compile a level into:
 
 - **Copilot CLI** (`copilot`, already targeted elsewhere in this repo via
-  `.github/hooks/git-guardrails.json` — not the GitHub PR-review bot) has
-  tool allow/deny that's session-flag-only; `~/.copilot/permissions-config.json`
-  is explicitly documented as not supporting deny rules or repository-local
-  shared policy. Its only repo-shareable lever is the hooks mechanism,
-  already wired here as a level-invariant deny ceiling (same four commands
-  as Claude's, via `PreToolUse` hooks rather than a `permissions.deny`
-  array). A real per-level dial is designed — `preToolUse` hooks can return
-  a `permissionDecision` of `allow` or `deny`, so `assist`/`scoped` could
-  plausibly deny/auto-allow `Edit`/`Write` the way Claude's `defaultMode`
+  `.github/hooks/git-guardrails.json` — not the GitHub PR-review bot) does
+  have a repo-level settings file (`.github/copilot/settings.json`,
+  confirmed via `copilot help config` and the interactive `/settings
+  --repo` command), but its documented schema carries only `hooks` (same
+  schema as `.github/hooks/*.json`) and `allowedUrls`/`deniedUrls` — no
+  tool allow/deny list or permission-level concept. Tool allow/deny itself
+  is session-flag-only (`--allow-tool`/`--deny-tool`), and the one
+  persisted tool/path permission store, `~/.copilot/permissions-config.json`,
+  is documented as saved ask-once decisions, not a rule engine with deny
+  support or repo-shareable policy. Its only repo-shareable lever is the
+  hooks mechanism, already wired here as a level-invariant deny ceiling
+  (same four commands as Claude's, via `preToolUse` hooks — camelCase, per
+  GitHub's hooks reference docs — rather than a `permissions.deny` array).
+  A real per-level dial is designed — `preToolUse` hooks can return a
+  `permissionDecision` of `allow` or `deny`, so `assist`/`scoped` could
+  plausibly deny/auto-allow `edit`/`create` the way Claude's `defaultMode`
   does — but it isn't shipped because it hasn't been verified live against
   the CLI yet. Tracked in [#34](https://github.com/hsanchez/dotagents/issues/34).
 - **Gemini** splits in two. `agy` (Google's Antigravity CLI, effectively

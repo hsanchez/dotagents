@@ -1,6 +1,6 @@
 ---
 name: git-guardrails
-description: Install git safety guardrails that block destructive git operations. Layer 1 (universal): a git pre-push hook covering every provider and tool. Layer 2 (Claude Code): a PreToolUse hook for early interception before the command runs. Use after dotagents init to harden a repo.
+description: Install git safety guardrails that block destructive git operations. Layer 1 (universal): a git pre-push hook covering every provider and tool. Layer 2 (Claude Code, Copilot CLI): a preToolUse hook for early interception before the command runs. Use after dotagents init to harden a repo.
 ---
 
 # Git Guardrails
@@ -8,7 +8,7 @@ description: Install git safety guardrails that block destructive git operations
 Two protection layers against destructive git operations:
 
 1. **git hook** (universal): blocks `git push` at the git level for all agents and tools. Humans bypass with `git push --no-verify` when intentional. CI/CD bypasses via `$CI`.
-2. **agent hook** (Claude Code): intercepts dangerous commands before they run via `PreToolUse`. Requires Python 3.9+.
+2. **agent hook** (Claude Code, Copilot CLI): intercepts dangerous commands before they run via a `preToolUse` hook. Requires Python 3.9+.
 
 ## Layer 1 — git pre-push hook (all providers)
 
@@ -49,11 +49,13 @@ git push --dry-run 2>&1 || true
 
 Should print a `git-guardrails: push blocked` message and exit non-zero.
 
-## Layer 2 — Claude Code PreToolUse hook
+## Layer 2 — agent preToolUse hooks
 
-Requires Python 3.9+ (no other dependencies). Skip if Claude Code is not in use.
+Requires Python 3.9+ (no other dependencies). Skip a provider's section if that provider is not in use. `dotagents init` wires both automatically for Claude and Copilot CLI; the manual steps below are for hand installation or reference.
 
-### Copy the hook script
+### Claude Code
+
+Copy the hook script:
 
 ```bash
 mkdir -p .claude/hooks
@@ -61,9 +63,7 @@ cp .agents/skills/git-guardrails/scripts/block-dangerous-git .claude/hooks/block
 chmod +x .claude/hooks/block-dangerous-git
 ```
 
-### Add to `.claude/settings.json`
-
-Merge into the existing `hooks.PreToolUse` array — do not overwrite other settings:
+Merge into the existing `hooks.PreToolUse` array in `.claude/settings.json` — do not overwrite other settings:
 
 ```json
 {
@@ -83,13 +83,50 @@ Merge into the existing `hooks.PreToolUse` array — do not overwrite other sett
 }
 ```
 
-### Verify
+Verify:
 
 ```bash
 echo '{"tool_input":{"command":"git push origin main"}}' | .claude/hooks/block-dangerous-git
 ```
 
 Should exit 2 and print a BLOCKED message to stderr.
+
+### Copilot CLI
+
+Copilot's hook config uses a different, camelCase schema from Claude's — `preToolUse` (not
+`PreToolUse`), a flat entry (no `matcher`/`hooks` nesting), and the tool's runtime name in
+lowercase (`bash`, not `Bash`):
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "bash",
+        "command": "python3 .github/hooks/block-dangerous-git --format copilot",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
+```
+
+Copilot's real `preToolUse` payload sends the tool arguments as a **JSON-encoded string**
+under `toolArgs`, not a nested object — confirmed against real invocations, not just
+Copilot's own (looser) `unknown`-typed docs, in
+[github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349). The hook script
+parses that string; a hook that assumes an already-parsed object will silently fail open.
+
+Verify:
+
+```bash
+echo '{"toolName":"bash","toolArgs":"{\"command\":\"git push origin main\"}"}' \
+  | python3 .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot
+```
+
+Should print `{"permissionDecision": "deny", "permissionDecisionReason": "..."}`.
 
 ## Coverage
 
@@ -104,11 +141,11 @@ Should exit 2 and print a BLOCKED message to stderr.
 | `git checkout .` / `-- <path>`  | —        | ✓          |
 | `git restore`                   | —        | ✓          |
 
-The git hook covers push because it is the highest-risk network operation and the only destructive op with a standard pre-execution git hook. All other operations are covered by the agent hook for Claude Code only — other providers remain uncovered until they gain an equivalent hook mechanism.
+The git hook covers push because it is the highest-risk network operation and the only destructive op with a standard pre-execution git hook. All other operations are covered by the agent hook for Claude Code and Copilot CLI — other providers remain uncovered until they gain an equivalent hook mechanism.
 
 ## Extending to other providers
 
-As Codex, Gemini, and other providers gain hook mechanisms equivalent to Claude Code's `PreToolUse`, add their configuration here following the same pattern: copy `scripts/block-dangerous-git`, register it in the provider's settings file.
+As Codex, Gemini, and other providers gain hook mechanisms equivalent to Claude Code's `PreToolUse`, add their configuration here following the same pattern: copy `scripts/block-dangerous-git`, register it in the provider's settings file, and add a payload-shape branch to `_extract_command` if the new provider's hook payload doesn't match an existing one.
 
 ## Known limitations
 
@@ -116,4 +153,6 @@ As Codex, Gemini, and other providers gain hook mechanisms equivalent to Claude 
 
 **No full shell parser** — The agent hook uses `shlex.split()` for tokenization, which handles quotes and common patterns correctly. It does not interpret backticks, process substitution (`<()`), or complex compound commands. Deeply nested shell constructs may not be analyzed correctly.
 
-**Layer 2 covers Claude Code only** — Non-Claude agents (Codex, Gemini, etc.) are protected for `git push` via the git hook, but `reset --hard`, `clean -f`, `branch -D`, and other destructive local operations remain uncovered until those providers gain equivalent hook mechanisms.
+**Layer 2 covers Claude Code and Copilot CLI only** — Non-Claude, non-Copilot agents (Codex, Gemini, etc.) are protected for `git push` via the git hook, but `reset --hard`, `clean -f`, `branch -D`, and other destructive local operations remain uncovered until those providers gain equivalent hook mechanisms.
+
+**Copilot CLI hook verified at the script level, not end-to-end live** — the hook registration schema matches Copilot's documented format, and the payload-parsing fix is verified against a real reported invocation shape ([github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349)) with a subprocess-level test proving deny/allow behavior for that exact shape. It has not been confirmed by actually running the `copilot` CLI end-to-end and observing it invoke this hook — that requires either Copilot quota headroom or BYOK spend. Tracked in [#34](https://github.com/hsanchez/dotagents/issues/34).
