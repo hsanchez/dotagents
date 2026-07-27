@@ -118,6 +118,7 @@ under `toolArgs`, not a nested object — confirmed against real invocations, no
 Copilot's own (looser) `unknown`-typed docs, in
 [github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349). The hook script
 parses that string; a hook that assumes an already-parsed object will silently fail open.
+Malformed or missing command payloads fail closed with an explicit denial.
 
 Verify:
 

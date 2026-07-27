@@ -55,13 +55,40 @@ def test_block_dangerous_git_allows_safe_command_via_copilot_real_payload_shape(
   assert json.loads(result.stdout) == {}
 
 
-def test_block_dangerous_git_ignores_unparseable_tool_args_string() -> None:
+def test_block_dangerous_git_denies_unparseable_tool_args_string() -> None:
   payload = {"toolName": "bash", "toolArgs": "not json"}
 
   result = _run(payload, output_format="copilot")
 
   assert result.returncode == 0, result.stderr
-  assert json.loads(result.stdout) == {}
+  response = json.loads(result.stdout)
+  assert response["permissionDecision"] == "deny"
+  assert "toolArgs is not valid JSON" in response["permissionDecisionReason"]
+
+
+def test_block_dangerous_git_denies_missing_tool_args() -> None:
+  payload = {"toolName": "bash"}
+
+  result = _run(payload, output_format="copilot")
+
+  assert result.returncode == 0, result.stderr
+  response = json.loads(result.stdout)
+  assert response["permissionDecision"] == "deny"
+  assert "toolArgs is missing" in response["permissionDecisionReason"]
+
+
+def test_block_dangerous_git_denies_unexpected_tool_args_shape() -> None:
+  payload = {
+    "toolName": "bash",
+    "toolArgs": json.dumps({"command": ["git", "clean", "-fd"]}),
+  }
+
+  result = _run(payload, output_format="copilot")
+
+  assert result.returncode == 0, result.stderr
+  response = json.loads(result.stdout)
+  assert response["permissionDecision"] == "deny"
+  assert "toolArgs.command must be a string" in response["permissionDecisionReason"]
 
 
 def test_block_dangerous_git_still_extracts_command_from_claude_shape() -> None:

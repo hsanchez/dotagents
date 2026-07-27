@@ -91,6 +91,10 @@ _COMMAND_PATHS: tuple[tuple[str, ...], ...] = (
 )
 
 
+class HookPayloadError(ValueError):
+  """Raised when a provider hook payload has an unusable command shape."""
+
+
 def _is_git(token: str) -> bool:
   """True for 'git' or any path whose final component is 'git'."""
   return token == "git" or token.endswith("/git")
@@ -221,17 +225,22 @@ def _extract_command(payload: dict[str, Any]) -> str:
   # Copilot CLI's preToolUse sends the tool arguments under "toolArgs" as a JSON-encoded
   # string rather than a nested object (confirmed against real invocations, not just its
   # docs — see github/copilot-cli#3349), so it can't be expressed as a plain path above.
-  tool_args = payload.get("toolArgs")
+  if "toolArgs" not in payload:
+    if payload.get("toolName") == "bash":
+      raise HookPayloadError("toolArgs is missing")
+    return ""
+  tool_args = payload["toolArgs"]
   if isinstance(tool_args, str):
     try:
       tool_args = json.loads(tool_args)
-    except json.JSONDecodeError:
-      return ""
-  if isinstance(tool_args, dict):
-    command = tool_args.get("command")
-    if isinstance(command, str):
-      return command
-  return ""
+    except json.JSONDecodeError as exc:
+      raise HookPayloadError("toolArgs is not valid JSON") from exc
+  if not isinstance(tool_args, dict):
+    raise HookPayloadError("toolArgs must be an object")
+  command = tool_args.get("command")
+  if not isinstance(command, str):
+    raise HookPayloadError("toolArgs.command must be a string")
+  return command
 
 
 def _deny(reason: str, output_format: str) -> int:
@@ -287,7 +296,10 @@ def main() -> int:
   if not isinstance(payload, dict):
     return _allow(output_format)
 
-  command = _extract_command(payload)
+  try:
+    command = _extract_command(payload)
+  except HookPayloadError as exc:
+    return _deny(f"git-guardrails: cannot parse hook payload ({exc}) — blocking.", output_format)
   if not command:
     return _allow(output_format)
 
