@@ -33,15 +33,24 @@ accepted
   for a case that only exists to route around not having a merge step.
 - Cover all providers (Claude, Codex, Gemini, Copilot) in the first cut;
   rejected because only Claude and Codex have a native, persisted,
-  repo-local permission setting this mechanism can compile a fragment
-  into. Copilot CLI (`copilot` — already targeted elsewhere in this repo,
-  e.g. `.github/hooks/git-guardrails.json`, not the GitHub PR-review bot)
-  has no such setting: tool allow/deny is session-flag-only, and
-  `~/.copilot/permissions-config.json` is explicitly documented as not
-  supporting deny rules or repository-local shared policy. Its only
-  repo-shareable lever is the hooks mechanism, already wired as a
-  level-invariant deny ceiling; a real per-level dial on top of it is
-  designed but deferred pending live verification against the CLI
+  repo-local permission-*level* setting this mechanism can compile a
+  fragment into. Copilot CLI (`copilot` — already targeted elsewhere in
+  this repo, e.g. `.github/hooks/git-guardrails.json`, not the GitHub
+  PR-review bot) does have a repo-level settings file
+  (`.github/copilot/settings.json`, confirmed via `copilot help config`
+  and the interactive `/settings --repo` command), but its documented
+  schema carries only `hooks` (same schema as `.github/hooks/*.json`) and
+  `allowedUrls`/`deniedUrls` — no tool allow/deny list or permission-level
+  concept. Tool allow/deny itself is session-flag-only (`--allow-tool`/
+  `--deny-tool`), and the one persisted tool/path permission store,
+  `~/.copilot/permissions-config.json`, is documented as saved ask-once
+  decisions, not a rule engine with deny support or repo-shareable
+  policy. Its only repo-shareable lever is the hooks mechanism
+  (`preToolUse`, camelCase per GitHub's hooks reference docs — not the
+  Claude-style `PreToolUse`/`Bash` matcher the shipped hook JSON was
+  originally copied from), already wired as a level-invariant deny
+  ceiling; a real per-level dial on top of it is designed but deferred
+  pending live verification against the CLI
   ([#34](https://github.com/hsanchez/dotagents/issues/34)). Gemini splits
   in two: `agy` (Google's Antigravity CLI, effectively Gemini's successor)
   has a real `permissions.allow`/`permissions.deny` rule engine, but it
