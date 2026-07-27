@@ -1,6 +1,6 @@
 ---
 name: git-guardrails
-description: Install git safety guardrails that block destructive git operations. Layer 1 (universal): a git pre-push hook covering every provider and tool. Layer 2 (Claude Code, Copilot CLI, Gemini CLI): a preToolUse-equivalent hook for early interception before the command runs. Use after dotagents init to harden a repo.
+description: Install git safety guardrails that block destructive git operations. Layer 1 (universal): a git pre-push hook covering every provider and tool. Layer 2 configures preToolUse-equivalent hooks for Claude Code, Copilot CLI, and Gemini CLI; Copilot and Gemini live invocation remains unverified. Use after dotagents init to harden a repo.
 ---
 
 # Git Guardrails
@@ -8,7 +8,7 @@ description: Install git safety guardrails that block destructive git operations
 Two protection layers against destructive git operations:
 
 1. **git hook** (universal): blocks `git push` at the git level for all agents and tools. Humans bypass with `git push --no-verify` when intentional. CI/CD bypasses via `$CI`.
-2. **agent hook** (Claude Code, Copilot CLI, Gemini CLI): intercepts dangerous commands before they run via a `preToolUse`-equivalent hook (`PreToolUse` for Claude, `preToolUse` for Copilot, `BeforeTool` for Gemini). Requires Python 3.9+.
+2. **agent hook**: Claude Code is verified at the script level; Copilot CLI and Gemini CLI are configured and script-level verified, but their live invocation remains unverified. Requires Python 3.9+.
 
 ## Layer 1 — git pre-push hook (all providers)
 
@@ -186,7 +186,7 @@ Should exit 2 and print a BLOCKED message to stderr.
 | `git checkout .` / `-- <path>`  | —        | ✓          |
 | `git restore`                   | —        | ✓          |
 
-The git hook covers push because it is the highest-risk network operation and the only destructive op with a standard pre-execution git hook. All other operations are covered by the agent hook for Claude Code, Copilot CLI, and Gemini CLI — other providers remain uncovered until they gain an equivalent hook mechanism.
+The git hook covers push because it is the highest-risk network operation and the only destructive op with a standard pre-execution git hook. All other operations have configured agent hooks for Claude Code, Copilot CLI, and Gemini CLI; Copilot and Gemini live invocation remains pending verification. Other providers remain uncovered until they gain an equivalent hook mechanism.
 
 ## Extending to other providers
 
@@ -200,4 +200,4 @@ As Codex and other providers gain hook mechanisms equivalent to Claude Code's `P
 
 **Layer 2 covers Claude Code, Copilot CLI, and Gemini CLI only** — Other agents (Codex, etc.) are protected for `git push` via the git hook, but `reset --hard`, `clean -f`, `branch -D`, and other destructive local operations remain uncovered until those providers gain equivalent hook mechanisms.
 
-**Copilot CLI and Gemini CLI hooks verified at the script level, not end-to-end live** — both hook registration shapes match their provider's documented format, and payload parsing is verified against real reported/observed invocation shapes ([github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349), [google-gemini/gemini-cli#23123](https://github.com/google-gemini/gemini-cli/issues/23123)) with subprocess-level tests proving deny/allow behavior for those exact shapes. Both allow paths print an explicit `{}` rather than relying on empty stdout, matching each provider's documented "exit 0, JSON-parsed stdout" contract. Neither has been confirmed by actually running the real CLI end-to-end and observing it invoke this hook — Copilot's is tracked in [#34](https://github.com/hsanchez/dotagents/issues/34); Gemini's live verification has no tracking issue yet.
+**Copilot CLI and Gemini CLI hooks verified at the script level, not end-to-end live** — both hook registration shapes match their provider's documented format, and payload parsing is verified against real reported/observed invocation shapes ([github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349), [google-gemini/gemini-cli#23123](https://github.com/google-gemini/gemini-cli/issues/23123)) with subprocess-level tests proving deny/allow behavior for those exact shapes. Both allow paths print an explicit `{}` rather than relying on empty stdout, matching each provider's documented "exit 0, JSON-parsed stdout" contract. Neither has been confirmed by actually running the real CLI end-to-end and observing it invoke this hook — Copilot's is tracked in [#34](https://github.com/hsanchez/dotagents/issues/34); Gemini's in [#37](https://github.com/hsanchez/dotagents/issues/37).

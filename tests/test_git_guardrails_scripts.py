@@ -100,6 +100,33 @@ def test_block_dangerous_git_still_extracts_command_from_claude_shape() -> None:
   assert "BLOCKED" in result.stderr
 
 
+def test_block_dangerous_git_denies_malformed_gemini_tool_input() -> None:
+  payload = {"tool_name": "run_shell_command", "tool_input": "git reset --hard"}
+
+  result = _run(payload, output_format="gemini")
+
+  assert result.returncode == 2
+  assert "Gemini tool_input must be an object" in result.stderr
+
+
+def test_block_dangerous_git_denies_missing_gemini_tool_input() -> None:
+  payload = {"tool_name": "run_shell_command"}
+
+  result = _run(payload, output_format="gemini")
+
+  assert result.returncode == 2
+  assert "Gemini command input is missing" in result.stderr
+
+
+def test_block_dangerous_git_denies_missing_claude_tool_input() -> None:
+  payload = {"tool_name": "Bash"}
+
+  result = _run(payload)
+
+  assert result.returncode == 2
+  assert "Claude command input is missing" in result.stderr
+
+
 def test_gemini_settings_registers_before_tool_guardrail_hook() -> None:
   """Registration shape must match Gemini's documented BeforeTool schema: exact matcher
   "run_shell_command" and Claude-style nested matcher/hooks -- confirmed against

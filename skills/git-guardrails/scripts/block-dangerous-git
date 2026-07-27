@@ -217,7 +217,26 @@ def _nested_get(payload: dict[str, Any], path: tuple[str, ...]) -> str:
   return value if isinstance(value, str) else ""
 
 
-def _extract_command(payload: dict[str, Any]) -> str:
+def _required_command(payload: dict[str, Any], provider: str) -> str:
+  for key in ("tool_input", "toolInput", "input"):
+    if key not in payload:
+      continue
+    tool_input = payload[key]
+    if not isinstance(tool_input, dict):
+      raise HookPayloadError(f"{provider} {key} must be an object")
+    command = tool_input.get("command")
+    if not isinstance(command, str):
+      raise HookPayloadError(f"{provider} {key}.command must be a string")
+    return command
+  raise HookPayloadError(f"{provider} command input is missing")
+
+
+def _extract_command(payload: dict[str, Any], output_format: str) -> str:
+  if output_format == "claude" and payload.get("tool_name") == "Bash":
+    return _required_command(payload, "Claude")
+  if output_format == "gemini" and payload.get("tool_name") == "run_shell_command":
+    return _required_command(payload, "Gemini")
+
   for path in _COMMAND_PATHS:
     command = _nested_get(payload, path)
     if command:
@@ -297,7 +316,7 @@ def main() -> int:
     return _allow(output_format)
 
   try:
-    command = _extract_command(payload)
+    command = _extract_command(payload, output_format)
   except HookPayloadError as exc:
     return _deny(f"git-guardrails: cannot parse hook payload ({exc}) — blocking.", output_format)
   if not command:
