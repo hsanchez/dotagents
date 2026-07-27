@@ -30,21 +30,36 @@ def test_write_and_read_lock_round_trips_assets(tmp_path: Path) -> None:
     ("claude", "copilot"),
     assets,
     links,
+    provider_autonomy={"claude": "scoped"},
     skills=("research",),
     skillfile_sha256="a" * 64,
     generated_at="2026-06-26T00:00:00+00:00",
   )
   runtime_lock = read_lock(lock_path)
 
-  assert runtime_lock.lockfile_version == 2
+  assert runtime_lock.lockfile_version == 3
   assert runtime_lock.manifest_sha256 == manifest_sha256
   assert runtime_lock.providers == ("claude", "copilot")
+  assert runtime_lock.provider_autonomy == {"claude": "scoped"}
   assert runtime_lock.skills == ("research",)
   assert runtime_lock.skillfile_sha256 == "a" * 64
   assert runtime_lock.generated_at == "2026-06-26T00:00:00+00:00"
   assert runtime_lock.assets == tuple(assets)
   assert runtime_lock.links == tuple(links)
   assert runtime_lock.self_host is False
+
+
+def test_read_lock_defaults_provider_autonomy_for_legacy_lockfile(tmp_path: Path) -> None:
+  lock_path = tmp_path / "dotagents.lock"
+  lock_path.write_text(
+    'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\n'
+    'providers = ["claude"]\ngenerated_at = "now"\n',
+    encoding="utf-8",
+  )
+
+  runtime_lock = read_lock(lock_path)
+
+  assert runtime_lock.provider_autonomy == {}
 
 
 def test_write_and_read_lock_round_trips_self_host_mode(tmp_path: Path) -> None:
@@ -272,11 +287,11 @@ def test_directory_fingerprint_rejects_too_deep_nesting(
     ),
     (
       'lockfile_version = 0\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
-      "lockfile_version must be between 1 and 2",
+      "lockfile_version must be between 1 and 3",
     ),
     (
-      'lockfile_version = 3\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
-      "lockfile_version must be between 1 and 2",
+      'lockfile_version = 4\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n',
+      "lockfile_version must be between 1 and 3",
     ),
     (
       'lockfile_version = 2\nversion = "0.1.0"\nproviders = "claude"\ngenerated_at = "now"\n',
@@ -369,6 +384,16 @@ def test_directory_fingerprint_rejects_too_deep_nesting(
       'lockfile_version = 2\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
       'runtime_backup = ".agents.bak"\n',
       "runtime_backup requires runtime_backup_fingerprint",
+    ),
+    (
+      'lockfile_version = 3\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      'provider_autonomy = ["claude"]\n',
+      "provider_autonomy must be a table",
+    ),
+    (
+      'lockfile_version = 3\nversion = "0.1.0"\nmanifest_sha256 = "abc"\nproviders = []\ngenerated_at = "now"\n'
+      '[provider_autonomy]\nclaude = "unlimited"\n',
+      r"provider_autonomy\.claude must be one of assist, supervised, scoped",
     ),
   ],
 )

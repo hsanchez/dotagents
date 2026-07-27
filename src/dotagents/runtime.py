@@ -1,12 +1,17 @@
 """Managed runtime materialization."""
 
 import filecmp
+import hashlib
+import json
 import os
 import shutil
+import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
+
+import tomli_w
 
 from dotagents.assets import asset_root, is_source_checkout
 from dotagents.compiler import (
@@ -22,6 +27,8 @@ from dotagents.compiler import (
 )
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import (
+  AUTONOMY_LEVELS,
+  DEFAULT_AUTONOMY_LEVEL,
   LockedAsset,
   LockedLink,
   RuntimeLock,
@@ -46,6 +53,19 @@ BUILD_MANIFEST_DESTINATION = ".agents/build/manifest.json"
 CAPABILITY_INDEX_SCHEMA_VERSION = 1
 WOULD_BACK_UP_PREFIX = "would back up "
 CapabilityStatus = Literal["ok", "stale", "missing", "invalid"]
+
+# The (provider, source) pairs whose base file gets the resolved autonomy-level permission
+# fragment merged in at sync time, rather than being copied verbatim. See
+# docs/decisions/007-per-provider-autonomy-levels.md for why these two providers only.
+AUTONOMY_MANAGED_SOURCES: dict[tuple[str, str], Literal["json", "toml"]] = {
+  ("claude", "claude/settings.json"): "json",
+  ("codex", "codex/config.toml"): "toml",
+}
+AUTONOMY_MANAGED_PROVIDERS = frozenset(provider for provider, _ in AUTONOMY_MANAGED_SOURCES)
+# Each managed source string is unique to one provider, so this reverse lookup is unambiguous.
+AUTONOMY_MANAGED_SOURCE_INFO: dict[str, tuple[str, Literal["json", "toml"]]] = {
+  source: (provider, fmt) for (provider, source), fmt in AUTONOMY_MANAGED_SOURCES.items()
+}
 
 
 @dataclass
@@ -81,6 +101,7 @@ class RuntimeContext:
   asset_root: Path
   manifest: Manifest
   providers: tuple[str, ...]
+  autonomy: dict[str, str]
   skills: tuple[str, ...]
   is_global: bool
   self_host: bool
@@ -216,6 +237,7 @@ def build_context(
   repo_root: Path,
   requested_providers: tuple[str, ...] = (),
   self_host: bool = False,
+  requested_autonomy: dict[str, str] | None = None,
 ) -> RuntimeContext:
   root = repo_root.resolve()
   assets = asset_root()
@@ -228,6 +250,9 @@ def build_context(
   manifest = load_manifest(assets)
   configured = requested_providers or configured_providers(root, manifest)
   providers = selected_providers(manifest, configured)
+  autonomy = configured_autonomy(root, providers)
+  if requested_autonomy:
+    autonomy = {**autonomy, **requested_autonomy}
   selected_skills = (
     resolve_skillfile(root, assets) if (root / "Skillfile").exists() else default_skills(assets)
   )
@@ -238,6 +263,7 @@ def build_context(
     asset_root=assets,
     manifest=manifest,
     providers=providers,
+    autonomy=autonomy,
     skills=skills,
     is_global=is_global_root(root),
     self_host=self_host,
@@ -249,6 +275,12 @@ def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]
   if not lock_path.exists():
     return manifest.providers
   return read_lock(lock_path).providers
+
+
+def configured_autonomy(repo_root: Path, providers: tuple[str, ...]) -> dict[str, str]:
+  lock_path = repo_root / ".agents" / "dotagents.lock"
+  recorded = read_lock(lock_path).provider_autonomy if lock_path.exists() else {}
+  return {provider: recorded.get(provider, DEFAULT_AUTONOMY_LEVEL) for provider in providers}
 
 
 def init_runtime(
@@ -450,6 +482,9 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
     raise DotagentsError(f"provider not configured: {provider}")
 
   remaining_providers = tuple(p for p in current_lock.providers if p != provider)
+  remaining_autonomy = {
+    p: level for p, level in current_lock.provider_autonomy.items() if p != provider
+  }
   operation_log = OperationLog(dry_run=dry_run)
   prune_candidates: set[Path] = set()
 
@@ -498,6 +533,7 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
       remaining_providers,
       remaining_assets,
       remaining_links,
+      provider_autonomy=remaining_autonomy,
       skills=current_lock.skills,
       skillfile_sha256=current_lock.skillfile_sha256,
       rules_backup=rules_backup_record.path if rules_backup_record else None,
@@ -511,6 +547,40 @@ def remove_provider(repo_root: Path, provider: str, dry_run: bool = False) -> Op
     operation_log.add(f"would remove provider: {provider}")
 
   return operation_log
+
+
+def set_provider_autonomy(
+  repo_root: Path, provider: str, level: str, dry_run: bool = False
+) -> OperationLog:
+  root = repo_root.resolve()
+  lock_path = root / ".agents" / "dotagents.lock"
+  if not lock_path.exists():
+    raise DotagentsError(
+      "cannot set autonomy: missing .agents/dotagents.lock. Run: uv run dotagents init"
+    )
+  current_lock, _ = read_provider_operation_state(root, lock_path)
+  if provider not in current_lock.providers:
+    raise DotagentsError(f"provider not configured: {provider}")
+  if level not in AUTONOMY_LEVELS:
+    raise DotagentsError(f"autonomy level must be one of {', '.join(AUTONOMY_LEVELS)}: {level}")
+  if provider not in AUTONOMY_MANAGED_PROVIDERS:
+    raise DotagentsError(
+      f"provider has no permission fragments defined: {provider} "
+      f"(supported: {', '.join(sorted(AUTONOMY_MANAGED_PROVIDERS))})"
+    )
+  if current_lock.provider_autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL) == level:
+    operation_log = OperationLog(dry_run=dry_run)
+    operation_log.add(f"autonomy already set: {provider}={level}")
+    return operation_log
+  return sync_runtime(
+    build_context(
+      root,
+      current_lock.providers,
+      self_host=current_lock.self_host,
+      requested_autonomy={provider: level},
+    ),
+    dry_run=dry_run,
+  )
 
 
 def rollback_created_backups(repo_root: Path, operation_log: OperationLog) -> None:
@@ -654,6 +724,18 @@ def _sync_runtime_body(
     destination = runtime_destination(runtime_context.runtime_dir, entry)
     if not applies:
       forced_copy_dirs.add(destination.parent)
+    if (entry.provider, entry.source) in AUTONOMY_MANAGED_SOURCES:
+      merged_content = sync_managed_provider_settings(
+        runtime_context, entry.source, destination, operation_log
+      )
+      locked_assets.append(
+        LockedAsset(
+          entry.source,
+          relative(runtime_context.repo_root, destination),
+          hashlib.sha256(merged_content.encode("utf-8")).hexdigest(),
+        )
+      )
+      continue
     copy_path(runtime_context.repo_root, source, destination, operation_log)
     locked_assets.extend(lock_entries(runtime_context.repo_root, source, destination, entry.source))
 
@@ -737,6 +819,7 @@ def _sync_runtime_body(
       runtime_context.providers,
       unique_locked_assets(locked_assets),
       unique_locked_links(locked_links),
+      provider_autonomy=runtime_context.autonomy,
       skills=runtime_context.skills,
       skillfile_sha256=compute_skillfile_sha256(runtime_context.repo_root),
       generated_at=generated_at,
@@ -1304,6 +1387,125 @@ def copy_file(
   destination.parent.mkdir(parents=True, exist_ok=True)
   shutil.copy2(source, destination)
   operation_log.add(f"copied {relative(repo_root, destination)}")
+
+
+def write_generated_file(
+  repo_root: Path, destination: Path, content: str, operation_log: OperationLog
+) -> None:
+  """Same symlink-guard, skip-if-identical, and dry-run behavior as `copy_file`, for content
+  that only exists in memory (e.g. a merged settings file) rather than as a source file.
+
+  Writes raw UTF-8 bytes rather than using text mode: `Path.write_text` applies platform
+  newline translation (`\\n` -> `os.linesep`), which on Windows would make the on-disk bytes
+  diverge from the LF-only content hashed into the lockfile, permanently failing doctor's
+  drift check on every sync.
+  """
+  resolve_parent_within_root(repo_root, destination)
+  if destination.is_symlink():
+    raise DotagentsError(
+      f"refusing to replace symlink with managed file: {relative(repo_root, destination)}"
+    )
+  content_bytes = content.encode("utf-8")
+  if destination.exists() and destination.is_file() and destination.read_bytes() == content_bytes:
+    operation_log.add(f"ok {relative(repo_root, destination)}")
+    return
+  if operation_log.dry_run:
+    operation_log.add(f"would copy {relative(repo_root, destination)}")
+    return
+  destination.parent.mkdir(parents=True, exist_ok=True)
+  destination.write_bytes(content_bytes)
+  operation_log.add(f"copied {relative(repo_root, destination)}")
+
+
+def merge_autonomy_fragment(
+  base_content: str, fragment_content: str, fmt: Literal["json", "toml"]
+) -> str:
+  """Merge a permission fragment into a provider's base settings content.
+
+  The fragment is expected to introduce only top-level keys the base file doesn't already
+  define (e.g. `permissions` for Claude, `approval_policy`/`sandbox_mode` for Codex). That's
+  enforced below rather than merely assumed, so a future fragment or base-file edit that
+  redefines an existing key fails loudly instead of silently overwriting it.
+
+  Raises:
+    DotagentsError: if either side doesn't decode to a JSON/TOML object, or a fragment key
+      collides with a base key.
+  """
+  if fmt == "json":
+    base = _require_mapping(json.loads(base_content), "base settings content")
+    fragment = _require_mapping(json.loads(fragment_content), "permission fragment")
+    _reject_key_collision(base, fragment)
+    return json.dumps({**base, **fragment}, indent=2) + "\n"
+
+  # tomllib has no comment support, so a round trip through it would silently drop the
+  # human-authored header comment at the top of e.g. codex/config.toml (mid-file comments
+  # would be lost too, but no shipped fragment's base file has any). Preserving the leading
+  # block keeps the merged output no worse than a plain copy for providers without autonomy set.
+  lines = base_content.splitlines(keepends=True)
+  header_lines: list[str] = []
+  while lines and (lines[0].startswith("#") or not lines[0].strip()):
+    header_lines.append(lines.pop(0))
+  # A TOML document's top level always decodes to a dict, unlike JSON's `[]`/`null`/scalars,
+  # but _require_mapping is applied uniformly rather than relying on that as an invariant.
+  base = _require_mapping(tomllib.loads("".join(lines)), "base settings content")
+  fragment = _require_mapping(tomllib.loads(fragment_content), "permission fragment")
+  _reject_key_collision(base, fragment)
+  return "".join(header_lines) + tomli_w.dumps({**base, **fragment})
+
+
+def _require_mapping(value: object, description: str) -> dict[str, object]:
+  if not isinstance(value, dict):
+    raise DotagentsError(f"{description} must be a JSON/TOML object, got {type(value).__name__}")
+  return cast(dict[str, object], value)
+
+
+def _reject_key_collision(base: dict[str, object], fragment: dict[str, object]) -> None:
+  colliding = sorted(set(base) & set(fragment))
+  if colliding:
+    raise DotagentsError(f"permission fragment redefines existing key(s): {', '.join(colliding)}")
+
+
+def expected_managed_settings_content(runtime_context: RuntimeContext, asset_source: str) -> str:
+  """Return what `sync_managed_provider_settings` would currently write for `asset_source`.
+
+  Used by `doctor` to detect self-host staleness (source or fragment edited since the last
+  sync) without depending on the runtime destination already existing.
+
+  Raises:
+    DotagentsError: if the base source or the resolved level's fragment file is missing, or
+      either fails to parse as `fmt` — callers such as `doctor` rely on this catching every
+      failure mode of a self-hosted maintainer's edit, not just the missing-fragment case.
+  """
+  provider, fmt = AUTONOMY_MANAGED_SOURCE_INFO[asset_source]
+  level = runtime_context.autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL)
+  fragment_path = runtime_context.asset_root / provider / "permissions" / f"{level}.{fmt}"
+  base_path = runtime_context.asset_root / asset_source
+  if not base_path.exists():
+    raise DotagentsError(f"missing base settings source for provider {provider}: {base_path}")
+  if not fragment_path.exists():
+    raise DotagentsError(f"no {level} permission fragment for provider {provider}: {fragment_path}")
+  base_content = base_path.read_text(encoding="utf-8")
+  fragment_content = fragment_path.read_text(encoding="utf-8")
+  try:
+    return merge_autonomy_fragment(base_content, fragment_content, fmt)
+  except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+    raise DotagentsError(f"cannot parse provider settings for {provider}: {exc}") from exc
+
+
+def sync_managed_provider_settings(
+  runtime_context: RuntimeContext, asset_source: str, destination: Path, operation_log: OperationLog
+) -> str:
+  """Write `destination` as `asset_source` merged with the resolved autonomy fragment.
+
+  Returns the merged content so the caller can hash what was (or would be) written without
+  depending on `destination` existing yet — `--dry-run` never writes it.
+
+  Raises:
+    DotagentsError: if no fragment file exists for the resolved level.
+  """
+  merged_content = expected_managed_settings_content(runtime_context, asset_source)
+  write_generated_file(runtime_context.repo_root, destination, merged_content, operation_log)
+  return merged_content
 
 
 def migrate_legacy_backup(
