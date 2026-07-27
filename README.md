@@ -33,6 +33,10 @@ uv add --dev "dotagents @ git+https://github.com/hsanchez/dotagents.git"
 
 Requirements: Python 3.14+, [uv](https://docs.astral.sh/uv/), and Git.
 
+dotagents is developed and tested on macOS only. Other platforms are not
+currently supported (Windows tracked in
+[#36](https://github.com/hsanchez/dotagents/issues/36)).
+
 ## Quick start
 
 Initialize the repository for one or more providers:
