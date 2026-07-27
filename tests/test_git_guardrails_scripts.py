@@ -71,3 +71,50 @@ def test_block_dangerous_git_still_extracts_command_from_claude_shape() -> None:
 
   assert result.returncode == 2
   assert "BLOCKED" in result.stderr
+
+
+def test_gemini_settings_registers_before_tool_guardrail_hook() -> None:
+  """Registration shape must match Gemini's documented BeforeTool schema: exact matcher
+  "run_shell_command" and Claude-style nested matcher/hooks -- confirmed against
+  google-gemini/gemini-cli#23123, a real third-party hook built for this exact event."""
+  settings = json.loads((asset_root() / "gemini" / "settings.json").read_text())
+
+  entry = settings["hooks"]["BeforeTool"][0]
+  assert entry["matcher"] == "run_shell_command"
+  hook = entry["hooks"][0]
+  assert hook["type"] == "command"
+  assert hook["command"] == (
+    "python3 $GEMINI_PROJECT_DIR/.gemini/hooks/block-dangerous-git --format gemini"
+  )
+
+
+def test_block_dangerous_git_denies_dangerous_command_via_gemini_real_payload_shape() -> None:
+  """Gemini's BeforeTool payload uses tool_input.command (confirmed via
+  google-gemini/gemini-cli#23123's block-no-verify integration) and expects a deny via exit
+  code 2 + stderr reason -- the same contract block-dangerous-git already speaks by default,
+  verified explicitly here under --format gemini rather than relying on the default."""
+  payload = {"tool_name": "run_shell_command", "tool_input": {"command": "git clean -fd"}}
+
+  result = _run(payload, output_format="gemini")
+
+  assert result.returncode == 2
+  assert "BLOCKED" in result.stderr
+
+
+def test_block_dangerous_git_allows_safe_command_via_gemini_real_payload_shape() -> None:
+  """Allow prints an explicit "{}" rather than staying silent -- Gemini's docs confirm an
+  empty JSON object as a safe "no opinion" signal on exit 0, but don't confirm empty stdout
+  means the same thing."""
+  payload = {"tool_name": "run_shell_command", "tool_input": {"command": "git status"}}
+
+  result = _run(payload, output_format="gemini")
+
+  assert result.returncode == 0
+  assert json.loads(result.stdout) == {}
+
+
+def test_block_dangerous_git_rejects_unknown_format() -> None:
+  result = _run({}, output_format="bogus")
+
+  assert result.returncode == 2
+  assert "usage: block-dangerous-git" in result.stderr

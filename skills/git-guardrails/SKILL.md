@@ -1,6 +1,6 @@
 ---
 name: git-guardrails
-description: Install git safety guardrails that block destructive git operations. Layer 1 (universal): a git pre-push hook covering every provider and tool. Layer 2 (Claude Code, Copilot CLI): a preToolUse hook for early interception before the command runs. Use after dotagents init to harden a repo.
+description: Install git safety guardrails that block destructive git operations. Layer 1 (universal): a git pre-push hook covering every provider and tool. Layer 2 (Claude Code, Copilot CLI, Gemini CLI): a preToolUse-equivalent hook for early interception before the command runs. Use after dotagents init to harden a repo.
 ---
 
 # Git Guardrails
@@ -8,7 +8,7 @@ description: Install git safety guardrails that block destructive git operations
 Two protection layers against destructive git operations:
 
 1. **git hook** (universal): blocks `git push` at the git level for all agents and tools. Humans bypass with `git push --no-verify` when intentional. CI/CD bypasses via `$CI`.
-2. **agent hook** (Claude Code, Copilot CLI): intercepts dangerous commands before they run via a `preToolUse` hook. Requires Python 3.9+.
+2. **agent hook** (Claude Code, Copilot CLI, Gemini CLI): intercepts dangerous commands before they run via a `preToolUse`-equivalent hook (`PreToolUse` for Claude, `preToolUse` for Copilot, `BeforeTool` for Gemini). Requires Python 3.9+.
 
 ## Layer 1 — git pre-push hook (all providers)
 
@@ -49,9 +49,9 @@ git push --dry-run 2>&1 || true
 
 Should print a `git-guardrails: push blocked` message and exit non-zero.
 
-## Layer 2 — agent preToolUse hooks
+## Layer 2 — agent preToolUse-equivalent hooks
 
-Requires Python 3.9+ (no other dependencies). Skip a provider's section if that provider is not in use. `dotagents init` wires both automatically for Claude and Copilot CLI; the manual steps below are for hand installation or reference.
+Requires Python 3.9+ (no other dependencies). Skip a provider's section if that provider is not in use. `dotagents init` wires all three automatically for Claude, Copilot CLI, and Gemini CLI; the manual steps below are for hand installation or reference.
 
 ### Claude Code
 
@@ -128,6 +128,50 @@ echo '{"toolName":"bash","toolArgs":"{\"command\":\"git push origin main\"}"}' \
 
 Should print `{"permissionDecision": "deny", "permissionDecisionReason": "..."}`.
 
+### Gemini CLI
+
+Gemini's hook config lives inline inside `.gemini/settings.json` (no separate auto-discovered
+hooks directory like Copilot's), using the same nested `matcher`/`hooks` shape as Claude's
+config, under the `BeforeTool` event with matcher `run_shell_command`:
+
+```json
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "name": "git-guardrails",
+            "type": "command",
+            "command": "python3 $GEMINI_PROJECT_DIR/.gemini/hooks/block-dangerous-git --format gemini"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Gemini's `BeforeTool` payload uses `tool_input.command` and expects a deny via exit code 2 +
+a stderr reason — the same contract the script already speaks by default for Claude,
+confirmed via [google-gemini/gemini-cli#23123](https://github.com/google-gemini/gemini-cli/issues/23123),
+a real third-party hook (`block-no-verify`) built against this exact event. On allow, the
+script prints an explicit `{}` rather than staying silent: Gemini's docs confirm stdout is
+parsed as JSON on exit 0 and that an empty object is a safe "no opinion" signal, but don't
+confirm that *empty* stdout is treated the same way. `--format gemini` is accepted
+explicitly rather than relying on the default so this and any future divergence in Gemini's
+contract has somewhere to attach.
+
+Verify:
+
+```bash
+echo '{"tool_name":"run_shell_command","tool_input":{"command":"git push origin main"}}' \
+  | python3 .agents/skills/git-guardrails/scripts/block-dangerous-git --format gemini
+```
+
+Should exit 2 and print a BLOCKED message to stderr.
+
 ## Coverage
 
 | Operation                       | git hook | agent hook |
@@ -141,11 +185,11 @@ Should print `{"permissionDecision": "deny", "permissionDecisionReason": "..."}`
 | `git checkout .` / `-- <path>`  | —        | ✓          |
 | `git restore`                   | —        | ✓          |
 
-The git hook covers push because it is the highest-risk network operation and the only destructive op with a standard pre-execution git hook. All other operations are covered by the agent hook for Claude Code and Copilot CLI — other providers remain uncovered until they gain an equivalent hook mechanism.
+The git hook covers push because it is the highest-risk network operation and the only destructive op with a standard pre-execution git hook. All other operations are covered by the agent hook for Claude Code, Copilot CLI, and Gemini CLI — other providers remain uncovered until they gain an equivalent hook mechanism.
 
 ## Extending to other providers
 
-As Codex, Gemini, and other providers gain hook mechanisms equivalent to Claude Code's `PreToolUse`, add their configuration here following the same pattern: copy `scripts/block-dangerous-git`, register it in the provider's settings file, and add a payload-shape branch to `_extract_command` if the new provider's hook payload doesn't match an existing one.
+As Codex and other providers gain hook mechanisms equivalent to Claude Code's `PreToolUse`, add their configuration here following the same pattern: copy `scripts/block-dangerous-git`, register it in the provider's settings file, and add a payload-shape branch to `_extract_command` if the new provider's hook payload doesn't match an existing one.
 
 ## Known limitations
 
@@ -153,6 +197,6 @@ As Codex, Gemini, and other providers gain hook mechanisms equivalent to Claude 
 
 **No full shell parser** — The agent hook uses `shlex.split()` for tokenization, which handles quotes and common patterns correctly. It does not interpret backticks, process substitution (`<()`), or complex compound commands. Deeply nested shell constructs may not be analyzed correctly.
 
-**Layer 2 covers Claude Code and Copilot CLI only** — Non-Claude, non-Copilot agents (Codex, Gemini, etc.) are protected for `git push` via the git hook, but `reset --hard`, `clean -f`, `branch -D`, and other destructive local operations remain uncovered until those providers gain equivalent hook mechanisms.
+**Layer 2 covers Claude Code, Copilot CLI, and Gemini CLI only** — Other agents (Codex, etc.) are protected for `git push` via the git hook, but `reset --hard`, `clean -f`, `branch -D`, and other destructive local operations remain uncovered until those providers gain equivalent hook mechanisms.
 
-**Copilot CLI hook verified at the script level, not end-to-end live** — the hook registration schema matches Copilot's documented format, and the payload-parsing fix is verified against a real reported invocation shape ([github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349)) with a subprocess-level test proving deny/allow behavior for that exact shape. It has not been confirmed by actually running the `copilot` CLI end-to-end and observing it invoke this hook — that requires either Copilot quota headroom or BYOK spend. Tracked in [#34](https://github.com/hsanchez/dotagents/issues/34).
+**Copilot CLI and Gemini CLI hooks verified at the script level, not end-to-end live** — both hook registration shapes match their provider's documented format, and payload parsing is verified against real reported/observed invocation shapes ([github/copilot-cli#3349](https://github.com/github/copilot-cli/issues/3349), [google-gemini/gemini-cli#23123](https://github.com/google-gemini/gemini-cli/issues/23123)) with subprocess-level tests proving deny/allow behavior for those exact shapes. Both allow paths print an explicit `{}` rather than relying on empty stdout, matching each provider's documented "exit 0, JSON-parsed stdout" contract. Neither has been confirmed by actually running the real CLI end-to-end and observing it invoke this hook — Copilot's is tracked in [#34](https://github.com/hsanchez/dotagents/issues/34); Gemini's live verification has no tracking issue yet.

@@ -14,6 +14,18 @@
           }
         ]
       }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          {
+            "name": "git-guardrails",
+            "type": "command",
+            "command": "python3 $GEMINI_PROJECT_DIR/.gemini/hooks/block-dangerous-git --format gemini"
+          }
+        ]
+      }
     ]
   },
   "general": {

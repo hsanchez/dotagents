@@ -80,6 +80,7 @@ test -L .codex/hooks/session-start.sh
 test -L .codex/hooks.json
 test -L .gemini/hooks/session-start.sh
 test -L .gemini/settings.json
+test -L .gemini/hooks/block-dangerous-git
 test -L .github/hooks/dotagents-discovery.json
 
 printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
@@ -91,6 +92,12 @@ printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
 printf '%s' '{"toolName":"bash","toolArgs":"{\"command\":\"git clean -fd\"}"}' |
   uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot |
   grep -q '"permissionDecision": "deny"'
+
+# Gemini's BeforeTool payload uses tool_input.command, confirmed via
+# google-gemini/gemini-cli#23123's block-no-verify integration.
+printf '%s' '{"tool_name":"run_shell_command","tool_input":{"command":"git reset --hard"}}' |
+  uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format gemini >"$smoke_dir/gemini-hook.out" 2>&1 &&
+  exit 1 || test "$?" -eq 2
 
 # Discovery hooks must actually run and inject the meta-skill, not just
 # exist -- the wrong JSON shape (or a broken delegation path) fails silently

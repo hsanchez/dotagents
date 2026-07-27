@@ -68,7 +68,8 @@ sync = [
   { source = ".rules", destination = "GEMINI.md" },
   { source = ".rules", destination = ".gemini/GEMINI.md", scope = "global" },
   { source = "gemini/settings.json", destination = ".gemini/settings.json" },
-  { source = "gemini/hooks/session-start.sh", destination = ".gemini/hooks/session-start.sh" }
+  { source = "gemini/hooks/session-start.sh", destination = ".gemini/hooks/session-start.sh" },
+  { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".gemini/hooks/block-dangerous-git", skill = "git-guardrails" }
 ]
 
 [providers.codex]

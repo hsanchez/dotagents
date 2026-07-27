@@ -250,7 +250,10 @@ def _deny(reason: str, output_format: str) -> int:
 
 
 def _allow(output_format: str) -> int:
-  if output_format == "copilot":
+  if output_format in ("copilot", "gemini"):
+    # Both providers' hook contracts parse stdout as JSON on exit 0; printing an explicit
+    # empty object is the documented "no opinion" signal. Relying on truly empty stdout to
+    # mean the same thing isn't confirmed for either provider.
     print("{}")
   return 0
 
@@ -258,9 +261,16 @@ def _allow(output_format: str) -> int:
 def _output_format(args: list[str]) -> str:
   if args == ["--format", "copilot"]:
     return "copilot"
+  if args == ["--format", "gemini"]:
+    # Deny matches "claude" (exit code 2 + stderr) -- Gemini's documented "emergency brake"
+    # strategy accepts that contract. Allow prints "{}" rather than staying silent, since
+    # Gemini's docs only confirm an explicit empty JSON object as a safe "no opinion" signal
+    # on exit 0, not empty stdout. Kept as its own value rather than aliased to "claude" so
+    # this and any future divergence has somewhere to attach.
+    return "gemini"
   if args in ([], ["--format", "claude"]):
     return "claude"
-  print("usage: block-dangerous-git [--format claude|copilot]", file=sys.stderr)
+  print("usage: block-dangerous-git [--format claude|copilot|gemini]", file=sys.stderr)
   return "usage-error"
 
 
