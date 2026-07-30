@@ -15,12 +15,23 @@ from typing import Any, cast
 sys.dont_write_bytecode = True
 
 DangerousCommandReason = Callable[[str], str | None]
-dangerous_command_reason = cast(
-  DangerousCommandReason,
-  runpy.run_path(str(Path(__file__).with_name("dangerous_commands.py")))[
-    "dangerous_command_reason"
-  ],
-)
+
+
+def _load_dangerous_command_reason() -> tuple[DangerousCommandReason | None, str]:
+  classifier_path = Path(__file__).with_name("dangerous_commands.py")
+  try:
+    namespace = runpy.run_path(str(classifier_path))
+    classifier = namespace["dangerous_command_reason"]
+    if not callable(classifier):
+      raise TypeError("dangerous_command_reason is not callable")
+  except Exception as error:
+    # Hook policy must return an explicit denial even when the managed classifier
+    # is missing, stale, or otherwise unable to load.
+    return None, str(error)
+  return cast(DangerousCommandReason, classifier), ""
+
+
+dangerous_command_reason, CLASSIFIER_LOAD_ERROR = _load_dangerous_command_reason()
 
 AUTONOMY_LEVELS: frozenset[str] = frozenset({"assist", "supervised", "scoped"})
 PROVIDERS: frozenset[str] = frozenset({"agy", "copilot"})
@@ -72,7 +83,9 @@ EDIT_TOOLS: dict[str, frozenset[str]] = {
 
 SHELL_TOOLS: dict[str, frozenset[str]] = {
   "agy": frozenset({"run_command"}),
-  "copilot": frozenset({"bash", "powershell", "shell"}),
+  "copilot": frozenset(
+    {"bash", "powershell", "shell", "write_bash", "write_powershell"}
+  ),
 }
 
 
@@ -126,7 +139,7 @@ def _extract_tool_call(payload: dict[str, Any], provider: str) -> ToolCall:
 
 
 def _extract_command(arguments: dict[str, Any]) -> str:
-  for key in ("command", "CommandLine", "commandLine"):
+  for key in ("command", "CommandLine", "commandLine", "input"):
     command = arguments.get(key)
     if isinstance(command, str) and command:
       return command
@@ -187,6 +200,42 @@ def _copilot_edit_is_scoped(payload: dict[str, Any], arguments: dict[str, Any]) 
   )
 
 
+def _apply_patch_targets(patch: str) -> list[str]:
+  lines = patch.splitlines()
+  if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+    return []
+
+  targets: list[str] = []
+  prefixes = ("*** Add File: ", "*** Delete File: ", "*** Update File: ", "*** Move to: ")
+  for line in lines[1:-1]:
+    for prefix in prefixes:
+      if line.startswith(prefix):
+        target = line.removeprefix(prefix)
+        if not target:
+          return []
+        targets.append(target)
+        break
+  return targets
+
+
+def _copilot_apply_patch_is_scoped(
+  payload: dict[str, Any], arguments: dict[str, Any]
+) -> bool:
+  working_directory = payload.get("cwd")
+  patch = arguments.get("patch")
+  if (
+    not isinstance(working_directory, str)
+    or not working_directory
+    or not isinstance(patch, str)
+  ):
+    return False
+  targets = _apply_patch_targets(patch)
+  return bool(targets) and all(
+    _resolved_target_within(target, [working_directory]) is not None
+    for target in targets
+  )
+
+
 def _agy_edit_is_scoped(payload: dict[str, Any], arguments: dict[str, Any]) -> bool:
   raw_workspace_paths = payload.get("workspacePaths")
   if not isinstance(raw_workspace_paths, list):
@@ -202,6 +251,12 @@ def decide(payload: dict[str, Any], provider: str, level: str) -> dict[str, obje
     return _deny(provider, f"dotagents autonomy: unsupported provider {provider!r}")
   if level not in AUTONOMY_LEVELS:
     return _deny(provider, f"dotagents autonomy: unsupported level {level!r}")
+  if dangerous_command_reason is None:
+    return _deny(
+      provider,
+      f"dotagents autonomy: dangerous-command classifier unavailable "
+      f"({CLASSIFIER_LOAD_ERROR})",
+    )
 
   try:
     tool_call = _extract_tool_call(payload, provider)
@@ -236,6 +291,10 @@ def decide(payload: dict[str, Any], provider: str, level: str) -> dict[str, obje
           "dotagents scoped: edit target is missing or outside the workspace",
         )
       return _allow(provider, "dotagents scoped: repository edit")
+    if tool_call.name == "apply_patch":
+      if _copilot_apply_patch_is_scoped(payload, tool_call.arguments):
+        return _allow(provider, "dotagents scoped: repository patch")
+      return {}
     if _copilot_edit_is_scoped(payload, tool_call.arguments):
       return _allow(provider, "dotagents scoped: repository edit")
     return {}

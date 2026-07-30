@@ -37,6 +37,8 @@ sync = [
   manifest = load_manifest(tmp_path)
 
   assert manifest.providers == ("claude",)
+  assert manifest.default_providers == ("claude",)
+  assert manifest.provider_metadata["claude"].status == "active"
   assert selected_providers(manifest, ()) == ("claude",)
   assert manifest.global_sync[0].link
   assert [entry.destination for entry in selected_entries(manifest, ("claude",))] == [
@@ -211,6 +213,84 @@ def test_selected_providers_rejects_unknown_provider(tmp_path: Path) -> None:
 
   with pytest.raises(DotagentsError, match="provider not approved: cursor"):
     selected_providers(manifest, ("cursor",))
+
+
+def test_selected_providers_distinguishes_defaults_from_all(tmp_path: Path) -> None:
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[providers]
+
+[providers.agy]
+sync = []
+
+[providers.gemini]
+default = false
+status = "compatibility"
+status_detail = "Enterprise/API key"
+notice = "Use agy unless Gemini CLI access is provided by an organization."
+sync = []
+""",
+  )
+  manifest = load_manifest(tmp_path)
+
+  assert manifest.default_providers == ("agy",)
+  assert selected_providers(manifest, ()) == ("agy",)
+  assert selected_providers(manifest, ("all",)) == ("agy", "gemini")
+  assert manifest.provider_metadata["gemini"].status == "compatibility"
+  assert manifest.provider_metadata["gemini"].status_detail == "Enterprise/API key"
+
+
+def test_load_manifest_rejects_default_compatibility_provider(tmp_path: Path) -> None:
+  write_manifest(
+    tmp_path,
+    """
+version = 1
+
+[providers]
+
+[providers.gemini]
+status = "compatibility"
+sync = []
+""",
+  )
+
+  with pytest.raises(
+    DotagentsError,
+    match="compatibility providers must set default = false",
+  ):
+    load_manifest(tmp_path)
+
+
+@pytest.mark.parametrize(
+  ("field", "value", "message"),
+  (
+    ("default", '"yes"', "default must be a boolean"),
+    ("status", '"retired"', "status must be one of active, compatibility"),
+    ("status_detail", '""', "status_detail must be a non-empty string"),
+    ("notice", '""', "notice must be a non-empty string"),
+  ),
+)
+def test_load_manifest_rejects_invalid_provider_metadata(
+  tmp_path: Path, field: str, value: str, message: str
+) -> None:
+  write_manifest(
+    tmp_path,
+    f"""
+version = 1
+
+[providers]
+
+[providers.gemini]
+{field} = {value}
+sync = []
+""",
+  )
+
+  with pytest.raises(DotagentsError, match=message):
+    load_manifest(tmp_path)
 
 
 def test_load_manifest_defaults_scope_to_repo(tmp_path: Path) -> None:

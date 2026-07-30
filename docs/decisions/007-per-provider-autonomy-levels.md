@@ -73,10 +73,17 @@ accepted
 - Levels 3-5 are out of scope for this mechanism entirely. Reaching them
   remains a matter of which skills/presets a repo enables (e.g. `loop`,
   `schedule`, `audit`, `council`), tracked separately from autonomy level.
-- The hard deny ceiling (`git push`/`git reset --hard`/forced `git clean`/
-  `sudo` blocked regardless of level) exists for Claude, Copilot, and agy.
-  Codex configures no command-level deny of its own; its levels control
-  `approval_policy`/`sandbox_mode` only. Empirical
+- Claude has a native hard deny ceiling for `git push`/`git reset --hard`/
+  forced `git clean`/`sudo`. Copilot and agy hooks deny recognized direct
+  invocations of those commands and the broader `git-guardrails` command
+  set. The classifier recursively inspects common command-shell wrappers
+  (`sh`/`bash`/`zsh` and equivalents using `-c`) because those are realistic
+  straightforward bypasses. General-purpose interpreters, encoded commands,
+  scripts, and other unclassified execution remain under each provider's
+  permission flow. Repository hooks are auditable policy rather than a
+  complete shell security boundary. Codex configures no command-level deny
+  of its own; its levels control `approval_policy`/`sandbox_mode` only.
+  Empirical
   testing against a real `codex` CLI under `scoped` found some of these
   incidentally blocked by Codex's own sandbox (network denial blocks `git
   push`, OS-level Seatbelt blocks `sudo`, both platform-dependent and not

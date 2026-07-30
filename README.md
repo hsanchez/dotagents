@@ -4,7 +4,8 @@ Package-driven configuration for repository-local AI coding environments.
 
 `dotagents` lets a repository define shared rules, skills, scripts, and
 provider configuration once, then generates and maintains the files used by
-Claude, Codex, GitHub Copilot, Gemini, and other supported assistants.
+Claude, Codex, GitHub Copilot, Antigravity CLI, Gemini CLI, and other
+supported assistants.
 
 ## Why dotagents exists
 
@@ -133,13 +134,15 @@ is preserved during uninstall.
 | Provider | Status |
 | --- | --- |
 | Claude | Repo and global support |
-| Gemini | Rules support globally; other configuration is repo-scoped |
-| Antigravity CLI (`agy`) | Repo-scoped |
+| Antigravity CLI (`agy`) | Active; repo-scoped |
+| Gemini CLI | Compatibility for Enterprise/API-key users |
 | Codex | Repo-scoped; global configuration path is pending confirmation |
 | GitHub Copilot | Repo-scoped |
 
 Provider support depends on each assistant's available configuration surfaces.
 See [provider configuration](docs/providers.md) for paths and generated output.
+Initialization with no `--for` selects active providers. Explicit
+`--for all` also includes compatibility providers such as Gemini CLI.
 
 ## Common commands
 

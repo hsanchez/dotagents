@@ -4,10 +4,13 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 
 from dotagents.errors import DotagentsError
 
 SCOPES = ("repo", "global", "both")
+PROVIDER_STATUSES = ("active", "compatibility")
+ProviderStatus = Literal["active", "compatibility"]
 
 
 @dataclass(frozen=True)
@@ -23,11 +26,26 @@ class SyncEntry:
 
 
 @dataclass(frozen=True)
+class ProviderMetadata:
+  default: bool = True
+  status: ProviderStatus = "active"
+  status_detail: str | None = None
+  notice: str | None = None
+
+
+@dataclass(frozen=True)
 class Manifest:
   version: int
   providers: tuple[str, ...]
+  provider_metadata: dict[str, ProviderMetadata]
   global_sync: tuple[SyncEntry, ...]
   provider_sync: dict[str, tuple[SyncEntry, ...]]
+
+  @property
+  def default_providers(self) -> tuple[str, ...]:
+    return tuple(
+      provider for provider in self.providers if self.provider_metadata[provider].default
+    )
 
 
 def load_manifest(asset_root: Path) -> Manifest:
@@ -45,9 +63,11 @@ def load_manifest(asset_root: Path) -> Manifest:
     raise DotagentsError("agents.toml: providers must be a table")
 
   provider_sync: dict[str, tuple[SyncEntry, ...]] = {}
+  provider_metadata: dict[str, ProviderMetadata] = {}
   for provider, config in providers_table.items():
     if not isinstance(config, dict):
       raise DotagentsError(f"agents.toml: providers.{provider} must be a table")
+    provider_metadata[provider] = _parse_provider_metadata(provider, config)
     provider_sync[provider] = tuple(
       _parse_entries(f"providers.{provider}.sync", config.get("sync", []), provider)
     )
@@ -63,6 +83,7 @@ def load_manifest(asset_root: Path) -> Manifest:
   manifest = Manifest(
     version=version,
     providers=provider_names,
+    provider_metadata=provider_metadata,
     global_sync=tuple(_parse_entries("sync", data.get("sync", []), None)),
     provider_sync=provider_sync,
   )
@@ -71,7 +92,9 @@ def load_manifest(asset_root: Path) -> Manifest:
 
 
 def selected_providers(manifest: Manifest, requested: tuple[str, ...]) -> tuple[str, ...]:
-  if not requested or "all" in requested:
+  if not requested:
+    return manifest.default_providers
+  if "all" in requested:
     return manifest.providers
 
   unknown = [provider for provider in requested if provider not in manifest.providers]
@@ -81,6 +104,38 @@ def selected_providers(manifest: Manifest, requested: tuple[str, ...]) -> tuple[
       f"provider not approved: {', '.join(unknown)}. Approved providers: {approved}"
     )
   return tuple(dict.fromkeys(requested))
+
+
+def _parse_provider_metadata(provider: str, config: dict[str, object]) -> ProviderMetadata:
+  section = f"providers.{provider}"
+  default = config.get("default", True)
+  if not isinstance(default, bool):
+    raise DotagentsError(f"agents.toml: {section}.default must be a boolean")
+
+  status = config.get("status", "active")
+  if not isinstance(status, str) or status not in PROVIDER_STATUSES:
+    raise DotagentsError(
+      f"agents.toml: {section}.status must be one of {', '.join(PROVIDER_STATUSES)}"
+    )
+  if status == "compatibility" and default:
+    raise DotagentsError(f"agents.toml: {section} compatibility providers must set default = false")
+
+  status_detail = config.get("status_detail")
+  if status_detail is not None and (
+    not isinstance(status_detail, str) or not status_detail.strip()
+  ):
+    raise DotagentsError(f"agents.toml: {section}.status_detail must be a non-empty string")
+
+  notice = config.get("notice")
+  if notice is not None and (not isinstance(notice, str) or not notice.strip()):
+    raise DotagentsError(f"agents.toml: {section}.notice must be a non-empty string")
+
+  return ProviderMetadata(
+    default=default,
+    status=cast(ProviderStatus, status),
+    status_detail=status_detail,
+    notice=notice,
+  )
 
 
 def selected_entries(

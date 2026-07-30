@@ -275,7 +275,7 @@ def build_context(
 def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]:
   lock_path = repo_root / ".agents" / "dotagents.lock"
   if not lock_path.exists():
-    return manifest.providers
+    return manifest.default_providers
   return read_lock(lock_path).providers
 
 

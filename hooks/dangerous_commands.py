@@ -78,6 +78,11 @@ _WRAPPER_SPECS: dict[str, tuple[frozenset[str], frozenset[str], bool]] = {
   ),
 }
 
+_COMMAND_SHELLS: frozenset[str] = frozenset(
+  {"bash", "dash", "fish", "ksh", "powershell", "pwsh", "sh", "zsh"}
+)
+_MAX_WRAPPER_DEPTH = 4
+
 
 def _is_git(token: str) -> bool:
   return token == "git" or token.endswith("/git")
@@ -165,6 +170,51 @@ def _parse_git_call(segment: str) -> tuple[str, list[str]] | None:
   return tokens[index], tokens[index + 1 :]
 
 
+def _wrapped_shell_command(segment: str) -> str | None:
+  try:
+    tokens = shlex.split(segment)
+  except ValueError:
+    return None
+
+  index = 0
+  while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+    index += 1
+
+  while index < len(tokens):
+    name = tokens[index].rsplit("/", 1)[-1]
+    if name not in _WRAPPER_SPECS:
+      break
+    flags_with_argument, _flags_solo, allows_environment = _WRAPPER_SPECS[name]
+    index += 1
+    while index < len(tokens) and tokens[index].startswith("-"):
+      token = tokens[index]
+      base = token.split("=")[0] if "=" in token else token
+      index += 1 if "=" in token or base not in flags_with_argument else 2
+    if allows_environment:
+      while index < len(tokens) and re.match(
+        r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]
+      ):
+        index += 1
+
+  if index >= len(tokens):
+    return None
+  shell_name = tokens[index].rsplit("/", 1)[-1].casefold()
+  if shell_name not in _COMMAND_SHELLS:
+    return None
+
+  for option_index in range(index + 1, len(tokens)):
+    option = tokens[option_index]
+    normalized_option = option.casefold()
+    is_command_option = normalized_option in {"-c", "--command", "-command"}
+    is_combined_short_option = (
+      option.startswith("-") and not option.startswith("--") and "c" in option[1:]
+    )
+    if is_command_option or is_combined_short_option:
+      command_index = option_index + 1
+      return tokens[command_index] if command_index < len(tokens) else None
+  return None
+
+
 def _short_flag(arguments: list[str], character: str) -> bool:
   return any(
     argument.startswith("-")
@@ -174,10 +224,16 @@ def _short_flag(arguments: list[str], character: str) -> bool:
   )
 
 
-def _check_segment(segment: str) -> str | None:
+def _check_segment(segment: str, wrapper_depth: int) -> str | None:
   segment = re.sub(r"^[\s$(]+", "", segment).rstrip(")")
   if _uses_sudo(segment):
     return "sudo requires explicit human approval"
+  if wrapper_depth < _MAX_WRAPPER_DEPTH:
+    wrapped_command = _wrapped_shell_command(segment)
+    if wrapped_command is not None:
+      reason = _dangerous_command_reason(wrapped_command, wrapper_depth + 1)
+      if reason:
+        return reason
   parsed = _parse_git_call(segment.strip())
   if parsed is None:
     return None
@@ -224,10 +280,57 @@ def _check_segment(segment: str) -> str | None:
   return None
 
 
-def dangerous_command_reason(command: str) -> str | None:
-  """Return the first destructive-git reason found in a shell command."""
-  for segment in re.split(r"&&|\|\||[;|\n]", command):
-    reason = _check_segment(segment)
+def _shell_segments(command: str) -> list[str]:
+  segments: list[str] = []
+  segment_start = 0
+  quote = ""
+  escaped = False
+  index = 0
+
+  while index < len(command):
+    character = command[index]
+    if escaped:
+      escaped = False
+      index += 1
+      continue
+    if character == "\\" and quote != "'":
+      escaped = True
+      index += 1
+      continue
+    if quote:
+      if character == quote:
+        quote = ""
+      index += 1
+      continue
+    if character in {"'", '"'}:
+      quote = character
+      index += 1
+      continue
+
+    separator_length = 0
+    if command.startswith(("&&", "||"), index):
+      separator_length = 2
+    elif character in {";", "|", "\n"}:
+      separator_length = 1
+    if separator_length:
+      segments.append(command[segment_start:index])
+      index += separator_length
+      segment_start = index
+      continue
+    index += 1
+
+  segments.append(command[segment_start:])
+  return segments
+
+
+def _dangerous_command_reason(command: str, wrapper_depth: int) -> str | None:
+  for segment in _shell_segments(command):
+    reason = _check_segment(segment, wrapper_depth)
     if reason:
       return reason
   return None
+
+
+def dangerous_command_reason(command: str) -> str | None:
+  """Return the first recognized destructive-git reason in a shell command."""
+  return _dangerous_command_reason(command, 0)

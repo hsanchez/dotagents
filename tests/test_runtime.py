@@ -1976,6 +1976,44 @@ def test_init_all_providers_creates_expected_provider_outputs(
   assert (tmp_path / ".gemini" / "hooks" / "session-start.sh").is_symlink()
 
 
+def test_init_without_provider_selection_excludes_compatibility_providers(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ())
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert "agy" in lock.providers
+  assert "gemini" not in lock.providers
+  assert not (tmp_path / ".gemini").exists()
+
+
+def test_explicit_all_includes_compatibility_providers(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("all",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert "agy" in lock.providers
+  assert "gemini" in lock.providers
+
+
+def test_existing_gemini_lock_remains_configured(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("gemini",))
+
+  sync_existing(Path.cwd())
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ("gemini",)
+  assert (tmp_path / ".gemini" / "settings.json").is_symlink()
+
+
 def test_runtime_destination_rejects_unknown_source_root(tmp_path: Path) -> None:
   entry = SyncEntry(source="misc/file.txt", destination="misc/file.txt")
 
@@ -2429,7 +2467,7 @@ def test_sync_compiles_default_autonomy_hook_for_copilot(
     (tmp_path / ".github" / "hooks" / "dotagents-autonomy.json").read_text(encoding="utf-8")
   )
   entry = hook["hooks"]["preToolUse"][0]
-  assert entry["matcher"] == "bash|powershell"
+  assert entry["matcher"] == "bash|powershell|write_bash|write_powershell"
   assert "--provider copilot --level supervised" in entry["command"]
   assert (tmp_path / ".github" / "hooks" / "dotagents-autonomy-policy").is_symlink()
   assert (tmp_path / ".github" / "hooks" / "dangerous_commands.py").is_symlink()

@@ -5,7 +5,7 @@
       {
         "type": "command",
         "command": "python3 .github/hooks/dotagents-autonomy-policy --provider copilot --level scoped",
-        "matcher": "bash|powershell|create|edit|str_replace_editor|apply_patch",
+        "matcher": "bash|powershell|write_bash|write_powershell|create|edit|str_replace_editor|apply_patch",
         "timeoutSec": 10
       }
     ]

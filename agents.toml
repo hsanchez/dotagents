@@ -80,6 +80,10 @@ sync = [
 ]
 
 [providers.gemini]
+default = false
+status = "compatibility"
+status_detail = "Enterprise/API key"
+notice = "Gemini CLI is retained for Enterprise/API-key users; individual users should select agy."
 sync = [
   { source = ".rules", destination = "GEMINI.md" },
   { source = ".rules", destination = ".gemini/GEMINI.md", scope = "global" },
