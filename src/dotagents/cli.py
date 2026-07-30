@@ -33,6 +33,7 @@ from dotagents.runtime import (
   capability_index,
   capability_index_payload,
   compiled_group_statuses,
+  configured_providers,
   init_runtime,
   is_dotagents_source_checkout,
   is_global_root,
@@ -238,7 +239,7 @@ def init(
   except DotagentsError as exc:
     _exit_with_error(exc)
   _finish(operation_log, dry_run, "Initialized dotagents runtime.")
-  _print_provider_notices(resolved_providers)
+  _print_provider_notices(repo_root, resolved_providers)
 
 
 @app.command()
@@ -539,7 +540,7 @@ def providers_add(
   except DotagentsError as exc:
     _exit_with_error(exc)
   _finish(operation_log, dry_run, f"Added provider: {provider}.")
-  _print_provider_notices((provider,))
+  _print_provider_notices(Path.cwd(), (provider,))
 
 
 @providers_app.command("remove")
@@ -576,9 +577,10 @@ def _run_log(operation_log: OperationLog) -> None:
     console.print(line)
 
 
-def _print_provider_notices(requested_providers: tuple[str, ...]) -> None:
+def _print_provider_notices(repo_root: Path, requested_providers: tuple[str, ...]) -> None:
   manifest = load_manifest(asset_root())
-  for provider in selected_providers(manifest, requested_providers):
+  configured = requested_providers or configured_providers(repo_root, manifest)
+  for provider in selected_providers(manifest, configured):
     notice = manifest.provider_metadata[provider].notice
     if notice:
       console.print(Text(notice, style="yellow"))

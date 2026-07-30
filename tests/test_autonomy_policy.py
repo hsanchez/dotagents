@@ -306,6 +306,63 @@ def test_common_shell_wrappers_deny_recognized_dangerous_commands(
   assert decision["permissionDecision"] == "deny"
 
 
+@pytest.mark.parametrize(
+  "command",
+  (
+    "/usr/bin/env git push origin main",
+    "/usr/bin/command git reset --hard",
+    "/usr/bin/nice /usr/bin/git clean -fd",
+  ),
+)
+def test_path_qualified_wrappers_deny_recognized_dangerous_commands(
+  command: str,
+) -> None:
+  decision = run_policy(
+    "copilot",
+    "supervised",
+    {"toolName": "bash", "toolArgs": {"command": command}},
+  )
+  assert decision["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+  "command",
+  (
+    "bash script.sh -c 'git push origin main'",
+    "bash -- script.sh -c 'git reset --hard'",
+    "bash -C script.sh -c 'git push origin main'",
+    "pwsh -File script.ps1 -Command 'git clean -fd'",
+  ),
+)
+def test_shell_command_flags_after_scripts_remain_under_provider_flow(
+  command: str,
+) -> None:
+  decision = run_policy(
+    "copilot",
+    "supervised",
+    {"toolName": "bash", "toolArgs": {"command": command}},
+  )
+  assert decision == {}
+
+
+@pytest.mark.parametrize(
+  "command",
+  (
+    "bash -O extglob -c 'git push origin main'",
+    "pwsh -ExecutionPolicy Bypass -Command 'git reset --hard'",
+  ),
+)
+def test_shell_options_with_arguments_before_command_are_inspected(
+  command: str,
+) -> None:
+  decision = run_policy(
+    "copilot",
+    "supervised",
+    {"toolName": "bash", "toolArgs": {"command": command}},
+  )
+  assert decision["permissionDecision"] == "deny"
+
+
 def test_other_indirect_execution_remains_under_provider_permission_flow() -> None:
   decision = run_policy(
     "agy",

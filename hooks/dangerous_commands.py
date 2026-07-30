@@ -81,6 +81,21 @@ _WRAPPER_SPECS: dict[str, tuple[frozenset[str], frozenset[str], bool]] = {
 _COMMAND_SHELLS: frozenset[str] = frozenset(
   {"bash", "dash", "fish", "ksh", "powershell", "pwsh", "sh", "zsh"}
 )
+_POSIX_SHELL_OPTIONS_WITH_ARGUMENT: frozenset[str] = frozenset(
+  {"-o", "+o", "-O", "+O", "--init-file", "--rcfile"}
+)
+_POWERSHELL_OPTIONS_WITH_ARGUMENT: frozenset[str] = frozenset(
+  {
+    "-configurationname",
+    "-custompipename",
+    "-executionpolicy",
+    "-inputformat",
+    "-outputformat",
+    "-settingsfile",
+    "-windowstyle",
+    "-workingdirectory",
+  }
+)
 _MAX_WRAPPER_DEPTH = 4
 
 
@@ -130,8 +145,11 @@ def _parse_git_call(segment: str) -> tuple[str, list[str]] | None:
   while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
     index += 1
 
-  while index < len(tokens) and tokens[index] in _WRAPPER_SPECS:
-    flags_with_argument, _flags_solo, allows_environment = _WRAPPER_SPECS[tokens[index]]
+  while index < len(tokens):
+    wrapper_name = tokens[index].rsplit("/", 1)[-1]
+    if wrapper_name not in _WRAPPER_SPECS:
+      break
+    flags_with_argument, _flags_solo, allows_environment = _WRAPPER_SPECS[wrapper_name]
     index += 1
 
     while index < len(tokens) and tokens[index].startswith("-"):
@@ -170,6 +188,55 @@ def _parse_git_call(segment: str) -> tuple[str, list[str]] | None:
   return tokens[index], tokens[index + 1 :]
 
 
+def _powershell_command_argument(tokens: list[str], start: int) -> str | None:
+  index = start
+  while index < len(tokens):
+    option = tokens[index]
+    normalized_option = option.casefold()
+    if normalized_option in {"-c", "-command"}:
+      command_index = index + 1
+      return tokens[command_index] if command_index < len(tokens) else None
+    if normalized_option in {"-file", "-f"} or option == "--":
+      return None
+    if normalized_option in _POWERSHELL_OPTIONS_WITH_ARGUMENT:
+      index += 2
+      continue
+    if not option.startswith("-"):
+      return None
+    index += 1
+  return None
+
+
+def _posix_shell_command_argument(
+  shell_name: str, tokens: list[str], start: int
+) -> str | None:
+  command_options = (
+    {"-c", "-C", "--command", "--init-command"}
+    if shell_name == "fish"
+    else {"-c"}
+  )
+  index = start
+  while index < len(tokens):
+    option = tokens[index]
+    if option in command_options:
+      command_index = index + 1
+      return tokens[command_index] if command_index < len(tokens) else None
+    if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
+      command_index = index + 1
+      return tokens[command_index] if command_index < len(tokens) else None
+    if option == "--":
+      return None
+
+    option_base = option.split("=", 1)[0]
+    if option_base in _POSIX_SHELL_OPTIONS_WITH_ARGUMENT:
+      index += 1 if "=" in option else 2
+      continue
+    if not option.startswith("-"):
+      return None
+    index += 1
+  return None
+
+
 def _wrapped_shell_command(segment: str) -> str | None:
   try:
     tokens = shlex.split(segment)
@@ -201,18 +268,9 @@ def _wrapped_shell_command(segment: str) -> str | None:
   shell_name = tokens[index].rsplit("/", 1)[-1].casefold()
   if shell_name not in _COMMAND_SHELLS:
     return None
-
-  for option_index in range(index + 1, len(tokens)):
-    option = tokens[option_index]
-    normalized_option = option.casefold()
-    is_command_option = normalized_option in {"-c", "--command", "-command"}
-    is_combined_short_option = (
-      option.startswith("-") and not option.startswith("--") and "c" in option[1:]
-    )
-    if is_command_option or is_combined_short_option:
-      command_index = option_index + 1
-      return tokens[command_index] if command_index < len(tokens) else None
-  return None
+  if shell_name in {"powershell", "pwsh"}:
+    return _powershell_command_argument(tokens, index + 1)
+  return _posix_shell_command_argument(shell_name, tokens, index + 1)
 
 
 def _short_flag(arguments: list[str], character: str) -> bool:

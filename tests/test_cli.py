@@ -1141,6 +1141,18 @@ def test_init_gemini_reports_compatibility_notice(
   assert "Gemini CLI is retained for Enterprise/API-key users" in result.output
 
 
+def test_init_reports_notice_for_provider_preserved_from_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("gemini",))
+
+  result = CliRunner().invoke(app, ["init", "--dry-run"])
+
+  assert result.exit_code == 0
+  assert "Gemini CLI is retained for Enterprise/API-key users" in result.output
+
+
 def test_init_dry_run_renders_compatibility_notice_as_literal_text(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
