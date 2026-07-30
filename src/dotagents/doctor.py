@@ -15,7 +15,7 @@ from dotagents.runtime import (
   build_context,
   compiled_group_statuses,
   compute_skillfile_sha256,
-  expected_managed_settings_content,
+  expected_managed_policy_content,
   manifest_drift,
   relative,
   validate_self_host_lock,
@@ -128,7 +128,7 @@ def doctor(repo_root: Path) -> DoctorResult:
       # compare against a freshly recomputed merge instead of raw source bytes.
       if path.exists():
         try:
-          expected_content = expected_managed_settings_content(runtime_context, asset.source)
+          expected_content = expected_managed_policy_content(runtime_context, asset.source)
         except DotagentsError as exc:
           lines.append(f"source error: {asset.source}: {exc}")
           passed = False

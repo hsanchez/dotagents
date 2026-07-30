@@ -17,6 +17,7 @@ def test_list_providers_command_outputs_supported_providers() -> None:
   result = CliRunner().invoke(app, ["list", "providers"])
 
   assert result.exit_code == 0
+  assert "agy" in result.output
   assert "claude" in result.output
   assert "copilot" in result.output
 

@@ -134,6 +134,7 @@ is preserved during uninstall.
 | --- | --- |
 | Claude | Repo and global support |
 | Gemini | Rules support globally; other configuration is repo-scoped |
+| Antigravity CLI (`agy`) | Repo-scoped |
 | Codex | Repo-scoped; global configuration path is pending confirmation |
 | GitHub Copilot | Repo-scoped |
 
@@ -156,6 +157,8 @@ uv run dotagents list skills
 uv run dotagents providers add gemini
 uv run dotagents providers remove copilot
 uv run dotagents providers set-autonomy claude scoped
+uv run dotagents providers set-autonomy copilot assist
+uv run dotagents providers set-autonomy agy scoped
 uv run dotagents uninstall --dry-run
 uv run dotagents uninstall
 ```

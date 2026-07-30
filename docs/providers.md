@@ -2,7 +2,7 @@
 
 Provider adapters translate the shared managed runtime into the configuration
 paths understood by each assistant. The package currently supports Claude,
-Codex, GitHub Copilot, and Gemini.
+Codex, GitHub Copilot, Gemini CLI, and Google Antigravity CLI (`agy`).
 
 ## Generated output
 
@@ -64,26 +64,40 @@ stable.
 
 ## Autonomy levels
 
-Claude and Codex each get an `assist` | `supervised` | `scoped` autonomy
-level, compiled into that provider's native permission mechanism at sync
-time — Claude's `.claude/settings.json` `permissions` block, Codex's
-`.codex/config.toml` `approval_policy`/`sandbox_mode`. `supervised` is the
-default and matches prior behavior; nothing changes until you opt in.
+Claude, Codex, Copilot CLI, and agy each get an
+`assist` | `supervised` | `scoped` autonomy level. The level is stored per
+provider in `.agents/dotagents.lock` and compiled into a repo-local native
+permission surface at sync time. `supervised` is the default.
 
 ```bash
 uv run dotagents providers set-autonomy claude scoped
 uv run dotagents providers set-autonomy codex assist
+uv run dotagents providers set-autonomy copilot assist
+uv run dotagents providers set-autonomy agy scoped
 ```
 
-| Level | Claude `permissions.defaultMode` | Codex `approval_policy` / `sandbox_mode` |
-| --- | --- | --- |
-| `assist` | `plan` (reads and explores, no edits) | `untrusted` / `read-only` |
-| `supervised` (default) | `default` (prompts on first use of each tool) | `on-request` / `workspace-write` |
-| `scoped` | `acceptEdits` (auto-accepts file edits) | `never` / `workspace-write` |
+| Level | Claude | Codex | Copilot CLI | agy |
+| --- | --- | --- | --- | --- |
+| `assist` | `plan` | `untrusted` / `read-only` | Allow known read tools; deny edits, shell, and unknown tools | Same hook policy as Copilot |
+| `supervised` (default) | `default` | `on-request` / `workspace-write` | Preserve provider approval behavior | Preserve provider approval behavior |
+| `scoped` | `acceptEdits` | `never` / `workspace-write` | Auto-allow native edits inside the repo; preserve other approvals | Allow known reads and native workspace edits at the hook gate; deny every other tool |
 
-**Claude only:** every level denies `git push`, `git reset --hard`, `git
-clean`, and `sudo` regardless of the chosen level — deny rules always win
-over allow rules, so this is a ceiling, not just a default.
+The generated provider files are:
+
+- Claude: `.claude/settings.json`
+- Codex: `.codex/config.toml`
+- Copilot: `.github/hooks/dotagents-autonomy.json`
+- agy: `.agents/plugins/dotagents-autonomy/`
+
+Copilot and agy use `PreToolUse` hooks because neither CLI exposes the same
+repo-local level field as Claude or Codex. The policy remains native to a
+plain provider launch: no wrapper, alias, or user-global setting is required.
+The agy integration is a namespaced workspace plugin; dotagents deliberately
+leaves `~/.gemini/antigravity-cli/settings.json` unchanged.
+
+Claude, Copilot, and agy apply a deny ceiling at every level for `git push`,
+`git reset --hard`, forced `git clean`, and `sudo`. The shared classifier also
+retains the broader destructive-Git protections from `git-guardrails`.
 
 Codex has no equivalent command-level deny list wired up here — its levels
 control `approval_policy`/`sandbox_mode` only, not specific commands. At
@@ -106,48 +120,31 @@ behavior, not a guarantee this project configures or controls:
 - `git clean` — **not blocked.** Ran to completion and deleted files. This
   is the one confirmed, currently unmitigated gap at Codex `scoped`.
 
-Codex does have a real command-blocklist mechanism (Starlark `.rules` files
-under `.codex/rules/`, auto-discovered) that could close this properly, but
-its DSL and exact discovery semantics aren't documented anywhere accessible
-from the CLI, so implementing it means reverse-engineering an undocumented
-policy language rather than adapting a known schema — deferred as a
-follow-up ([#33](https://github.com/hsanchez/dotagents/issues/33)) rather
-than guessed at here. Until then, treat Codex `scoped` as
-materially weaker than Claude `scoped`, primarily around `git clean`.
+Codex has a command-blocklist mechanism under `.codex/rules/`, but its policy
+language and discovery contract remain undocumented. Until that mechanism is
+verified, treat Codex `scoped` as materially weaker around destructive
+commands, especially `git clean`.
 
-**Copilot CLI and Gemini are not covered by `set-autonomy` yet.** Neither has
-a native, persisted, repo-local permission-*level* setting this mechanism
-can compile a level into:
+Plain Gemini CLI remains separate from agy and has no autonomy fragments.
+Selecting `gemini` never installs the agy plugin; select `agy` explicitly.
 
-- **Copilot CLI** (`copilot`, already targeted elsewhere in this repo via
-  `.github/hooks/git-guardrails.json` — not the GitHub PR-review bot) does
-  have a repo-level settings file (`.github/copilot/settings.json`,
-  confirmed via `copilot help config` and the interactive `/settings
-  --repo` command), but its documented schema carries only `hooks` (same
-  schema as `.github/hooks/*.json`) and `allowedUrls`/`deniedUrls` — no
-  tool allow/deny list or permission-level concept. Tool allow/deny itself
-  is session-flag-only (`--allow-tool`/`--deny-tool`), and the one
-  persisted tool/path permission store, `~/.copilot/permissions-config.json`,
-  is documented as saved ask-once decisions, not a rule engine with deny
-  support or repo-shareable policy. Its only repo-shareable lever is the
-  hooks mechanism, already wired here as a level-invariant deny ceiling
-  (same four commands as Claude's, via `preToolUse` hooks — camelCase, per
-  GitHub's hooks reference docs — rather than a `permissions.deny` array).
-  A real per-level dial is designed — `preToolUse` hooks can return a
-  `permissionDecision` of `allow` or `deny`, so `assist`/`scoped` could
-  plausibly deny/auto-allow `edit`/`create` the way Claude's `defaultMode`
-  does — but it isn't shipped because it hasn't been verified live against
-  the CLI yet. Tracked in [#34](https://github.com/hsanchez/dotagents/issues/34).
-- **Gemini** splits in two. `agy` (Google's Antigravity CLI, effectively
-  Gemini's successor) has a real `permissions.allow`/`permissions.deny` rule
-  engine, but it lives in a per-user-machine global file
-  (`~/.gemini/antigravity-cli/settings.json`, keyed by trusted workspace
-  paths), not a repo-local file — writing into it would mean mutating
-  state shared across every other project the user has trusted with agy, a
-  materially different and riskier class of operation than anything
-  `sync_runtime` does today. The plain `gemini` CLI's permission schema
-  remains genuinely unverified — it wasn't installed or tested in the
-  session that produced this mechanism.
+The hook integrations were verified with Copilot CLI 1.0.75 and agy 1.1.5.
+Provider releases can add tool names. Unknown tools fail closed in `assist`;
+in `supervised` they stay under the provider's normal permission flow.
+Copilot `scoped` also preserves that flow for unknown tools; agy `scoped`
+denies them. Copilot documents hook timeouts as fail-open to its
+normal flow. Repo hooks are auditable policy for agent execution, not a
+security boundary against a user who can edit or disable repository
+configuration.
+
+agy 1.1.5 still applies its separate persisted `write_file(...)` permission
+after a `PreToolUse` hook returns `allow`. A plain headless `agy --print`
+therefore denies an ungranted scoped edit instead of auto-accepting it. The
+repo hook supplies the bounded policy ceiling: `assist` remains read-only
+even with `--dangerously-skip-permissions`, while `scoped` permits native
+workspace edits and explicitly denies shell and other tools. Full zero-prompt
+scoped edits require the provider's independent auto-approval mode; dotagents
+does not mutate agy's user-global or project permission store.
 
 This covers levels 0-2 of the agentic-autonomy-levels framing (suggest-only
 through bounded-task delegation). Levels 3-5 (goal-driven, parallel,
@@ -155,8 +152,7 @@ managed-by-exception) aren't permission settings — they depend on which
 skills and presets a repository enables (e.g. `loop`, `schedule`, `audit`,
 `council`), not on how permissive a provider's settings file is. See
 [docs/decisions/007-per-provider-autonomy-levels.md](decisions/007-per-provider-autonomy-levels.md)
-for why the mechanism is scoped this way and what's confirmed vs. deferred
-for each unsupported provider.
+for the design boundaries and enforcement tradeoffs.
 
 ## Existing files
 

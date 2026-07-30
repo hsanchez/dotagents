@@ -10,7 +10,7 @@ trap 'rm -rf "$self_host_dir" "$other_dir"' EXIT INT TERM
 # validates uncommitted self-hosting changes without touching this checkout.
 cp "$repo_root/pyproject.toml" "$repo_root/uv.lock" "$repo_root/README.md" "$self_host_dir/"
 cp "$repo_root/agents.toml" "$self_host_dir/"
-for directory in src rules scripts skills presets hooks claude codex copilot gemini; do
+for directory in src rules scripts skills presets hooks agy claude codex copilot gemini; do
   cp -R "$repo_root/$directory" "$self_host_dir/$directory"
 done
 

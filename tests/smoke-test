@@ -30,7 +30,7 @@ skill council
 skill cross-critique
 skill research
 EOF
-uv run dotagents init --for claude --for codex --for gemini --for copilot
+uv run dotagents init --for agy --for claude --for codex --for gemini --for copilot
 uv run dotagents doctor
 uv run dotagents list providers
 uv run dotagents status
@@ -64,7 +64,12 @@ test ! -e skills
 test -L .claude/commands
 test -L .claude/skills
 test -L .github/copilot-instructions.md
-test -L .github/hooks/block-dangerous-git
+test ! -e .github/hooks/block-dangerous-git
+test -L .github/hooks/dotagents-autonomy-policy
+test -L .github/hooks/dotagents-autonomy.json
+test -L .agents/plugins/dotagents-autonomy/plugin.json
+test -L .agents/plugins/dotagents-autonomy/hooks.json
+test -L .agents/plugins/dotagents-autonomy/dotagents-autonomy-policy
 test ! -f .agents/agent
 test ! -d .agents/claude
 test ! -d .agents/copilot
@@ -74,6 +79,7 @@ test ! -d .agents/copilot
 # SessionStart-style hook delegates to the one shared script.
 test -f .agents/skills/dotagents-discovery/SKILL.md
 test -f .agents/hooks/discovery-common.sh
+test -f .agents/hooks/dangerous_commands.py
 test -L .claude/hooks/session-start.sh
 test -L .claude/settings.json
 test -L .codex/hooks/session-start.sh
@@ -89,6 +95,19 @@ printf '%s' '{"tool_input":{"command":"git reset --hard"}}' |
 printf '%s' '{"toolInput":{"command":"git clean -fd"}}' |
   uv run python .agents/skills/git-guardrails/scripts/block-dangerous-git --format copilot |
   grep -q '"permissionDecision": "deny"'
+
+printf '%s' '{"toolName":"view","toolArgs":"{\"path\":\"README.md\"}"}' |
+  uv run python .github/hooks/dotagents-autonomy-policy --provider copilot --level assist |
+  grep -q '"permissionDecision": "allow"'
+
+printf '%s' '{"toolCall":{"name":"run_command","args":{"CommandLine":"sudo true"}}}' |
+  uv run python .agents/plugins/dotagents-autonomy/dotagents-autonomy-policy --provider agy --level scoped |
+  grep -q '"decision": "deny"'
+
+uv run dotagents providers set-autonomy copilot scoped
+grep -q -- '--provider copilot --level scoped' .github/hooks/dotagents-autonomy.json
+uv run dotagents providers set-autonomy agy assist
+grep -q -- '--provider agy --level assist' .agents/plugins/dotagents-autonomy/hooks.json
 
 # Discovery hooks must actually run and inject the meta-skill, not just
 # exist -- the wrong JSON shape (or a broken delegation path) fails silently
