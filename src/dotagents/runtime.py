@@ -56,10 +56,12 @@ CapabilityStatus = Literal["ok", "stale", "missing", "invalid"]
 
 # The (provider, source) pairs whose base file gets the resolved autonomy-level permission
 # fragment merged in at sync time, rather than being copied verbatim. See
-# docs/decisions/007-per-provider-autonomy-levels.md for why these two providers only.
+# docs/decisions/007-per-provider-autonomy-levels.md for provider-specific details.
 AUTONOMY_MANAGED_SOURCES: dict[tuple[str, str], Literal["json", "toml"]] = {
+  ("agy", "agy/hooks.json"): "json",
   ("claude", "claude/settings.json"): "json",
   ("codex", "codex/config.toml"): "toml",
+  ("copilot", "copilot/autonomy.json"): "json",
 }
 AUTONOMY_MANAGED_PROVIDERS = frozenset(provider for provider, _ in AUTONOMY_MANAGED_SOURCES)
 # Each managed source string is unique to one provider, so this reverse lookup is unambiguous.
@@ -273,7 +275,7 @@ def build_context(
 def configured_providers(repo_root: Path, manifest: Manifest) -> tuple[str, ...]:
   lock_path = repo_root / ".agents" / "dotagents.lock"
   if not lock_path.exists():
-    return manifest.providers
+    return manifest.default_providers
   return read_lock(lock_path).providers
 
 
@@ -725,7 +727,7 @@ def _sync_runtime_body(
     if not applies:
       forced_copy_dirs.add(destination.parent)
     if (entry.provider, entry.source) in AUTONOMY_MANAGED_SOURCES:
-      merged_content = sync_managed_provider_settings(
+      merged_content = sync_managed_provider_policy(
         runtime_context, entry.source, destination, operation_log
       )
       locked_assets.append(
@@ -1465,8 +1467,8 @@ def _reject_key_collision(base: dict[str, object], fragment: dict[str, object]) 
     raise DotagentsError(f"permission fragment redefines existing key(s): {', '.join(colliding)}")
 
 
-def expected_managed_settings_content(runtime_context: RuntimeContext, asset_source: str) -> str:
-  """Return what `sync_managed_provider_settings` would currently write for `asset_source`.
+def expected_managed_policy_content(runtime_context: RuntimeContext, asset_source: str) -> str:
+  """Return what `sync_managed_provider_policy` would currently write for `asset_source`.
 
   Used by `doctor` to detect self-host staleness (source or fragment edited since the last
   sync) without depending on the runtime destination already existing.
@@ -1481,7 +1483,7 @@ def expected_managed_settings_content(runtime_context: RuntimeContext, asset_sou
   fragment_path = runtime_context.asset_root / provider / "permissions" / f"{level}.{fmt}"
   base_path = runtime_context.asset_root / asset_source
   if not base_path.exists():
-    raise DotagentsError(f"missing base settings source for provider {provider}: {base_path}")
+    raise DotagentsError(f"missing base policy source for provider {provider}: {base_path}")
   if not fragment_path.exists():
     raise DotagentsError(f"no {level} permission fragment for provider {provider}: {fragment_path}")
   base_content = base_path.read_text(encoding="utf-8")
@@ -1489,10 +1491,10 @@ def expected_managed_settings_content(runtime_context: RuntimeContext, asset_sou
   try:
     return merge_autonomy_fragment(base_content, fragment_content, fmt)
   except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
-    raise DotagentsError(f"cannot parse provider settings for {provider}: {exc}") from exc
+    raise DotagentsError(f"cannot parse provider policy for {provider}: {exc}") from exc
 
 
-def sync_managed_provider_settings(
+def sync_managed_provider_policy(
   runtime_context: RuntimeContext, asset_source: str, destination: Path, operation_log: OperationLog
 ) -> str:
   """Write `destination` as `asset_source` merged with the resolved autonomy fragment.
@@ -1503,7 +1505,7 @@ def sync_managed_provider_settings(
   Raises:
     DotagentsError: if no fragment file exists for the resolved level.
   """
-  merged_content = expected_managed_settings_content(runtime_context, asset_source)
+  merged_content = expected_managed_policy_content(runtime_context, asset_source)
   write_generated_file(runtime_context.repo_root, destination, merged_content, operation_log)
   return merged_content
 

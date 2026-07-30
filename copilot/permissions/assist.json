@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "python3 .github/hooks/dotagents-autonomy-policy --provider copilot --level assist",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

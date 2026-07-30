@@ -1,0 +1,16 @@
+{
+  "dotagents-autonomy": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ./dotagents-autonomy-policy --provider agy --level assist",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

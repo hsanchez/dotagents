@@ -7,6 +7,7 @@ from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
+from rich.text import Text
 
 from dotagents.assets import asset_root
 from dotagents.compiler import (
@@ -24,7 +25,7 @@ from dotagents.compiler import (
 from dotagents.doctor import doctor as run_doctor
 from dotagents.errors import DotagentsError
 from dotagents.lockfile import AUTONOMY_LEVELS, read_lock
-from dotagents.manifest import load_manifest
+from dotagents.manifest import load_manifest, selected_providers
 from dotagents.runtime import (
   CompiledGroupStatus,
   OperationLog,
@@ -32,6 +33,7 @@ from dotagents.runtime import (
   capability_index,
   capability_index_payload,
   compiled_group_statuses,
+  configured_providers,
   init_runtime,
   is_dotagents_source_checkout,
   is_global_root,
@@ -237,6 +239,7 @@ def init(
   except DotagentsError as exc:
     _exit_with_error(exc)
   _finish(operation_log, dry_run, "Initialized dotagents runtime.")
+  _print_provider_notices(repo_root, resolved_providers)
 
 
 @app.command()
@@ -343,7 +346,9 @@ def list_items(kind: str = typer.Argument("providers", help="providers or skills
   manifest = load_manifest(assets)
   if kind == "providers":
     for provider in manifest.providers:
-      console.print(provider)
+      metadata = manifest.provider_metadata[provider]
+      detail = f" ({metadata.status_detail})" if metadata.status_detail else ""
+      console.print(Text(f"{provider} — {metadata.status}{detail}"))
     return
   if kind == "skills":
     skills_dir = assets / "skills"
@@ -535,6 +540,7 @@ def providers_add(
   except DotagentsError as exc:
     _exit_with_error(exc)
   _finish(operation_log, dry_run, f"Added provider: {provider}.")
+  _print_provider_notices(Path.cwd(), (provider,))
 
 
 @providers_app.command("remove")
@@ -569,6 +575,15 @@ def providers_set_autonomy(
 def _run_log(operation_log: OperationLog) -> None:
   for line in operation_log.lines:
     console.print(line)
+
+
+def _print_provider_notices(repo_root: Path, requested_providers: tuple[str, ...]) -> None:
+  manifest = load_manifest(asset_root())
+  configured = requested_providers or configured_providers(repo_root, manifest)
+  for provider in selected_providers(manifest, configured):
+    notice = manifest.provider_metadata[provider].notice
+    if notice:
+      console.print(Text(notice, style="yellow"))
 
 
 def _finish(operation_log: OperationLog, dry_run: bool, success_message: str) -> None:

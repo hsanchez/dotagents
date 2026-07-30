@@ -47,7 +47,8 @@ configuration location:
 
 ```text
 claude    rules, commands, skills, and settings
-gemini    global rules; settings remain repo-only
+agy       repo-only
+gemini    compatibility provider; global rules only
 codex     repo-only pending a confirmed global path
 copilot   repo-only
 ```

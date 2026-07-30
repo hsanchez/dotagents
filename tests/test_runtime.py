@@ -30,7 +30,7 @@ from dotagents.runtime import (
   capability_compiled_groups,
   copy_file,
   effective_skills,
-  expected_managed_settings_content,
+  expected_managed_policy_content,
   init_runtime,
   merge_autonomy_fragment,
   migrate_legacy_backup,
@@ -89,6 +89,7 @@ def write_source_checkout(root: Path) -> Path:
   )
   for name in (
     "agents.toml",
+    "agy",
     "claude",
     "codex",
     "copilot",
@@ -442,7 +443,7 @@ def test_init_creates_managed_runtime_without_harness_internals(
   assert (tmp_path / ".claude" / "skills").readlink() == Path("../.agents/skills")
   assert (tmp_path / ".claude" / "hooks" / "session-start.sh").is_symlink()
   assert (tmp_path / ".github" / "hooks" / "dotagents-discovery.json").is_symlink()
-  assert (tmp_path / ".github" / "hooks" / "block-dangerous-git").is_symlink()
+  assert not (tmp_path / ".github" / "hooks" / "block-dangerous-git").exists()
   runtime_lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   link_destinations = {link.destination for link in runtime_lock.links}
   assert "AGENTS.md" in link_destinations
@@ -1975,6 +1976,44 @@ def test_init_all_providers_creates_expected_provider_outputs(
   assert (tmp_path / ".gemini" / "hooks" / "session-start.sh").is_symlink()
 
 
+def test_init_without_provider_selection_excludes_compatibility_providers(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ())
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert "agy" in lock.providers
+  assert "gemini" not in lock.providers
+  assert not (tmp_path / ".gemini").exists()
+
+
+def test_explicit_all_includes_compatibility_providers(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("all",))
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert "agy" in lock.providers
+  assert "gemini" in lock.providers
+
+
+def test_existing_gemini_lock_remains_configured(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("gemini",))
+
+  sync_existing(Path.cwd())
+
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ("gemini",)
+  assert (tmp_path / ".gemini" / "settings.json").is_symlink()
+
+
 def test_runtime_destination_rejects_unknown_source_root(tmp_path: Path) -> None:
   entry = SyncEntry(source="misc/file.txt", destination="misc/file.txt")
 
@@ -2417,6 +2456,106 @@ def test_sync_merges_default_autonomy_level_into_codex_config(
   assert raw_text.startswith("# Project-scoped Codex settings")
 
 
+def test_sync_compiles_default_autonomy_hook_for_copilot(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("copilot",))
+
+  hook = json.loads(
+    (tmp_path / ".github" / "hooks" / "dotagents-autonomy.json").read_text(encoding="utf-8")
+  )
+  entry = hook["hooks"]["preToolUse"][0]
+  assert entry["matcher"] == "bash|powershell|write_bash|write_powershell"
+  assert "--provider copilot --level supervised" in entry["command"]
+  assert (tmp_path / ".github" / "hooks" / "dotagents-autonomy-policy").is_symlink()
+  assert (tmp_path / ".github" / "hooks" / "dangerous_commands.py").is_symlink()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy == {"copilot": DEFAULT_AUTONOMY_LEVEL}
+
+
+def test_sync_compiles_default_autonomy_plugin_for_agy(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  init_runtime(Path.cwd(), ("agy",))
+
+  plugin = tmp_path / ".agents" / "plugins" / "dotagents-autonomy"
+  assert json.loads((plugin / "plugin.json").read_text(encoding="utf-8")) == {
+    "name": "dotagents-autonomy"
+  }
+  hook = json.loads((plugin / "hooks.json").read_text(encoding="utf-8"))
+  entry = hook["dotagents-autonomy"]["PreToolUse"][0]
+  assert entry["matcher"] == "run_command"
+  assert "--provider agy --level supervised" in entry["hooks"][0]["command"]
+  assert (plugin / "dotagents-autonomy-policy").is_symlink()
+  assert (plugin / "dangerous_commands.py").is_symlink()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy == {"agy": DEFAULT_AUTONOMY_LEVEL}
+
+
+def test_agy_and_gemini_provider_assets_stay_separate(tmp_path: Path) -> None:
+  gemini_root = tmp_path / "gemini"
+  gemini_root.mkdir()
+  agy_root = tmp_path / "agy"
+  agy_root.mkdir()
+
+  init_runtime(gemini_root, ("gemini",))
+  init_runtime(agy_root, ("agy",))
+
+  assert not (gemini_root / ".agents" / "plugins" / "dotagents-autonomy").exists()
+  assert not (agy_root / ".gemini").exists()
+
+
+@pytest.mark.parametrize(
+  ("provider", "level", "destination", "expected"),
+  (
+    (
+      "copilot",
+      "assist",
+      ".github/hooks/dotagents-autonomy.json",
+      "--provider copilot --level assist",
+    ),
+    (
+      "copilot",
+      "scoped",
+      ".github/hooks/dotagents-autonomy.json",
+      "--provider copilot --level scoped",
+    ),
+    (
+      "agy",
+      "assist",
+      ".agents/plugins/dotagents-autonomy/hooks.json",
+      "--provider agy --level assist",
+    ),
+    (
+      "agy",
+      "scoped",
+      ".agents/plugins/dotagents-autonomy/hooks.json",
+      "--provider agy --level scoped",
+    ),
+  ),
+)
+def test_set_provider_autonomy_compiles_hook_provider_levels(
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+  provider: str,
+  level: str,
+  destination: str,
+  expected: str,
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), (provider,))
+
+  set_provider_autonomy(Path.cwd(), provider, level)
+
+  assert expected in (tmp_path / destination).read_text(encoding="utf-8")
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.provider_autonomy == {provider: level}
+
+
 def test_set_provider_autonomy_updates_only_target_provider(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2431,6 +2570,21 @@ def test_set_provider_autonomy_updates_only_target_provider(
   assert config["approval_policy"] == "on-request"
   lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
   assert lock.provider_autonomy == {"claude": "scoped", "codex": "supervised"}
+
+
+def test_remove_agy_provider_cleans_namespaced_plugin(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("agy", "claude"))
+
+  remove_provider(Path.cwd(), "agy")
+
+  assert not (tmp_path / ".agents" / "plugins" / "dotagents-autonomy").exists()
+  lock = read_lock(tmp_path / ".agents" / "dotagents.lock")
+  assert lock.providers == ("claude",)
+  assert lock.provider_autonomy == {"claude": DEFAULT_AUTONOMY_LEVEL}
+  assert doctor(Path.cwd()).passed
 
 
 def test_set_provider_autonomy_requires_lockfile(
@@ -2532,7 +2686,7 @@ def test_doctor_reports_error_instead_of_crashing_on_missing_base(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   """A base source file missing entirely is caught by manifest validation before doctor's
-  per-asset loop ever runs — see the dedicated `expected_managed_settings_content` test below
+  per-asset loop ever runs — see the dedicated `expected_managed_policy_content` test below
   for the same guard exercised directly (it also protects callers where the base file
   disappears after manifest load, not just this doctor-at-rest snapshot)."""
   source_checkout = write_source_checkout(tmp_path / "dotagents")
@@ -2547,7 +2701,7 @@ def test_doctor_reports_error_instead_of_crashing_on_missing_base(
   assert any("source does not exist: claude/settings.json" in line for line in result.lines)
 
 
-def test_expected_managed_settings_content_rejects_missing_base_file(
+def test_expected_managed_policy_content_rejects_missing_base_file(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   source_checkout = write_source_checkout(tmp_path / "dotagents")
@@ -2556,8 +2710,8 @@ def test_expected_managed_settings_content_rejects_missing_base_file(
   runtime_context = build_context(source_checkout, self_host=True)
   (source_checkout / "claude" / "settings.json").unlink()
 
-  with pytest.raises(DotagentsError, match="missing base settings source"):
-    expected_managed_settings_content(runtime_context, "claude/settings.json")
+  with pytest.raises(DotagentsError, match="missing base policy source"):
+    expected_managed_policy_content(runtime_context, "claude/settings.json")
 
 
 def test_doctor_reports_source_error_instead_of_crashing_on_malformed_fragment(

@@ -7,6 +7,7 @@ import pytest
 from helpers import github_tarball, make_lock_stale, make_manifest_stale, write_compiled_manifest
 from typer.testing import CliRunner
 
+import dotagents.cli as cli
 import dotagents.compiler as compiler
 from dotagents.cli import app
 from dotagents.lockfile import read_lock
@@ -17,8 +18,35 @@ def test_list_providers_command_outputs_supported_providers() -> None:
   result = CliRunner().invoke(app, ["list", "providers"])
 
   assert result.exit_code == 0
-  assert "claude" in result.output
-  assert "copilot" in result.output
+  assert "agy — active" in result.output
+  assert "claude — active" in result.output
+  assert "copilot — active" in result.output
+  assert "gemini — compatibility (Enterprise/API key)" in result.output
+
+
+def test_list_providers_renders_status_detail_as_literal_text(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  (tmp_path / "agents.toml").write_text(
+    """
+version = 1
+
+[providers]
+
+[providers.gemini]
+default = false
+status = "compatibility"
+status_detail = "Enterprise [/oops]"
+sync = []
+""",
+    encoding="utf-8",
+  )
+  monkeypatch.setattr(cli, "asset_root", lambda: tmp_path)
+
+  result = CliRunner().invoke(app, ["list", "providers"])
+
+  assert result.exit_code == 0
+  assert "gemini — compatibility (Enterprise [/oops])" in result.output
 
 
 def test_list_skills_command_outputs_bundled_skills() -> None:
@@ -1087,6 +1115,71 @@ def test_providers_add_command_adds_provider(
   assert result.exit_code == 0
   assert "Added provider: copilot." in result.output
   assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
+
+
+def test_providers_add_gemini_reports_compatibility_notice(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("claude",))
+
+  result = CliRunner().invoke(app, ["providers", "add", "gemini"])
+
+  assert result.exit_code == 0
+  assert "Gemini CLI is retained for Enterprise/API-key users" in result.output
+  assert (tmp_path / ".gemini" / "settings.json").is_symlink()
+
+
+def test_init_gemini_reports_compatibility_notice(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+
+  result = CliRunner().invoke(app, ["init", "--for", "gemini"])
+
+  assert result.exit_code == 0
+  assert "Gemini CLI is retained for Enterprise/API-key users" in result.output
+
+
+def test_init_reports_notice_for_provider_preserved_from_lockfile(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  monkeypatch.chdir(tmp_path)
+  init_runtime(Path.cwd(), ("gemini",))
+
+  result = CliRunner().invoke(app, ["init", "--dry-run"])
+
+  assert result.exit_code == 0
+  assert "Gemini CLI is retained for Enterprise/API-key users" in result.output
+
+
+def test_init_dry_run_renders_compatibility_notice_as_literal_text(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  asset_root = tmp_path / "assets"
+  asset_root.mkdir()
+  (asset_root / "agents.toml").write_text(
+    """
+version = 1
+
+[providers]
+
+[providers.gemini]
+default = false
+status = "compatibility"
+notice = "See [/oops] [link=https://evil.example]migration[/link]."
+sync = []
+""",
+    encoding="utf-8",
+  )
+  monkeypatch.chdir(tmp_path)
+  monkeypatch.setattr(cli, "asset_root", lambda: asset_root)
+
+  result = CliRunner().invoke(app, ["init", "--dry-run", "--for", "gemini"])
+
+  assert result.exit_code == 0
+  assert "Dry run complete." in result.output
+  assert "See [/oops] [link=https://evil.example]migration[/link]." in result.output
 
 
 def test_providers_add_command_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

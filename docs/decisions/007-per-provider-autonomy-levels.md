@@ -1,13 +1,11 @@
-# Per-provider autonomy levels compile to native permission config
+# Per-provider autonomy levels compile to native permission policy
 
 Each provider gets an `assist | supervised | scoped` autonomy level, persisted
-per provider in the lockfile and compiled into that provider's native
-permission mechanism at sync time (Claude's `.claude/settings.json`
-`permissions` block, Codex's `.codex/config.toml` `approval_policy` and
-`sandbox_mode`). The level is merged into the same destination file that
-already carries other provider-managed config, using the same source-dispatch
-mechanism `_sync_runtime_body` already uses for `.rules` and `skills`, rather
-than adding new fields to `SyncEntry`.
+per provider in the lockfile and compiled into a repo-local native enforcement
+surface. Claude and Codex use settings fields. Copilot CLI uses a repository
+`preToolUse` hook. agy uses a namespaced workspace plugin with a `PreToolUse`
+hook. Generated policy assets use the existing managed-source merge and
+lockfile drift machinery.
 
 ## Status
 
@@ -31,35 +29,18 @@ accepted
   and multiple rows at the same destination would trip
   `validate_manifest`'s duplicate-destination check, needing exemption logic
   for a case that only exists to route around not having a merge step.
-- Cover all providers (Claude, Codex, Gemini, Copilot) in the first cut;
-  rejected because only Claude and Codex have a native, persisted,
-  repo-local permission-*level* setting this mechanism can compile a
-  fragment into. Copilot CLI (`copilot` — already targeted elsewhere in
-  this repo, e.g. `.github/hooks/git-guardrails.json`, not the GitHub
-  PR-review bot) does have a repo-level settings file
-  (`.github/copilot/settings.json`, confirmed via `copilot help config`
-  and the interactive `/settings --repo` command), but its documented
-  schema carries only `hooks` (same schema as `.github/hooks/*.json`) and
-  `allowedUrls`/`deniedUrls` — no tool allow/deny list or permission-level
-  concept. Tool allow/deny itself is session-flag-only (`--allow-tool`/
-  `--deny-tool`), and the one persisted tool/path permission store,
-  `~/.copilot/permissions-config.json`, is documented as saved ask-once
-  decisions, not a rule engine with deny support or repo-shareable
-  policy. Its only repo-shareable lever is the hooks mechanism
-  (`preToolUse`, camelCase per GitHub's hooks reference docs — not the
-  Claude-style `PreToolUse`/`Bash` matcher the shipped hook JSON was
-  originally copied from), already wired as a level-invariant deny
-  ceiling; a real per-level dial on top of it is designed but deferred
-  pending live verification against the CLI
-  ([#34](https://github.com/hsanchez/dotagents/issues/34)). Gemini splits
-  in two: `agy` (Google's Antigravity CLI, effectively Gemini's successor)
-  has a real `permissions.allow`/`permissions.deny` rule engine, but it
-  lives in a per-user-machine global file
-  (`~/.gemini/antigravity-cli/settings.json`, keyed by trusted workspace
-  paths), not a repo-local file this project's sync model can safely
-  write into — a structural mismatch, not a missing schema. The plain
-  `gemini` CLI's permission schema remains genuinely unverified; it
-  wasn't installed or tested this session.
+- Provider settings fields only; rejected because Copilot and agy expose
+  native workspace hook decisions even though neither exposes a repo-local
+  level field. Compiling the shared level semantics into those hooks gives
+  plain CLI launches the same governed behavior.
+- Provider launch wrappers using session flags; rejected because the policy
+  would disappear whenever a user launched the provider directly.
+- Mutate agy's user-global permissions file; rejected because that file is
+  shared by every trusted workspace on the machine. A repo-local plugin keeps
+  ownership, review, drift detection, and removal within the repository.
+- Treat agy as part of the `gemini` provider; rejected because Gemini CLI and
+  agy have different configuration roots, hook contracts, tool names, and
+  release lifecycles. `agy` is an explicit provider key.
 
 ## Consequences
 
@@ -74,13 +55,35 @@ accepted
   new set of permission fragments against that provider's current schema,
   not just registering the provider name — this is deliberately not a
   drop-in extension point.
+- Copilot and agy share a deterministic policy executable and dangerous
+  command classifier. Provider payload parsing, output rendering, and
+  read/edit tool allowlists remain explicit.
+- `assist` denies unknown tools. `supervised` preserves provider approval
+  behavior. Copilot `scoped` auto-allows native file edits only; shell, MCP,
+  browser, subagent, and unknown tools remain under provider control.
+- Copilot and agy policy files are repo hooks. They provide auditable agent
+  policy, while users with write access to the repository can modify or
+  disable them.
+- agy 1.1.5 evaluates its persisted permission service after an `allow` hook
+  decision. agy `scoped` therefore allows reads and in-workspace edits at the
+  hook gate and denies every other tool, bounding an independent auto-approval
+  mode. The plugin cannot grant zero-prompt edits by itself.
+  dotagents keeps that limitation instead of mutating agy's user-global or
+  project permission store.
 - Levels 3-5 are out of scope for this mechanism entirely. Reaching them
   remains a matter of which skills/presets a repo enables (e.g. `loop`,
   `schedule`, `audit`, `council`), tracked separately from autonomy level.
-- The hard deny ceiling (`git push`/`git reset --hard`/`git clean`/`sudo`
-  blocked regardless of level) only exists for Claude, via
-  `permissions.deny`. Codex configures no command-level deny of its own —
-  its levels control `approval_policy`/`sandbox_mode` only. Empirical
+- Claude has a native hard deny ceiling for `git push`/`git reset --hard`/
+  forced `git clean`/`sudo`. Copilot and agy hooks deny recognized direct
+  invocations of those commands and the broader `git-guardrails` command
+  set. The classifier recursively inspects common command-shell wrappers
+  (`sh`/`bash`/`zsh` and equivalents using `-c`) because those are realistic
+  straightforward bypasses. General-purpose interpreters, encoded commands,
+  scripts, and other unclassified execution remain under each provider's
+  permission flow. Repository hooks are auditable policy rather than a
+  complete shell security boundary. Codex configures no command-level deny
+  of its own; its levels control `approval_policy`/`sandbox_mode` only.
+  Empirical
   testing against a real `codex` CLI under `scoped` found some of these
   incidentally blocked by Codex's own sandbox (network denial blocks `git
   push`, OS-level Seatbelt blocks `sudo`, both platform-dependent and not
