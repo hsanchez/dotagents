@@ -147,6 +147,14 @@ def selected_entries(
   return tuple(entry for entry in entries if entry.skill is None or entry.skill in skills)
 
 
+def all_sync_entries(manifest: Manifest) -> tuple[SyncEntry, ...]:
+  """Every sync entry across all providers, unfiltered by provider selection."""
+  entries = list(manifest.global_sync)
+  for provider_entries in manifest.provider_sync.values():
+    entries.extend(provider_entries)
+  return tuple(entries)
+
+
 def _parse_entries(section: str, entries: object, provider: str | None) -> list[SyncEntry]:
   if not isinstance(entries, list):
     raise DotagentsError(f"agents.toml: {section} must be an array of tables")
@@ -202,9 +210,7 @@ def validate_manifest(manifest: Manifest, asset_root: Path) -> None:
       errors.append(f"invalid provider name: {provider}")
 
   destinations: dict[str, list[SyncEntry]] = {}
-  entries = list(manifest.global_sync)
-  for provider_entries in manifest.provider_sync.values():
-    entries.extend(provider_entries)
+  entries = all_sync_entries(manifest)
 
   for entry in entries:
     _validate_path("source", entry.source, errors)

@@ -52,6 +52,10 @@ line-length = 100
 indent-width = 2
 target-version = "py314"
 src = ["src"]
+# evals/fixtures/<skill>/ holds self-contained mini-projects with their own
+# formatting conventions (verified against their own isolated pyproject.toml,
+# not this repo's) -- see evals/README.md.
+exclude = ["evals/fixtures"]
 
 [tool.ruff.format]
 indent-style = "space"
@@ -62,4 +66,21 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
+# Without this, pytest's default rootdir-based collection also picks up
+# test files inside evals/fixtures/<skill>/ -- those belong to self-contained
+# mini-projects materialized into their own workspace at eval time, not to
+# this repo's own suite (see evals/README.md).
+testpaths = ["tests"]
+
+[tool.pyright]
+# The prek-bootstrap fixture is a nested src-layout project. Editors analyze it
+# from this outer workspace rather than from its isolated eval workspace.
+typeCheckingMode = "standard"
+extraPaths = ["src", "evals/fixtures/prek-bootstrap/src"]
+
+[tool.ty.src]
+# evals/fixtures/<skill>/ holds self-contained mini-projects materialized
+# into their own throwaway workspace at eval time (see evals/README.md) --
+# their imports resolve inside their own isolated venv, not this repo's.
+exclude = ["evals/fixtures"]
