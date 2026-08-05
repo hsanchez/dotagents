@@ -1,0 +1,31 @@
+{
+  "skill_name": "git-guardrails",
+  "trigger": {
+    "positive": [
+      { "prompt": "Install git safety guardrails that block destructive pushes in this repo.", "top_k": 3 },
+      { "prompt": "Add the pre-push and Claude PreToolUse protection layers after dotagents init.", "top_k": 3 },
+      { "prompt": "Harden this repository against force pushes, reset --hard, and git clean.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Bootstrap prek and install the repository's pre-commit hooks.", "owner": "prek-bootstrap" },
+      { "prompt": "Push this branch and open a draft pull request for review.", "owner": "create-pr" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Treat git-guardrails/replayed-state.json, git-guardrails/existing-pre-push.txt, and git-guardrails/existing-claude-settings.json as captured state from an initialized repository. Produce an installation preview only under git-guardrails/proposed-installation/: pre-push-dispatcher.sh, claude-settings.json, and installation-plan.md. The preview must preserve the existing hook separately, run the managed guardrail first, merge rather than overwrite Claude settings, and list the production skill's verification steps as manual and unexecuted. Do not run commands, copy or execute scripts, write under .git/.claude/.agents, or claim installation or verification occurred.",
+      "expected_output": "Three local preview artifacts model the correct dispatcher, merged Claude settings, and unexecuted installation and verification plan from replayed repository state",
+      "files": ["git-guardrails"],
+      "expectations": [
+        "The agent writes pre-push-dispatcher.sh, claude-settings.json, and installation-plan.md only under git-guardrails/proposed-installation/",
+        "The dispatcher uses #!/bin/sh and set -e, resolves its directory from $0, and invokes pre-push-guardrails before pre-push-original while forwarding $@ to both",
+        "The merged settings retain includeCoAuthoredBy, permissions.deny, the existing Edit PreToolUse hook, and the existing Write PostToolUse hook, then add exactly one Bash PreToolUse command for $CLAUDE_PROJECT_DIR/.claude/hooks/block-dangerous-git",
+        "The installation plan preserves the existing hook as pre-push-original and references both production-managed source paths from replayed-state.json rather than embedding substitute scripts",
+        "The plan lists git push --dry-run and the Claude hook probe as manual unexecuted verification, discloses that the replay has no remote, and states that live installation remains NOT RUN",
+        "The agent runs no command, writes no .git/.claude/.agents path, and does not claim that installation or verification completed"
+      ]
+    }
+  ]
+}

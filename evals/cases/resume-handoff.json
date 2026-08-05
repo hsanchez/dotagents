@@ -1,0 +1,29 @@
+{
+  "skill_name": "resume-handoff",
+  "trigger": {
+    "positive": [
+      { "prompt": "Resume the previous session from this handoff file.", "top_k": 3 },
+      { "prompt": "Load the handoff, compare it with the current branch, and tell me what changed.", "top_k": 3 },
+      { "prompt": "Pick up where the last agent stopped using ~/.handoffs/project/latest.md.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Write a handoff document so a fresh agent can continue this session.", "owner": "handoff" },
+      { "prompt": "Are you on? Refresh the repo rules, memory, and recent commits before we start.", "owner": "startup" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Resume from resume-handoff/handoff.md. Synchronize against the fixture repository first, report any drift, summarize the active work, and wait for my confirmation before acting.",
+      "expected_output": "Repository rules, memory, status, and recent history are read before the supplied handoff; commit drift is surfaced; active tasks and the immediate next step are summarized without starting work",
+      "files": ["resume-handoff"],
+      "expectations": [
+        "The agent reads .rules and MEMORY.md and checks git status and recent log before reading the handoff",
+        "The response explicitly identifies that the handoff's recorded commit differs from the current fixture commit",
+        "Tasks in progress, failed approaches, and the immediate next step are summarized",
+        "The agent waits for explicit user confirmation and does not begin the implementation task"
+      ]
+    }
+  ]
+}

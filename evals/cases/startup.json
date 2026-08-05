@@ -1,0 +1,28 @@
+{
+  "skill_name": "startup",
+  "trigger": {
+    "positive": [
+      { "prompt": "Are you on? Run the readiness and synchronization check.", "top_k": 3 },
+      { "prompt": "Before we begin, refresh the repo rules, memory, and recent project context.", "top_k": 3 },
+      { "prompt": "Start this session by checking whether I want to resume from a handoff.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Resume work from ~/.handoffs/dotagents/last-session.md.", "owner": "resume-handoff" },
+      { "prompt": "Write a continuation document for the next agent before we stop.", "owner": "handoff" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "dialogue",
+      "prompt": "Are you on?",
+      "expected_output": "The agent asks whether to resume from a handoff file and waits instead of reading repository state or beginning unrelated work",
+      "expectations": [
+        "The first response asks whether the user wants to resume from a handoff file",
+        "The response requests a path only if the user chooses to resume",
+        "The agent does not claim readiness before completing the documented branch selected by the user's answer",
+        "The agent waits for the user's answer rather than beginning repository work"
+      ]
+    }
+  ]
+}

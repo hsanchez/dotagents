@@ -1,0 +1,29 @@
+{
+  "skill_name": "audit",
+  "trigger": {
+    "positive": [
+      { "prompt": "Run a standard audit of my uncommitted code changes before I commit.", "top_k": 3 },
+      { "prompt": "Use the review-code workflow to audit this working-tree diff for defects.", "top_k": 3 },
+      { "prompt": "Give these local changes an adversarial audit with independent reviewer personas.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Review pull request 418 from another author and produce line-pinned comments.", "owner": "review-pr" },
+      { "prompt": "Get several models to compare these two architecture options.", "owner": "council" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Run a standard audit of the uncommitted change in audit/. Do not run an adversarial audit.",
+      "expected_output": "The uncommitted diff is reviewed through one successful review-code invocation and the correctness defect is reported with file and line evidence",
+      "files": ["audit"],
+      "expectations": [
+        "The agent checks for untracked files before reviewing the diff",
+        "The agent invokes the supplied review-code entry point exactly once",
+        "The report identifies the incorrect empty-cart total in audit/cart.py with a precise file reference",
+        "The agent does not launch multiple reviewer backends or modify the fixture"
+      ]
+    }
+  ]
+}

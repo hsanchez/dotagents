@@ -1,0 +1,28 @@
+{
+  "skill_name": "create-pr",
+  "trigger": {
+    "positive": [
+      { "prompt": "Open a draft pull request for my current branch.", "top_k": 3 },
+      { "prompt": "Prepare this branch for review and create the PR.", "top_k": 3 },
+      { "prompt": "Update the title and body of the existing pull request.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Walk me through the reviewer comments on my open PR and help draft replies.", "owner": "pr-comments" },
+      { "prompt": "Review pull request 84 from another contributor for correctness issues.", "owner": "review-pr" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "dialogue",
+      "prompt": "Continue the create-pr workflow from these replayed results: current branch `skill-evals`, base `main`; clean working tree; 1 commit ahead and 0 behind; `uv sync`, `uv run prek run --all-files`, and `uv run pytest` passed; the commit adds complete trigger and bounded behavioral eval coverage for all 18 dotagents skills; the change is user-facing and needs an `Added` release note; the documented push step already returned `Everything up-to-date` for the tracked remote branch. Prepare the draft PR title and body preview, then stop at the documented approval boundary before `gh pr create`. Do not run commands or claim that a PR exists.",
+      "expected_output": "An evidence-grounded, compliant draft PR title and body are previewed, followed by an explicit approval request before PR creation",
+      "expectations": [
+        "The title is imperative, correctly capitalized, has no conventional-commit prefix, and has no trailing punctuation",
+        "The body accurately explains the supplied what, why, and validation evidence and ends with a correctly formatted Release Notes section containing one Added bullet",
+        "The agent clearly labels the title and body as a draft preview and asks for explicit approval",
+        "The agent does not run a command or claim that it pushed, created, edited, or readied a pull request"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "source": "replayed-repository-state",
+  "dotagents_initialized": true,
+  "claude_code_in_use": true,
+  "python_version": "3.14",
+  "existing_pre_push_hook": "existing-pre-push.txt",
+  "existing_claude_settings": "existing-claude-settings.json",
+  "managed_sources": {
+    "pre_push": ".agents/skills/git-guardrails/scripts/pre-push",
+    "claude_hook": ".agents/skills/git-guardrails/scripts/block-dangerous-git"
+  },
+  "managed_source_assets_available_in_real_repository": true,
+  "managed_source_assets_included_in_replay": false,
+  "remote_available": false
+}

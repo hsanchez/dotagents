@@ -6,14 +6,15 @@ from each other, and **change agent behavior** the way each skill promises.
 
 ## Prior art
 
-This is a Python port of [agent-skills](https://github.com/addyosmani/agent-skills)'
-`scripts/run-evals.js`, adapted to this repo's own skill catalog, layout,
-and language (Python, not TypeScript -- consistent with the rest of this
-project). It adopts the same `evals.json`-derived case schema and the same
-two-tier split. It lives under `evals/`, not `scripts/`: `scripts/` in this
-repo is packaged into the `dotagents` wheel and synced into host repos (see
-`pyproject.toml`'s `force-include`), so tooling that only makes sense for
-this repo's own skill catalog does not belong there.
+This runner ports the evaluation approach from
+[agent-skills](https://github.com/addyosmani/agent-skills). Dotagents owns the
+evaluated skill catalog, prompts, fixtures, and expectations. The Python
+runner adopts the same `evals.json`-derived case schema and two-tier split as
+`agent-skills/scripts/run-evals.js`.
+
+The runner lives under `evals/`, not `scripts/`: `scripts/` is packaged into
+the `dotagents` wheel and synced into host repos, while these evals apply only
+to this repository's skill catalog.
 
 ## The two tiers
 
@@ -100,6 +101,23 @@ it needs no fixture, and the grader judges the assistant's conversational
 turns without requiring file edits or commands. Claiming `dialogue` is a
 human-reviewed exemption, not a general escape hatch for execution skills.
 
+Skills that normally read or mutate GitHub use replayed external state in
+routine Tier 3. Captured PR context, comments, annotated diffs, and generated
+templates replace remote reads; the model is graded on the resulting local
+artifact or approval-boundary behavior. Real pushes, PR creation or updates,
+comment posting, and thread resolution remain outside these cases. Repository
+unit tests exercise the real helper scripts separately, while Tier 3 evaluates
+how the model uses their captured outputs. This keeps behavioral coverage and
+live GitHub integration as separate claims.
+
+Replay also applies to local workflows whose real execution requires
+capabilities deliberately absent from the Tier-3 executor. The
+`git-guardrails` case uses captured repository state to produce inspectable
+installation-preview artifacts with Read/Write tools; it does not copy or run
+the production hooks or mutate `.git` and `.claude`. Existing isolated tests
+cover production helper behavior separately. The preview is bounded behavioral
+evidence, while live installation remains `NOT RUN`.
+
 Each selected provider executes and grades its own trace; results are
 written to provider-labelled files such as
 `evals/results/saga.eval-1.claude.grading.json` (gitignored). Traces are
@@ -166,41 +184,48 @@ execution-kind evals. If a fixture directory contains
 `.eval/working-tree.patch`, that patch is applied *after* the baseline
 commit -- so it becomes an uncommitted working-tree change instead of part
 of the committed history, for a skill whose task is defined by an
-uncommitted diff (e.g. "review my uncommitted changes"). No pilot fixture
-currently uses this (it was exercised by the `audit` fixture before that
-skill was dropped from the pilot -- see below), but the mechanism itself is
-implemented and tested (`materialize_workspace` in `run_evals.py`,
-`test_evals.py`'s materialization tests). The `.eval/` directory itself is
-never committed or exposed to the agent.
+uncommitted diff (e.g. "review my uncommitted changes"). The `audit` fixture
+uses this mechanism. It is also covered by `test_evals.py`'s materialization
+tests. The `.eval/` directory itself is never committed or exposed to the
+agent.
 
 ## Coverage status
 
-`clarify`, `prek-bootstrap`, and `saga` have case files today (a pilot to
-validate the pattern before writing the rest). `uv run python
-evals/run_evals.py` will report every other skill as missing a case file
-until it's added -- that's accurate, not a bug. Every skill in `skills/`
-should eventually have one.
+Every shipped skill has Tier-2 trigger coverage and at least one Tier-3
+behavioral specification. The prek `skill-evals` hook enforces exact catalog
+coverage, schema and fixture validity, trigger routing, and an 80% rank-1
+floor.
 
-**Why not `audit`**: it was the original third pilot skill, but its Bash
-needs can't be scoped for safe Tier-3 execution. Standard Audit only needs
-`git ls-files` + `scripts/review-code`, but Adversarial Audit (same file,
-same `allowed-tools` field -- SKILL.md has no per-mode scoping) needs
-`mktemp`, `mkdir`, `cat`, `rm`, and direct invocation of `codex`/`claude`/
-`gh`/`copilot`/`agy`. Scoping `allowed-tools` to Standard Audit's needs
-would silently break real `/audit adversarial` usage; scoping broadly
-enough to cover both modes is not a meaningful security boundary, just
-`Bash` by another name. `prek-bootstrap` replaced it: a genuinely narrow,
-single-mode Bash surface (`uv add --dev prek`, `uv run prek *`) that
-mirrors `saga`'s existing scoped pattern.
+Case coverage and live behavioral evidence are separate metrics. `dry-run`
+validates the provider command plan without invoking a model. Live Tier 3 is
+manual, trusted-input, Claude-only work and is reported per case after it runs.
 
-## Known findings from the pilot
+| Skill | Tier 2 | Behavioral case | Artifact | Live Tier 3 |
+|---|---|---|---|---|
+| `audit` | Covered | Covered | Fixture | NOT RUN |
+| `clarify` | Covered | Covered | Dialogue | NOT RUN |
+| `council` | Covered | Covered | Dialogue | NOT RUN |
+| `create-pr` | Covered | PR preview and creation-approval boundary | Dialogue replay | NOT RUN |
+| `cross-critique` | Covered | Covered | Fixture | NOT RUN |
+| `dotagents-discovery` | Covered | Covered | Fixture | NOT RUN |
+| `git-guardrails` | Covered | Installation preview from replayed repository state | Fixture replay | NOT RUN |
+| `handoff` | Covered | Covered | Fixture | NOT RUN |
+| `pr-comments` | Covered | Comment classification and reply-approval boundary | Dialogue replay | NOT RUN |
+| `pr-walkthrough` | Covered | Local walkthrough from replayed PR evidence | Fixture replay | NOT RUN |
+| `prek-bootstrap` | Covered | Covered | Fixture | NOT RUN |
+| `research` | Covered | Covered | Fixture | NOT RUN |
+| `resume-handoff` | Covered | Covered | Fixture | NOT RUN |
+| `review-pr` | Covered | Local review artifact from replayed PR evidence | Fixture replay | NOT RUN |
+| `review-saga` | Covered | Read-only orchestration over replayed branch evidence | Fixture replay | NOT RUN |
+| `saga` | Covered | Covered | Fixture | NOT RUN |
+| `startup` | Covered | Covered | Dialogue | NOT RUN |
+| `unpack` | Covered | Covered | Dialogue | NOT RUN |
 
-- `saga`'s description ranks #1 for "Help me design a plan before we start
-  building anything," even though `saga`'s own `SKILL.md` explicitly says
-  it is not a planning methodology. The description repeats "plan" heavily
-  enough that generic planning language over-triggers it. Worth tightening
-  the description if this repeats once more skills are added, per this
-  repo's `.rules` (two hits in one session is "repeatedly encountered").
-- `review-saga` and `saga` descriptions are 62% similar (warning threshold
+Current verified claims: **18/18 case coverage**, **18/18 Claude dry-run
+validation**, and **0/18 live behavioral execution**.
+
+## Known findings
+
+- `review-saga` and `saga` descriptions are 60% similar (warning threshold
   is 50%, error is 75%) -- expected, since they are intentionally related
   (execute vs. review a plan), not a defect.

@@ -4,6 +4,7 @@ hooks = [
   { id = "ruff-format", name = "ruff format", language = "system", entry = "uv run ruff format --check src tests evals", pass_filenames = false },
   { id = "ruff-check", name = "ruff check", language = "system", entry = "uv run ruff check src tests evals", pass_filenames = false },
   { id = "ty", name = "ty", language = "system", entry = "uv run ty check", pass_filenames = false },
+  { id = "skill-evals", name = "skill evals", language = "system", entry = "uv run python evals/run_evals.py --min-rank1 80", pass_filenames = false },
   { id = "pytest", name = "pytest", language = "system", entry = "uv run pytest", pass_filenames = false },
   { id = "smoke-test", name = "smoke test", language = "system", entry = "sh tests/smoke-test", pass_filenames = false },
   { id = "smoke-test-self-host", name = "self-host smoke test", language = "system", entry = "sh tests/smoke-test-self-host", pass_filenames = false },

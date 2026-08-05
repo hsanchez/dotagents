@@ -1,0 +1,7 @@
+2026-07-01T10:00:00Z INFO session started
+2026-07-01T10:01:00Z INFO token refresh succeeded
+2026-07-01T10:01:01Z DEBUG retrying checkout request
+2026-07-01T10:01:01Z ERROR checkout returned 401 stale bearer token
+2026-07-01T10:01:02Z DEBUG request_id=0001 retry=1
+2026-07-01T10:01:03Z DEBUG request_id=0001 retry=2
+2026-07-01T10:01:04Z ERROR request_id=0001 exhausted retries

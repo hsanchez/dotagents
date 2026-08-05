@@ -1,0 +1,29 @@
+{
+  "skill_name": "dotagents-discovery",
+  "trigger": {
+    "positive": [
+      { "prompt": "Check which dotagents-managed skill applies before starting this task.", "top_k": 3 },
+      { "prompt": "Discover the skills installed under .agents and invoke the matching one.", "top_k": 3 },
+      { "prompt": "Do not claim a skill is missing until you inspect the managed runtime.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Are you on? Run the repository readiness and synchronization check.", "owner": "startup" },
+      { "prompt": "This implementation request is ambiguous; ask me the minimum required questions.", "owner": "clarify" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "In dotagents-discovery/, determine which managed skill handles preparing a session handoff, read it completely, and report the first required action. Do not use the decoy package skill.",
+      "expected_output": "The managed .agents/skills directory is inspected, handoff is selected from its description, its SKILL.md is read, and the first action is reported from that file",
+      "files": ["dotagents-discovery"],
+      "expectations": [
+        "The agent inspects dotagents-discovery/.agents/skills before selecting a skill",
+        "The managed handoff skill is selected rather than the package-skills decoy",
+        "The full managed handoff SKILL.md is read before the workflow is described",
+        "The response identifies collecting repository branch and commit context as the first required action"
+      ]
+    }
+  ]
+}

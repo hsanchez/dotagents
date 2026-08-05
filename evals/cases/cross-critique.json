@@ -1,0 +1,29 @@
+{
+  "skill_name": "cross-critique",
+  "trigger": {
+    "positive": [
+      { "prompt": "The independent proposals disagree; run a cross-critique round before synthesizing.", "top_k": 3 },
+      { "prompt": "Circulate each architecture proposal to the other authors for pros and cons.", "top_k": 3 },
+      { "prompt": "Have the original reviewers critique the competing recommendations and revise their own views.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Assemble several models to independently investigate this decision for the first time.", "owner": "council" },
+      { "prompt": "Delegate a broad codebase investigation and return only the distilled evidence.", "owner": "research" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "The independent proposals and author mapping are in cross-critique/. Prepare and run the cross-critique protocol, then synthesize the decision.",
+      "expected_output": "Each original author receives every competing proposal but not their own, returns structured pros, cons, and a revised recommendation, followed by an evidence-weighted synthesis",
+      "files": ["cross-critique"],
+      "expectations": [
+        "The first-round proposals are treated as already complete and independent rather than regenerated",
+        "Each original author receives all competing proposals and does not receive their own proposal",
+        "Each critique requests strengths, weaknesses, and whether the author revises their recommendation",
+        "The final synthesis weighs evidence rather than counting votes and preserves remaining disagreement"
+      ]
+    }
+  ]
+}
