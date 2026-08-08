@@ -1,5 +1,6 @@
 import json
 import math
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -156,6 +157,32 @@ def test_parse_grading_accepts_fenced_valid_json() -> None:
   assert grading["summary"]["passed"] == 1
 
 
+def test_parse_grading_skips_unrelated_braces_around_valid_json() -> None:
+  raw = """prefix {"note":"not grading"}
+```json
+{"expectations":[],"summary":{"passed":0,"failed":0,"total":0,"pass_rate":100}}
+```
+suffix {not json}
+"""
+
+  grading = parse_grading(raw)
+
+  assert grading is not None
+  assert grading["summary"]["total"] == 0
+
+
+def test_parse_grading_uses_last_shape_valid_json_object() -> None:
+  raw = """{"expectations":[],"summary":{"passed":0,"total":0}}
+{"expectations":[{"text":"Found bug","passed":true,"evidence":"line 1"}],
+"summary":{"passed":1,"failed":0,"total":1,"pass_rate":100}}"""
+
+  grading = parse_grading(raw)
+
+  assert grading is not None
+  assert grading["summary"]["passed"] == 1
+  assert grading["summary"]["total"] == 1
+
+
 @pytest.mark.parametrize(
   "raw",
   [
@@ -192,7 +219,47 @@ def test_materialize_workspace_handles_nested_file_listed_before_its_directory(
 
   workspace = materialize_workspace({"files": ["audit/pricing.py", "audit"]}, fixtures_dir)
 
-  assert (workspace / "audit" / "pricing.py").is_file()
+  try:
+    assert (workspace / "audit" / "pricing.py").is_file()
+  finally:
+    shutil.rmtree(workspace)
+
+
+def test_materialize_workspace_applies_multiple_patches_in_path_order(tmp_path: Path) -> None:
+  fixtures_dir = tmp_path / "fixtures"
+  (fixtures_dir / "state.txt").parent.mkdir(parents=True)
+  (fixtures_dir / "state.txt").write_text("zero\n", encoding="utf-8")
+  first_setup = fixtures_dir / "a" / ".eval"
+  second_setup = fixtures_dir / "b" / ".eval"
+  first_setup.mkdir(parents=True)
+  second_setup.mkdir(parents=True)
+  first_setup.joinpath("working-tree.patch").write_text(
+    """diff --git a/state.txt b/state.txt
+--- a/state.txt
++++ b/state.txt
+@@ -1 +1 @@
+-zero
++one
+""",
+    encoding="utf-8",
+  )
+  second_setup.joinpath("working-tree.patch").write_text(
+    """diff --git a/state.txt b/state.txt
+--- a/state.txt
++++ b/state.txt
+@@ -1 +1 @@
+-one
++two
+""",
+    encoding="utf-8",
+  )
+
+  workspace = materialize_workspace({"files": ["b", "state.txt", "a"]}, fixtures_dir)
+
+  try:
+    assert (workspace / "state.txt").read_text(encoding="utf-8") == "two\n"
+  finally:
+    shutil.rmtree(workspace)
 
 
 def test_subprocess_env_excludes_unlisted_variables(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,11 +307,12 @@ def test_run_behavioral_removes_workspace_after_run(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   assets, cases_dir = _write_dialogue_skill_and_case(tmp_path)
-  captured: dict[str, Path] = {}
+  captured_workspaces: list[Path] = []
+  workspace_existence: list[bool] = []
 
   def fake_executor(skill_markdown: str, prompt: str, workspace: Path, allowed_tools: str) -> str:
-    captured["workspace"] = workspace
-    assert workspace.exists()
+    captured_workspaces.append(workspace)
+    workspace_existence.append(workspace.exists())
     return "trace"
 
   monkeypatch.setitem(PROVIDER_EXECUTORS, "claude", fake_executor)
@@ -268,7 +336,41 @@ def test_run_behavioral_removes_workspace_after_run(
   )
 
   assert exit_code == 0
-  assert not captured["workspace"].exists()
+  assert workspace_existence == [True]
+  assert not captured_workspaces[0].exists()
+
+
+def test_run_behavioral_reports_fixture_error_and_removes_partial_workspace(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+  assets, cases_dir = _write_dialogue_skill_and_case(tmp_path)
+  case_path = cases_dir / "clarify.json"
+  case_data = json.loads(case_path.read_text(encoding="utf-8"))
+  case_data["evals"][0]["kind"] = "execution"
+  case_data["evals"][0]["files"] = ["missing-fixture"]
+  case_path.write_text(json.dumps(case_data), encoding="utf-8")
+  partial_workspace = tmp_path / "partial-workspace"
+
+  def fake_mkdtemp(prefix: str) -> str:
+    partial_workspace.mkdir()
+    return str(partial_workspace)
+
+  monkeypatch.setattr("evals.run_evals.tempfile.mkdtemp", fake_mkdtemp)
+  monkeypatch.setattr("evals.run_evals._provider_unavailable_reason", lambda provider: None)
+
+  exit_code = run_behavioral(
+    "clarify",
+    ("claude",),
+    False,
+    assets,
+    cases_dir,
+    tmp_path / "fixtures",
+    tmp_path / "results",
+  )
+
+  assert exit_code == 1
+  assert "fixture listed in files[] not found" in capsys.readouterr().err
+  assert not partial_workspace.exists()
 
 
 def test_run_behavioral_keeps_workspace_when_requested(
@@ -325,6 +427,36 @@ def test_claude_executor_preserves_native_tool_scope(
   assert command[command.index("--allowedTools") + 1] == "Read,Bash(uv run *)"
   assert "skill body" in command[command.index("--append-system-prompt") + 1]
   assert captured["input"] == "user prompt"
+
+
+def test_claude_grader_disables_tools_and_uses_throwaway_workspace(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  captured: dict[str, Any] = {}
+
+  def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    captured["command"] = command
+    captured.update(kwargs)
+    captured["workspace_existed"] = kwargs["cwd"].exists()
+    return subprocess.CompletedProcess(command, 0, stdout="grading", stderr="")
+
+  monkeypatch.setattr("evals.run_evals.subprocess.run", fake_run)
+
+  assert _run_claude_grader("grade this") == "grading"
+
+  command = captured["command"]
+  workspace = captured["cwd"]
+  assert command[command.index("--permission-mode") + 1] == "plan"
+  assert "--safe-mode" in command
+  assert "--disable-slash-commands" in command
+  denied_tools = command[command.index("--disallowedTools") + 1].split(",")
+  assert {"Read", "Glob", "Grep", "Edit", "Write", "Bash", "WebFetch", "WebSearch", "Task"} <= set(
+    denied_tools
+  )
+  assert "--no-session-persistence" in command
+  assert captured["workspace_existed"] is True
+  assert workspace is not None
+  assert not workspace.exists()
 
 
 @pytest.mark.parametrize(

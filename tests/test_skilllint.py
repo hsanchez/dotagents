@@ -52,10 +52,15 @@ def test_lint_skill_content_flags_missing_frontmatter() -> None:
   assert not result.ok
 
 
-def test_lint_skill_content_flags_name_mismatch_and_bad_directory_case() -> None:
+def test_lint_skill_content_flags_name_mismatch() -> None:
   content = valid_skill_markdown("wrong-name")
+  result = lint_skill_content("foo-bar", content, {"foo-bar"})
+  assert "frontmatter name 'wrong-name' does not match directory name 'foo-bar'" in result.errors
+
+
+def test_lint_skill_content_flags_bad_directory_case() -> None:
+  content = valid_skill_markdown("Foo_Bar")
   result = lint_skill_content("Foo_Bar", content, {"foo-bar"})
-  assert "frontmatter name 'wrong-name' does not match directory name 'Foo_Bar'" in result.errors
   assert "directory name 'Foo_Bar' is not lowercase-hyphen-separated" in result.errors
 
 

@@ -81,6 +81,10 @@ What is actually contained today, for the one provider that runs:
   unless `--keep-workspace` is requested.
 - **`claude`'s default tool set excludes Bash, WebFetch, and WebSearch.** A
   skill must declare its own scoped `allowed-tools` to get any of them back.
+- **The Claude grader runs in a separate empty workspace.** Safe mode disables
+  repository customizations, while plan mode and explicit denials block its
+  filesystem, shell, web, and subagent tools. The workspace is removed after
+  grading.
 - **`HOME` is still the real one** so `claude`'s login state works. A
   `Read`-only executor can still be instructed to read a `HOME`-relative
   file into its own trace, which then lands in `evals/results/` on this
@@ -123,9 +127,11 @@ written to provider-labelled files such as
 `evals/results/saga.eval-1.claude.grading.json` (gitignored). Traces are
 fenced as untrusted data in the grader prompt, and subprocess calls carry
 timeouts. `--provider` accepts any key from `agents.toml`
-(`claude`/`codex`/`copilot`/`agy`/`gemini`) at the CLI level, but real
-execution is currently gated to `claude` only -- see the security section
-above. A missing requested CLI fails clearly with no fallback.
+(`claude`/`codex`/`copilot`/`agy`/`gemini`) at the CLI level. `gemini` is
+registered so its command plan can be inspected with `--dry-run`; live Gemini
+execution fails with a compatibility-verification error. Real execution is
+currently gated to `claude` only -- see the security section above. A missing
+requested CLI fails clearly with no fallback.
 
 ## Eval case format
 

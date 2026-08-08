@@ -41,6 +41,9 @@ GRADER_TIMEOUT_SECONDS = 5 * 60
 # possible via its own allowed-tools -- the harness no longer grants it by
 # default.
 DEFAULT_EXECUTOR_TOOLS = "Read,Glob,Grep,Edit,Write"
+CLAUDE_GRADER_DISALLOWED_TOOLS = (
+  "Read,Glob,Grep,Edit,Write,NotebookEdit,Bash,WebFetch,WebSearch,Task,TaskOutput,TaskStop"
+)
 
 # Environment variables passed through to the Tier-3 executor and grader
 # subprocesses. Both consume untrusted content (fixtures/case files for the
@@ -635,36 +638,40 @@ def materialize_workspace(eval_case: dict[str, Any], fixtures_dir: Path) -> Path
     EvalRunnerError: a `git` command fails.
   """
   workspace = Path(tempfile.mkdtemp(prefix="dotagents-eval-"))
-  eval_setup_dirs: set[Path] = set()
-  for relative in eval_case.get("files", []):
-    source = resolve_fixture_path(fixtures_dir, relative)
-    if not source.exists():
-      raise EvalCaseError(f"fixture listed in files[] not found: evals/fixtures/{relative}")
-    dest = resolve_fixture_path(workspace, relative)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if source.is_dir():
-      shutil.copytree(source, dest, dirs_exist_ok=True)
-    else:
-      shutil.copy2(source, dest)
-    fixture_root = dest if dest.is_dir() else dest.parent
-    eval_setup_dirs.add(fixture_root / ".eval")
+  try:
+    eval_setup_dirs: set[Path] = set()
+    for relative in eval_case.get("files", []):
+      source = resolve_fixture_path(fixtures_dir, relative)
+      if not source.exists():
+        raise EvalCaseError(f"fixture listed in files[] not found: evals/fixtures/{relative}")
+      dest = resolve_fixture_path(workspace, relative)
+      dest.parent.mkdir(parents=True, exist_ok=True)
+      if source.is_dir():
+        shutil.copytree(source, dest, dirs_exist_ok=True)
+      else:
+        shutil.copy2(source, dest)
+      fixture_root = dest if dest.is_dir() else dest.parent
+      eval_setup_dirs.add(fixture_root / ".eval")
 
-  working_tree_patches: list[str] = []
-  for setup_dir in eval_setup_dirs:
-    patch_file = setup_dir / "working-tree.patch"
-    if patch_file.is_file():
-      working_tree_patches.append(patch_file.read_text(encoding="utf-8"))
-    if setup_dir.is_dir():
-      shutil.rmtree(setup_dir)
+    working_tree_patches: list[str] = []
+    for setup_dir in sorted(eval_setup_dirs, key=lambda path: path.as_posix()):
+      patch_file = setup_dir / "working-tree.patch"
+      if patch_file.is_file():
+        working_tree_patches.append(patch_file.read_text(encoding="utf-8"))
+      if setup_dir.is_dir():
+        shutil.rmtree(setup_dir)
 
-  _run_git(["init", "--quiet"], workspace)
-  _run_git(["config", "core.autocrlf", "false"], workspace)
-  _run_git(["config", "user.name", "Skill Eval"], workspace)
-  _run_git(["config", "user.email", "skill-eval@example.invalid"], workspace)
-  _run_git(["add", "--all"], workspace)
-  _run_git(["commit", "--quiet", "-m", "fixture baseline"], workspace)
-  for patch in working_tree_patches:
-    _run_git(["apply", "--whitespace=nowarn", "-"], workspace, input_text=patch)
+    _run_git(["init", "--quiet"], workspace)
+    _run_git(["config", "core.autocrlf", "false"], workspace)
+    _run_git(["config", "user.name", "Skill Eval"], workspace)
+    _run_git(["config", "user.email", "skill-eval@example.invalid"], workspace)
+    _run_git(["add", "--all"], workspace)
+    _run_git(["commit", "--quiet", "-m", "fixture baseline"], workspace)
+    for patch in working_tree_patches:
+      _run_git(["apply", "--whitespace=nowarn", "-"], workspace, input_text=patch)
+  except EvalCaseError, EvalRunnerError, OSError:
+    shutil.rmtree(workspace, ignore_errors=True)
+    raise
 
   return workspace
 
@@ -703,33 +710,37 @@ def executor_allowed_tools(skill_frontmatter: dict[str, str]) -> str:
   return ",".join(_split_tool_list(raw))
 
 
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
-
-
 def parse_grading(raw: str) -> dict[str, Any] | None:
   """Grader output may arrive fenced; extract the JSON object and validate shape."""
-  match = _JSON_OBJECT.search(raw)
-  if not match:
-    return None
-  try:
-    grading = json.loads(match.group(0))
-  except json.JSONDecodeError:
-    return None
-  expectations = grading.get("expectations")
-  summary = grading.get("summary")
-  shape_ok = (
-    isinstance(expectations, list)
-    and all(
-      isinstance(item, dict)
-      and isinstance(item.get("text"), str)
-      and isinstance(item.get("passed"), bool)
-      for item in expectations
+  decoder = json.JSONDecoder()
+  grading: dict[str, Any] | None = None
+  search_start = 0
+  while (start := raw.find("{", search_start)) >= 0:
+    try:
+      candidate, end = decoder.raw_decode(raw, start)
+    except json.JSONDecodeError:
+      search_start = start + 1
+      continue
+    search_start = end
+    if not isinstance(candidate, dict):
+      continue
+    expectations = candidate.get("expectations")
+    summary = candidate.get("summary")
+    shape_ok = (
+      isinstance(expectations, list)
+      and all(
+        isinstance(item, dict)
+        and isinstance(item.get("text"), str)
+        and isinstance(item.get("passed"), bool)
+        for item in expectations
+      )
+      and isinstance(summary, dict)
+      and isinstance(summary.get("passed"), int)
+      and isinstance(summary.get("total"), int)
     )
-    and isinstance(summary, dict)
-    and isinstance(summary.get("passed"), int)
-    and isinstance(summary.get("total"), int)
-  )
-  return grading if shape_ok else None
+    if shape_ok:
+      grading = candidate
+  return grading
 
 
 def _run_provider_command(
@@ -792,9 +803,25 @@ def _run_claude_executor(
 
 
 def _run_claude_grader(prompt: str) -> str:
-  return _run_provider_command(
-    "claude", "grader", ["claude", "-p"], prompt, None, GRADER_TIMEOUT_SECONDS
-  )
+  with tempfile.TemporaryDirectory(prefix="dotagents-claude-grader-") as workspace:
+    return _run_provider_command(
+      "claude",
+      "grader",
+      [
+        "claude",
+        "-p",
+        "--safe-mode",
+        "--disable-slash-commands",
+        "--permission-mode",
+        "plan",
+        "--disallowedTools",
+        CLAUDE_GRADER_DISALLOWED_TOOLS,
+        "--no-session-persistence",
+      ],
+      prompt,
+      Path(workspace),
+      GRADER_TIMEOUT_SECONDS,
+    )
 
 
 def _run_codex_executor(
@@ -1101,12 +1128,13 @@ def run_behavioral(
         )
         continue
 
-      workspace = (
-        Path(tempfile.mkdtemp(prefix=f"dotagents-{provider}-dialogue-eval-"))
-        if kind == "dialogue"
-        else materialize_workspace(eval_case, fixtures_dir)
-      )
+      workspace: Path | None = None
       try:
+        workspace = (
+          Path(tempfile.mkdtemp(prefix=f"dotagents-{provider}-dialogue-eval-"))
+          if kind == "dialogue"
+          else materialize_workspace(eval_case, fixtures_dir)
+        )
         print(f"{provider} eval {eval_id}: executing {kind} eval in {workspace} ...")
         trace = PROVIDER_EXECUTORS[provider](
           skill_markdown, eval_case["prompt"], workspace, allowed_tools
@@ -1135,11 +1163,11 @@ def run_behavioral(
         )
         if summary["passed"] < summary["total"]:
           failures += 1
-      except EvalRunnerError as exc:
+      except (EvalCaseError, EvalRunnerError, KeyError) as exc:
         print(f"  x  {provider} eval {eval_id}: {exc}", file=sys.stderr)
         failures += 1
       finally:
-        if not keep_workspace:
+        if workspace is not None and not keep_workspace:
           shutil.rmtree(workspace, ignore_errors=True)
 
   return 1 if failures else 0
