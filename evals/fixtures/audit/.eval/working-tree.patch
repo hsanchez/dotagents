@@ -1,0 +1,10 @@
+diff --git a/audit/cart.py b/audit/cart.py
+index 7a8b356..29491d5 100644
+--- a/audit/cart.py
++++ b/audit/cart.py
+@@ -1,4 +1,4 @@
+ def cart_total(prices: list[int]) -> int:
+     if not prices:
+-        return 0
++        return 1
+     return sum(prices)

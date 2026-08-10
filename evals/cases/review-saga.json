@@ -1,0 +1,30 @@
+{
+  "skill_name": "review-saga",
+  "trigger": {
+    "positive": [
+      { "prompt": "Review this branch as a saga with separate correctness and test passes.", "top_k": 3 },
+      { "prompt": "Run a review saga for pull request 91 and synthesize the scoped passes.", "top_k": 3 },
+      { "prompt": "Saga this branch review without changing code or posting comments.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Execute the implementation checklist in PLAN.md as a saga.", "owner": "saga" },
+      { "prompt": "Review an external PR and produce exact line-pinned review.json comments.", "owner": "review-pr" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Run a review saga over the replayed branch evidence in review-saga/BRANCH.md, review-saga/DIFF.md, the source, and tests. Remote PR context is unavailable. Use orientation, correctness, and test-coverage passes, synthesize only supplied evidence, remain read-only, and do not run commands or launch subagents.",
+      "expected_output": "A single review plan tracks scoped passes through verified states and produces a deduplicated evidence-backed report that states the limits of the replayed evidence",
+      "files": ["review-saga"],
+      "expectations": [
+        "The agent states one review target and creates a compact plan with orientation before critique",
+        "Correctness and test-coverage passes cite exact evidence from the supplied source, diff, or tests",
+        "The final report deduplicates overlapping findings and distinguishes verified work from residual risk",
+        "Unavailable remote PR context is reported as a limitation rather than fetched or silently invented",
+        "No fixture file is modified and no command, subagent, comment, commit, push, or external request is attempted or claimed"
+      ]
+    }
+  ]
+}

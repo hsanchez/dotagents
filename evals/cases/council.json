@@ -1,0 +1,28 @@
+{
+  "skill_name": "council",
+  "trigger": {
+    "positive": [
+      { "prompt": "Convene a council of different models to compare these database designs.", "top_k": 3 },
+      { "prompt": "I want independent second opinions and a synthesized recommendation on this tradeoff.", "top_k": 3 },
+      { "prompt": "Have a red-team and an implementation-minded agent evaluate the same rollout decision.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "The council proposals disagree; circulate them for a second round of critique.", "owner": "cross-critique" },
+      { "prompt": "Research where this API is used across the repository and summarize the evidence.", "owner": "research" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "dialogue",
+      "prompt": "Use a council to decide whether this service should use SQLite or Postgres. Show me the proposed council before you launch anything.",
+      "expected_output": "A shared decision question, decision criteria, and model-diverse member roster are proposed without launching any member before approval",
+      "expectations": [
+        "The response frames one shared decision question and concrete comparison criteria",
+        "The proposed members prioritize model diversity and have complementary perspectives",
+        "Every proposed member would receive the same question and criteria",
+        "No subagent or external model is launched before the user approves the roster"
+      ]
+    }
+  ]
+}

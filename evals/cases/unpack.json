@@ -1,0 +1,28 @@
+{
+  "skill_name": "unpack",
+  "trigger": {
+    "positive": [
+      { "prompt": "Let's unpack this product idea before writing an implementation plan.", "top_k": 3 },
+      { "prompt": "Walk through this feature with me one decision at a time so we're aligned.", "top_k": 3 },
+      { "prompt": "Clarification didn't resolve our disagreement; interview me and reflect a design brief.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "One detail is missing from this ticket; ask the minimum questions needed to proceed.", "owner": "clarify" },
+      { "prompt": "The plan is approved; execute its checklist as a saga.", "owner": "saga" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "dialogue",
+      "prompt": "Let's unpack an idea for offline mode before you plan it. I know users should keep reading cached projects, but editing, conflict handling, and sync behavior are unresolved.",
+      "expected_output": "The agent starts an iterative one-question-at-a-time interview with a recommended default, tracks alignment, and does not draft a plan before an explicitly confirmed Design Brief",
+      "expectations": [
+        "The response asks exactly one decision-dependent question rather than presenting a questionnaire",
+        "The question includes a clear recommended default and explains the material tradeoff concisely",
+        "The agent carries the known read-only requirement forward instead of asking for it again",
+        "No implementation plan or final Design Brief is claimed before the remaining decisions are answered and explicitly confirmed"
+      ]
+    }
+  ]
+}

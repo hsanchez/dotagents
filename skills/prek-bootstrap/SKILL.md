@@ -1,6 +1,7 @@
 ---
 name: prek-bootstrap
 description: Install prek as dev dependency and scaffold a minimal prek.toml so `uv run prek run --all-files` works. Run on demand when prek or its config is missing (dotagents doctor surfaces this).
+allowed-tools: Read Glob Grep Write Bash(command -v prek) Bash(uv add --dev prek) Bash(uv run prek *)
 ---
 
 # prek-bootstrap

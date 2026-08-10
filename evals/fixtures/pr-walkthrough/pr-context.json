@@ -1,0 +1,23 @@
+{
+  "source": "replayed-pr-evidence",
+  "remote_available": false,
+  "title": "Add checkout discount calculation",
+  "intent": "Expose a small checkout function that subtracts a discount without returning a negative total.",
+  "base_ref": "main",
+  "head_ref": "feature/checkout-discounts",
+  "changed_files": [
+    {
+      "path": "src/checkout.py",
+      "role": "Calculates the discounted checkout total and clamps it at zero."
+    },
+    {
+      "path": "tests/test_checkout.py",
+      "role": "Covers the primary discount calculation."
+    }
+  ],
+  "user_flow": [
+    "The caller supplies a total and discount.",
+    "checkout subtracts the discount.",
+    "The caller receives a non-negative total."
+  ]
+}

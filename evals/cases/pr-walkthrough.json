@@ -1,0 +1,29 @@
+{
+  "skill_name": "pr-walkthrough",
+  "trigger": {
+    "positive": [
+      { "prompt": "Build a zoomable visual walkthrough of this pull request.", "top_k": 3 },
+      { "prompt": "Give reviewers an interactive D3 map of the changed system and data flow.", "top_k": 3 },
+      { "prompt": "Create a four-view canvas showing this PR's dependencies and user actions.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Review this external pull request and report correctness findings on exact lines.", "owner": "review-pr" },
+      { "prompt": "Prepare this branch and open a draft pull request.", "owner": "create-pr" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Use the replayed evidence in pr-walkthrough/pr-context.json, the current source and tests, and the captured real-runtime output in pr-walkthrough/walkthrough-template.html. Populate that template for this tiny change and write `.scratch/pr-walkthrough/index.html`. Do not run commands, fetch remote PR data, or claim static or browser validation was performed.",
+      "expected_output": "A self-contained local walkthrough artifact presents four evidence-grounded views and is handed off with its bounded validation status stated honestly",
+      "files": ["pr-walkthrough"],
+      "expectations": [
+        "The output exists at .scratch/pr-walkthrough/index.html and uses the pinned D3 7.9.0 URL",
+        "The populated data model contains exactly the system-overview, data-flow, code-dependency, and user-action views with separate tours grounded in the supplied checkout change",
+        "The walkthrough stays compact for the two-file change and does not invent remote comments, links, or validation evidence",
+        "The response gives a file URL and explicitly states that static validation and browser rendering were not run in this bounded scenario"
+      ]
+    }
+  ]
+}

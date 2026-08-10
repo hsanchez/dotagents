@@ -1,0 +1,30 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "deny": ["Read(./secrets/**)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./tools/check-edit"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./tools/record-write"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "skill_name": "prek-bootstrap",
+  "trigger": {
+    "positive": [
+      { "prompt": "dotagents doctor says prek is missing here -- can you set it up?", "top_k": 3 },
+      { "prompt": "This repo doesn't have the pre-commit toolchain wired up yet. Bootstrap it.", "top_k": 3 },
+      { "prompt": "Get `uv run prek run --all-files` working in this project; it's not configured.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Give me a zoomable visual map of this PR's code dependencies and data flow.", "owner": "pr-walkthrough" },
+      { "prompt": "Run the plan in PLAN.md as a saga.", "owner": "saga" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The project in prek-bootstrap/ is missing its prek toolchain -- dotagents doctor reports 'prek: missing ...'. Bootstrap it.",
+      "expected_output": "prek installed as a dev dependency, a prek.toml scaffolded, the git hook registered, and `uv run prek run --all-files` run to verify the toolchain actually works",
+      "files": ["prek-bootstrap"],
+      "expectations": [
+        "prek is added as a dev dependency via `uv add --dev prek` rather than installed some other way",
+        "A prek.toml is scaffolded with hooks appropriate for the project",
+        "The git hook is registered via `uv run prek install`",
+        "`uv run prek run --all-files` is run at the end and passes, verifying the toolchain actually works end-to-end"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "skill_name": "handoff",
+  "trigger": {
+    "positive": [
+      { "prompt": "Write a handoff so another agent can continue this work next session.", "top_k": 3 },
+      { "prompt": "Compact our conversation into a continuation document for a fresh agent.", "top_k": 3 },
+      { "prompt": "Capture the current branch state, failed approaches, and next steps in a handoff.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Load this handoff and tell me what changed before resuming the work.", "owner": "resume-handoff" },
+      { "prompt": "Are you ready? Refresh the repository rules and recent project context.", "owner": "startup" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Create a handoff for the session described in handoff/session-notes.md, focused on finishing the parser regression. Do not include the fake API key in the source notes.",
+      "expected_output": "A dense handoff document records repository state, task status, evidence, failed approaches, artifacts, and concrete next steps while redacting sensitive data",
+      "files": ["handoff"],
+      "expectations": [
+        "The handoff includes every required section from Context through Suggested Skills",
+        "Branch, commit, and repository name are derived from the fixture repository rather than invented",
+        "The fake credential from session-notes.md is omitted or explicitly redacted",
+        "The immediate next step is concrete and failed approaches are preserved so they are not repeated"
+      ]
+    }
+  ]
+}

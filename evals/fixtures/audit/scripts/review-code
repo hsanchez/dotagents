@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+printf '%s\n' 'Review the current uncommitted diff for correctness defects.'
+git diff -- cart.py

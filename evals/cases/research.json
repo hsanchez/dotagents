@@ -1,0 +1,29 @@
+{
+  "skill_name": "research",
+  "trigger": {
+    "positive": [
+      { "prompt": "Research the root cause of this failure across the repository and distill the evidence.", "top_k": 3 },
+      { "prompt": "Delegate a noisy codebase investigation so your context stays clean.", "top_k": 3 },
+      { "prompt": "Have a subagent trace where this API is used and return exact file references.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Ask several different models for independent recommendations on this architecture choice.", "owner": "council" },
+      { "prompt": "Circulate these competing proposals back to their authors for structured critique.", "owner": "cross-critique" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Research why checkout requests in research/ fail only after token refresh. Delegate the noisy investigation and return a distilled root cause with exact evidence; do not modify files.",
+      "expected_output": "One read-only research subagent investigates the fixture and returns a concise root cause supported by exact paths and symbols, without dumping the noisy log",
+      "files": ["research"],
+      "expectations": [
+        "The investigation is delegated to one read-only subagent because the question is coherent rather than artificially parallelized",
+        "The final answer identifies the stale Authorization header cached in research/client.py as the root cause",
+        "Evidence cites the refresh path and request path with exact files or symbols",
+        "The response is distilled and does not reproduce the long log or modify repository files"
+      ]
+    }
+  ]
+}

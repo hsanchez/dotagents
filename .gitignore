@@ -19,6 +19,10 @@ MEMORY_LOG.md
 .env
 .env.local
 
-PLAN.md
+/PLAN.md
 .agents.bak/
 *.bak
+
+# Tier-3 eval grading output -- regenerated per run, not committed
+evals/results/*
+!evals/results/.gitkeep

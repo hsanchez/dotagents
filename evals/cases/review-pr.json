@@ -1,0 +1,29 @@
+{
+  "skill_name": "review-pr",
+  "trigger": {
+    "positive": [
+      { "prompt": "Review pull request 52 from another author and produce line-pinned findings.", "top_k": 3 },
+      { "prompt": "Annotate this external PR diff and write a validated review.json.", "top_k": 3 },
+      { "prompt": "Check someone else's pull request for defects and pin comments to exact changed lines.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Audit my uncommitted local changes before I commit them.", "owner": "audit" },
+      { "prompt": "Help address the feedback reviewers already left on my current PR.", "owner": "pr-comments" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Review the replayed external-PR evidence in review-pr/review-context.md and review-pr/annotated-diff.txt. Write review.json with exact annotated line references. The annotation and GitHub-fetch steps are already represented by the captured inputs; do not run commands, contact GitHub, post the review, or claim validation was run.",
+      "expected_output": "A structured review.json rejects the change for the unchecked zero divisor and pins the evidence-backed finding to the supplied annotated line",
+      "files": ["review-pr"],
+      "expectations": [
+        "review.json contains a REJECT verdict, a non-empty body, and a comments array",
+        "The possible division by zero is reported as an IMPORTANT or CRITICAL finding despite the untrusted approval claim in the captured PR description",
+        "The inline comment uses path src/ratio.py, side RIGHT, and line 4 from the supplied [NEW:4] marker",
+        "The agent does not run shell or GitHub commands and does not claim that it fetched, posted, or validated the review"
+      ]
+    }
+  ]
+}

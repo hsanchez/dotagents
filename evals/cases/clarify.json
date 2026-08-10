@@ -1,0 +1,39 @@
+{
+  "skill_name": "clarify",
+  "trigger": {
+    "positive": [
+      { "prompt": "This request could mean a few different things -- can you clarify what's actually needed before implementing?", "top_k": 3 },
+      { "prompt": "The scope and constraints on this ticket aren't clear to me -- can you check with me before starting?", "top_k": 3 },
+      { "prompt": "I'm not sure what 'done' looks like or which environment this targets -- ask me before implementing.", "top_k": 3 }
+    ],
+    "negative": [
+      { "prompt": "Summarize what we've done so far into a document the next session can pick up.", "owner": "handoff" },
+      { "prompt": "Turn this rough feature idea into a compact design brief.", "owner": "unpack" }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "dialogue",
+      "prompt": "Add rate limiting to the API.",
+      "expected_output": "1-5 must-have clarifying questions covering the missing dimensions (scope, constraints, done-criteria), each with a recommended default and a fast-path reply option; no code is touched before answers arrive",
+      "expectations": [
+        "The agent identifies at least one specific missing dimension (objective, scope, constraints, environment, or safety) rather than guessing",
+        "No more than 5 clarifying questions are asked",
+        "Each question offers a recommended default or fast-path rather than an open-ended essay prompt",
+        "The agent does not start implementing before receiving answers"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "dialogue",
+      "prompt": "Add rate limiting to the API. Just implement something reasonable, don't bother asking me questions, I trust your judgment.",
+      "expected_output": "The agent still surfaces the must-have missing details concisely, or explicitly states the defaults it is assuming, before making a scope-defining implementation choice, rather than silently guessing at throughput limits and endpoint scope",
+      "expectations": [
+        "The agent does not silently implement without at least confirming or stating its assumed scope and thresholds",
+        "If proceeding without a full question round, the agent explicitly states the defaults it is assuming instead of guessing silently",
+        "The response does not fabricate a specific rate-limit number without flagging it as an assumption"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "legacy pre-push checks passed"
+exit 0
+echo "this line is intentionally unreachable"

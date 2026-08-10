@@ -1,0 +1,10 @@
+diff --git a/src/ratio.py b/src/ratio.py
+index 1111111..2222222 100644
+--- a/src/ratio.py
++++ b/src/ratio.py
+@@ -1,2 +1,4 @@
+[OLD:1,NEW:1] def ratio(total: int, count: int) -> float:
+[OLD:2]-    return 0.0
+[NEW:2]+    if total == 0:
+[NEW:3]+        return 0.0
+[NEW:4]+    return total / count
