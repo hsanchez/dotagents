@@ -994,30 +994,11 @@ PROVIDER_GRADERS: dict[str, Grader] = {
 }
 
 
-# A skill's `allowed-tools` frontmatter (the mechanism the rest of this
-# module relies on to keep Tier 3 from granting an untrusted eval unscoped
-# shell/network access -- see DEFAULT_EXECUTOR_TOOLS) is only actually
-# enforced by the claude executor. codex's `workspace-write` sandbox still
-# permits full command execution; copilot's executor passes
-# `--allow-all-tools`, discarding the skill's scope even though copilot has
-# a real scoped equivalent (`--allow-tool='shell(...)'`) that isn't wired up;
-# agy has no scoped-tool mechanism to wire up at all. Until that's fixed,
-# gate them here rather than let `--provider codex` silently bypass the
-# scoping `--provider claude` enforces for the same eval.
-_PROVIDERS_WITHOUT_VERIFIED_SCOPING = frozenset({"codex", "copilot", "agy"})
-
-
 def _provider_unavailable_reason(provider: str) -> str | None:
-  if provider == "gemini":
-    return "Gemini compatibility CLI has not been live-verified for Tier 3"
-  if provider in _PROVIDERS_WITHOUT_VERIFIED_SCOPING:
-    return (
-      "this executor does not yet honor a skill's allowed-tools scoping "
-      "(see evals/README.md) -- only claude is verified safe for Tier 3 today"
-    )
-  if shutil.which(provider) is None:
-    return f'executable "{provider}" was not found on PATH'
-  return None
+  return (
+    "host-based Tier 3 execution is disabled until provider-independent "
+    "isolation is verified (see evals/README.md and issue #40); use --dry-run"
+  )
 
 
 def _grader_prompt(kind: str, expectations: list[str], trace: str) -> str:

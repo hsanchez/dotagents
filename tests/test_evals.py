@@ -601,22 +601,66 @@ def test_run_behavioral_requires_at_least_one_provider(
   assert "requires at least one provider" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("provider", ["codex", "copilot", "agy"])
-def test_provider_unavailable_reason_blocks_providers_without_verified_scoping(
-  provider: str,
-) -> None:
+@pytest.mark.parametrize("provider", ["claude", "codex", "copilot", "agy", "gemini"])
+def test_provider_unavailable_reason_blocks_host_execution(provider: str) -> None:
   reason = _provider_unavailable_reason(provider)
 
   assert reason is not None
-  assert "allowed-tools scoping" in reason
+  assert "provider-independent isolation" in reason
 
 
-def test_provider_unavailable_reason_allows_claude_when_present_on_path(
-  monkeypatch: pytest.MonkeyPatch,
+def test_run_behavioral_blocks_live_execution_before_provider_invocation(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-  monkeypatch.setattr("evals.run_evals.shutil.which", lambda name: "/usr/bin/claude")
+  assets, cases_dir = _write_dialogue_skill_and_case(tmp_path)
 
-  assert _provider_unavailable_reason("claude") is None
+  def unexpected_executor(
+    skill_markdown: str, prompt: str, workspace: Path, allowed_tools: str
+  ) -> str:
+    pytest.fail("live gate invoked the executor")
+
+  def unexpected_grader(prompt: str) -> str:
+    pytest.fail("live gate invoked the grader")
+
+  monkeypatch.setitem(PROVIDER_EXECUTORS, "claude", unexpected_executor)
+  monkeypatch.setitem(PROVIDER_GRADERS, "claude", unexpected_grader)
+  monkeypatch.setattr(
+    "evals.run_evals.tempfile.mkdtemp", lambda **kwargs: pytest.fail("live gate created workspace")
+  )
+
+  exit_code = run_behavioral(
+    "clarify",
+    ("claude",),
+    False,
+    assets,
+    cases_dir,
+    tmp_path / "fixtures",
+    tmp_path / "results",
+  )
+
+  assert exit_code == 1
+  assert "provider-independent isolation" in capsys.readouterr().err
+  assert not (tmp_path / "results").exists()
+
+
+def test_run_behavioral_keeps_dry_run_available_for_gated_provider(
+  tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+  assets, cases_dir = _write_dialogue_skill_and_case(tmp_path)
+
+  exit_code = run_behavioral(
+    "clarify",
+    ("claude",),
+    True,
+    assets,
+    cases_dir,
+    tmp_path / "fixtures",
+    tmp_path / "results",
+  )
+
+  assert exit_code == 0
+  assert "[dry-run] claude eval 1" in capsys.readouterr().out
+  assert not (tmp_path / "results").exists()
 
 
 def test_gemini_executor_reports_unverified_compatibility_provider(tmp_path: Path) -> None:

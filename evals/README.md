@@ -21,7 +21,7 @@ to this repository's skill catalog.
 | Tier | What it checks | Runs | Cost |
 |---|---|---|---|
 | 2. Trigger & routing | Positive prompts rank their skill top-k; negative prompts don't; no two descriptions near-collide | `uv run python evals/run_evals.py` | Free |
-| 3. Behavioral | A selected provider following the skill satisfies its `expectations[]` | `uv run python evals/run_evals.py --behavioral <skill> --provider <name>` | Tokens |
+| 3. Behavioral | Provider command plans today; live expectation grading after isolation | `uv run python evals/run_evals.py --behavioral <skill> --provider <name> --dry-run` | Free plan; live gated |
 
 Tier 2 is a lexical approximation of routing (stemmed TF-IDF over skill
 descriptions). It cannot judge semantics -- that is Tier 3's job -- but it
@@ -37,63 +37,29 @@ A Tier-2 failure usually means fix the description, not the eval.
 uv run python evals/run_evals.py
 uv run python evals/run_evals.py --min-rank1 80  # enforce a routing floor
 
-# Tier 3 -- one explicit provider executes and grades its own run.
-# claude is the only provider verified safe to run today -- see below.
-uv run python evals/run_evals.py --behavioral saga --provider claude
-
-# Print the plan without invoking a provider (works for any provider,
-# including the gated ones below -- it never executes anything)
+# Tier 3 -- print the plan without invoking a provider.
 uv run python evals/run_evals.py --behavioral saga \
-  --provider codex --dry-run
+  --provider claude --dry-run
 ```
 
-**Security: `--behavioral` executes untrusted content.** The executor runs
+**Security: live `--behavioral` execution runs untrusted content.** The executor runs
 the selected provider's agent CLI, driven directly by `evals/cases/*.json`
 prompts and `evals/fixtures/**` content. Never run Tier 3 against an
 unreviewed PR that touches those paths. Treat them like code that runs with
 your local provider login and host access.
 
-**Only `--provider claude` is verified safe to run today.** `codex`,
-`copilot`, and `agy` are implemented (`PROVIDER_EXECUTORS`/`PROVIDER_GRADERS`
-in `run_evals.py`) but real (non-dry-run) execution is blocked by
-`_provider_unavailable_reason`, because none of them actually honor a
-skill's `allowed-tools` scoping the way `claude` does:
+**No provider is currently approved for host-based live Tier 3.** Direct
+testing showed that a Claude process nested inside an active Claude session
+could execute tools excluded by both the executor allowlist and grader
+denylist. Standalone host execution has not established an equivalent
+containment boundary. `_provider_unavailable_reason` therefore blocks every
+non-dry-run provider before workspace creation or process invocation.
 
-- `copilot`'s executor passes `--allow-all-tools`, discarding the skill's
-  declared scope -- even though `copilot` has a real scoped equivalent
-  (`--allow-tool='shell(...)'`) that just isn't wired up yet.
-- `codex`'s `--sandbox workspace-write` still permits full command
-  execution; that mode sandboxes filesystem *writes*, not shell access.
-- `agy` has no scoped-tool flag to wire up at all.
-
-Wiring up `copilot`'s real scoping and confirming `codex`'s actual network
-posture would close this per-provider gap without touching containment
-architecture. A more fundamental fix -- real filesystem/network isolation
-regardless of which provider's own permission flags are used -- is tracked
-as separate follow-up work, not blocking this.
-
-What is actually contained today, for the one provider that runs:
-
-- **Environment is allowlisted**, not inherited wholesale -- `ANTHROPIC_API_KEY`
-  and any other ambient credential-shaped variable in your shell is not
-  passed through (`_SUBPROCESS_ENV_ALLOWLIST` in `run_evals.py`).
-- **Every eval gets a fresh throwaway workspace**, removed in `finally`
-  unless `--keep-workspace` is requested.
-- **`claude`'s default tool set excludes Bash, WebFetch, and WebSearch.** A
-  skill must declare its own scoped `allowed-tools` to get any of them back.
-- **The Claude grader runs in a separate empty workspace.** Safe mode disables
-  repository customizations, while plan mode and explicit denials block its
-  filesystem, shell, web, and subagent tools. The workspace is removed after
-  grading.
-- **`HOME` is still the real one** so `claude`'s login state works. A
-  `Read`-only executor can still be instructed to read a `HOME`-relative
-  file into its own trace, which then lands in `evals/results/` on this
-  machine -- a local confidentiality concern, not remote exfiltration, since
-  no default network- or shell-capable tool is left to send it anywhere.
-
-Tier 3 is a manual trusted-input test, not a security sandbox. It is never a
-normal CI requirement. Full isolation would require an optional external
-container or VM layer; dotagents does not require one for portability.
+The environment allowlist, throwaway workspaces, and provider permission
+flags remain defense-in-depth for a future isolated runner. They are not a
+security sandbox. Provider-independent isolation is tracked in #40;
+provider-native scoping work remains tracked in #39. Tier 3 dry-runs stay
+portable and require no external sandbox or provider login.
 
 Tier 3 supports two behavioral artifact kinds. `execution` is the default:
 each eval runs in a throwaway git repository, real project inputs from
@@ -122,16 +88,15 @@ the production hooks or mutate `.git` and `.claude`. Existing isolated tests
 cover production helper behavior separately. The preview is bounded behavioral
 evidence, while live installation remains `NOT RUN`.
 
-Each selected provider executes and grades its own trace; results are
+When live execution is re-enabled, each selected provider will execute and
+grade its own trace; results are
 written to provider-labelled files such as
 `evals/results/saga.eval-1.claude.grading.json` (gitignored). Traces are
 fenced as untrusted data in the grader prompt, and subprocess calls carry
 timeouts. `--provider` accepts any key from `agents.toml`
 (`claude`/`codex`/`copilot`/`agy`/`gemini`) at the CLI level. `gemini` is
-registered so its command plan can be inspected with `--dry-run`; live Gemini
-execution fails with a compatibility-verification error. Real execution is
-currently gated to `claude` only -- see the security section above. A missing
-requested CLI fails clearly with no fallback.
+registered so its command plan can be inspected with `--dry-run`. All real
+host-based execution is currently gated -- see the security section above.
 
 ## Eval case format
 
@@ -204,7 +169,7 @@ floor.
 
 Case coverage and live behavioral evidence are separate metrics. `dry-run`
 validates the provider command plan without invoking a model. Live Tier 3 is
-manual, trusted-input, Claude-only work and is reported per case after it runs.
+currently unavailable until a containment boundary is verified.
 
 | Skill | Tier 2 | Behavioral case | Artifact | Live Tier 3 |
 |---|---|---|---|---|
