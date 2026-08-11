@@ -3,6 +3,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parents[1]
 SOURCE_ROOT = REPO_ROOT / "skills"
 SYNCED_ROOT = REPO_ROOT / ".agents" / "skills"
+IGNORED_METADATA = frozenset({".DS_Store"})
 
 
 def test_synced_skills_match_their_source() -> None:
@@ -16,7 +17,7 @@ def test_synced_skills_match_their_source() -> None:
   missing_sources: list[str] = []
 
   for synced_path in SYNCED_ROOT.rglob("*"):
-    if not synced_path.is_file():
+    if not synced_path.is_file() or synced_path.name in IGNORED_METADATA:
       continue
     relative = synced_path.relative_to(SYNCED_ROOT)
     source_path = SOURCE_ROOT / relative

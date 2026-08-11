@@ -1,5 +1,8 @@
 # Authoring skills and presets
 
+Commands below assume a user-installed CLI. Prefix `dotagents` with `uv run`
+when dotagents is a project development dependency.
+
 Maintainers add a skill under `skills/<name>/` with a `SKILL.md` file. A
 packaged preset under `presets/<name>` contains one `skill <name>` line per
 included skill.
@@ -12,7 +15,7 @@ skill, preset, and conditional provider output.
 offending line. After changing selections, run:
 
 ```bash
-uv run dotagents sync
+dotagents sync
 ```
 
 The packaged `saga` and `review-saga` skills are opt-in workflows. See their

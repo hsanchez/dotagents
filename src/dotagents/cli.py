@@ -23,7 +23,7 @@ from dotagents.compiler import (
   write_compiled_skill,
 )
 from dotagents.doctor import doctor as run_doctor
-from dotagents.errors import DotagentsError
+from dotagents.errors import DotagentsError, invocation_guidance
 from dotagents.lockfile import AUTONOMY_LEVELS, read_lock
 from dotagents.manifest import load_manifest, selected_providers
 from dotagents.runtime import (
@@ -475,7 +475,7 @@ def _finish_compile(
 
 def print_compile_success(kind: str, output_skill: str) -> None:
   console.print(f"[green]Compiled {kind} skill: {output_skill}.[/green]")
-  console.print("next: uv run dotagents sync")
+  console.print(f"next: {invocation_guidance('sync')}")
 
 
 def print_compile_preview(compiled_skill: CompiledSkill) -> None:
@@ -486,7 +486,7 @@ def print_compile_preview(compiled_skill: CompiledSkill) -> None:
   console.print("would update .agents/build/manifest.json")
   for source in manifest.sources:
     console.print(f"source: {source.kind} {source.reference}")
-  console.print("next: uv run dotagents sync")
+  console.print(f"next: {invocation_guidance('sync')}")
 
 
 @compile_app.command("check")

@@ -1,5 +1,8 @@
 # GitHub skill compiler example
 
+Commands below assume a user-installed CLI. Prefix `dotagents` with `uv run`
+when dotagents is a project development dependency.
+
 This example vendors a skill directory from a GitHub repository into managed
 dotagents output.
 
@@ -16,7 +19,7 @@ Use a full 40-character commit SHA. Branches and tags are rejected because they
 can move.
 
 ```bash
-uv run dotagents compile skill github \
+dotagents compile skill github \
   --repo owner/repo \
   --path skills/review \
   --ref 0123456789abcdef0123456789abcdef01234567 \
@@ -27,7 +30,7 @@ uv run dotagents compile skill github \
 ## 2. Vendor the skill
 
 ```bash
-uv run dotagents compile skill github \
+dotagents compile skill github \
   --repo owner/repo \
   --path skills/review \
   --ref 0123456789abcdef0123456789abcdef01234567 \
@@ -46,7 +49,7 @@ cleanup path before this command is enabled there.
 ## 3. Sync runtime ownership
 
 ```bash
-uv run dotagents sync
+dotagents sync
 ```
 
 The compiled skill is now managed like other `.agents` output. `doctor` and

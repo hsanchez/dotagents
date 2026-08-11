@@ -25,24 +25,43 @@ truth and a managed runtime that keeps provider-facing configuration in sync.
 
 ## Installation
 
-dotagents is installed as a development dependency in the repository it
-manages:
+Choose who owns the CLI separately from where it writes the runtime:
+
+| Workflow | CLI source | Runtime target |
+| --- | --- | --- |
+| Global | User tool or checkout | `$HOME` via `--global` |
+| Project-managed | Repository development dependency | Current repository |
+| Standalone repository | User tool or checkout | Current repository or `-C PATH` |
+
+Install dotagents once as a user tool for global and standalone repository
+workflows:
+
+```bash
+uv tool install "dotagents @ git+https://github.com/hsanchez/dotagents.git"
+```
+
+Or pin dotagents as a development dependency of one repository:
 
 ```bash
 uv add --dev "dotagents @ git+https://github.com/hsanchez/dotagents.git"
 ```
 
 Requirements: Python 3.14+, [uv](https://docs.astral.sh/uv/), and Git.
+See [installation workflows](docs/installation.md) for upgrades, global scope,
+and the checkout bootstrap.
 
 ## Quick start
 
 Initialize the repository for one or more providers:
 
 ```bash
-uv sync
-uv run dotagents init --for claude --for copilot
-uv run dotagents doctor
+dotagents init --for claude --for copilot
+dotagents doctor
 ```
+
+Run those commands as `uv run dotagents ...` when dotagents is a project
+development dependency. Add `--global` to target the user-level runtime, or
+`-C /path/to/repo` to target another repository.
 
 The result is a generated runtime and provider-facing configuration:
 
@@ -64,8 +83,8 @@ repo/
 selection or package configuration:
 
 ```bash
-uv run dotagents sync
-uv run dotagents status
+dotagents sync
+dotagents status
 ```
 
 ## How it works
@@ -122,8 +141,8 @@ or for cloud-agent jobs; the selected skills remain available under
 Inspect the active runtime with:
 
 ```bash
-uv run dotagents discover
-uv run dotagents discover --json
+dotagents discover
+dotagents discover --json
 ```
 
 `.rules.local` extends generated rules with repository-specific guidance and
@@ -147,27 +166,36 @@ Initialization with no `--for` selects active providers. Explicit
 ## Common commands
 
 ```bash
-uv run dotagents init --for claude --for copilot
-uv run dotagents init --for all
-uv run dotagents init --dry-run --for claude
-uv run dotagents doctor
-uv run dotagents sync
-uv run dotagents sync --locked
-uv run dotagents update
-uv run dotagents status
-uv run dotagents list providers
-uv run dotagents list skills
-uv run dotagents providers add gemini
-uv run dotagents providers remove copilot
-uv run dotagents providers set-autonomy claude scoped
-uv run dotagents providers set-autonomy copilot assist
-uv run dotagents providers set-autonomy agy scoped
-uv run dotagents uninstall --dry-run
-uv run dotagents uninstall
+dotagents init --for claude --for copilot
+dotagents init --for all
+dotagents init --dry-run --for claude
+dotagents doctor
+dotagents sync
+dotagents sync --locked
+dotagents update
+dotagents status
+dotagents list providers
+dotagents list skills
+dotagents providers add gemini
+dotagents providers remove copilot
+dotagents providers set-autonomy claude scoped
+dotagents providers set-autonomy copilot assist
+dotagents providers set-autonomy agy scoped
+dotagents uninstall --dry-run
+dotagents uninstall
 ```
 
 Use `--locked` in CI when the runtime must match the committed `Skillfile` and
-lockfile. Upgrade the package with:
+lockfile. For a user-installed tool, upgrade the CLI and then refresh the
+selected runtime:
+
+```bash
+uv tool upgrade dotagents
+dotagents update
+dotagents doctor
+```
+
+For a project development dependency:
 
 ```bash
 uv sync --upgrade-package dotagents
@@ -177,6 +205,7 @@ uv run dotagents doctor
 
 ## Documentation
 
+- [Installation workflows](docs/installation.md)
 - [Global installation and safety](docs/global-install.md)
 - [Provider configuration](docs/providers.md)
 - [Compiler and generated artifacts](docs/compiler.md)

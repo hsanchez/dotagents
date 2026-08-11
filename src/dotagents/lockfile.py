@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tomli_w
 
-from dotagents.errors import DotagentsError
+from dotagents.errors import DotagentsError, invocation_guidance
 from dotagents.version import package_version
 
 # SUPPORTED_LOCKFILE_VERSION is the version write_lock always stamps. read_lock accepts
@@ -302,11 +302,13 @@ def read_lock(path: Path) -> RuntimeLock:
 
   lockfile_version = data.get("lockfile_version")
   if not isinstance(lockfile_version, int):
-    raise DotagentsError("lockfile_version must be an integer; run: uv run dotagents update")
+    raise DotagentsError(
+      f"lockfile_version must be an integer; run: {invocation_guidance('update')}"
+    )
   if not (MIN_READABLE_LOCKFILE_VERSION <= lockfile_version <= SUPPORTED_LOCKFILE_VERSION):
     raise DotagentsError(
       f"lockfile_version must be between {MIN_READABLE_LOCKFILE_VERSION} and "
-      f"{SUPPORTED_LOCKFILE_VERSION}; run: uv run dotagents update"
+      f"{SUPPORTED_LOCKFILE_VERSION}; run: {invocation_guidance('update')}"
     )
   requires_backup_fingerprint = lockfile_version >= FINGERPRINT_REQUIRED_SINCE_VERSION
 
@@ -354,7 +356,7 @@ def read_lock(path: Path) -> RuntimeLock:
     if backup is not None and backup_fingerprint_value is None and requires_backup_fingerprint:
       raise DotagentsError(
         f"lockfile link backup requires backup_fingerprint: {destination}; "
-        "run: uv run dotagents update"
+        f"run: {invocation_guidance('update')}"
       )
     validate_contained_relative_path(destination, "link destination")
     if backup is not None:
@@ -394,7 +396,8 @@ def read_lock(path: Path) -> RuntimeLock:
     raise DotagentsError("lockfile rules_backup_fingerprint must be a non-empty string")
   if rules_backup is not None and rules_backup_fingerprint is None and requires_backup_fingerprint:
     raise DotagentsError(
-      "lockfile rules_backup requires rules_backup_fingerprint; run: uv run dotagents update"
+      "lockfile rules_backup requires rules_backup_fingerprint; "
+      f"run: {invocation_guidance('update')}"
     )
 
   runtime_backup = data.get("runtime_backup")
@@ -414,7 +417,8 @@ def read_lock(path: Path) -> RuntimeLock:
     and requires_backup_fingerprint
   ):
     raise DotagentsError(
-      "lockfile runtime_backup requires runtime_backup_fingerprint; run: uv run dotagents update"
+      "lockfile runtime_backup requires runtime_backup_fingerprint; "
+      f"run: {invocation_guidance('update')}"
     )
 
   self_host = data.get("self_host", False)

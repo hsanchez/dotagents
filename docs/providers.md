@@ -1,5 +1,8 @@
 # Provider configuration
 
+Commands below assume a user-installed CLI. Prefix `dotagents` with `uv run`
+when dotagents is a project development dependency.
+
 Provider adapters translate the shared managed runtime into the configuration
 paths understood by each assistant. The package currently supports Claude,
 Codex, GitHub Copilot, Gemini CLI, and Google Antigravity CLI (`agy`).
@@ -48,20 +51,20 @@ hooks and the `.agents/skills` directory.
 Initialize the active default providers with:
 
 ```bash
-uv run dotagents init
+dotagents init
 ```
 
 Initialize every supported provider, including compatibility providers, with:
 
 ```bash
-uv run dotagents init --for all
+dotagents init --for all
 ```
 
 Add or remove one provider without changing shared output:
 
 ```bash
-uv run dotagents providers add gemini
-uv run dotagents providers remove copilot
+dotagents providers add gemini
+dotagents providers remove copilot
 ```
 
 Provider lifecycle comes from `agents.toml`. Active providers participate in
@@ -103,10 +106,10 @@ provider in `.agents/dotagents.lock` and compiled into a repo-local native
 permission surface at sync time. `supervised` is the default.
 
 ```bash
-uv run dotagents providers set-autonomy claude scoped
-uv run dotagents providers set-autonomy codex assist
-uv run dotagents providers set-autonomy copilot assist
-uv run dotagents providers set-autonomy agy scoped
+dotagents providers set-autonomy claude scoped
+dotagents providers set-autonomy codex assist
+dotagents providers set-autonomy copilot assist
+dotagents providers set-autonomy agy scoped
 ```
 
 | Level | Claude | Codex | Copilot CLI | agy |

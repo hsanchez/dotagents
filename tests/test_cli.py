@@ -460,7 +460,7 @@ def test_compile_mcp_command_writes_skill_and_manifest(
 
   assert result.exit_code == 0
   assert "Compiled MCP skill: github." in result.output
-  assert "next: uv run dotagents sync" in result.output
+  assert "next: dotagents sync (or uv run dotagents sync for a project dependency)" in result.output
   assert (tmp_path / ".agents" / "skills" / "github" / "SKILL.md").is_file()
   assert (tmp_path / ".agents" / "build" / "manifest.json").is_file()
 
@@ -629,7 +629,7 @@ def test_compile_skill_github_writes_skill_and_manifest(
 
   assert result.exit_code == 0
   assert "Compiled GitHub skill: review." in result.output
-  assert "next: uv run dotagents sync" in result.output
+  assert "next: dotagents sync (or uv run dotagents sync for a project dependency)" in result.output
   assert (tmp_path / ".agents" / "skills" / "review" / "SKILL.md").read_text() == "# Review\n"
   manifest = json.loads((tmp_path / ".agents" / "build" / "manifest.json").read_text())
   assert manifest["groups"][0]["compiler"] == "github-skill"
@@ -729,7 +729,7 @@ def test_compile_template_command_writes_skill_and_manifest(
 
   assert result.exit_code == 0
   assert "Compiled template skill: team-policy." in result.output
-  assert "next: uv run dotagents sync" in result.output
+  assert "next: dotagents sync (or uv run dotagents sync for a project dependency)" in result.output
   assert (tmp_path / ".agents" / "skills" / "team-policy" / "SKILL.md").is_file()
 
   sync_result = CliRunner().invoke(app, ["sync"])
@@ -1026,7 +1026,9 @@ def test_sync_command_rejects_version_drift(
   result = CliRunner().invoke(app, ["sync"])
 
   assert result.exit_code == 1
-  assert "Run: uv run dotagents update" in result.output
+  assert "Run: dotagents update" in result.output
+  assert "uv run dotagents" in result.output
+  assert "project dependency" in result.output
 
 
 def test_sync_command_rejects_manifest_drift(
@@ -1039,7 +1041,9 @@ def test_sync_command_rejects_manifest_drift(
   result = CliRunner().invoke(app, ["sync"])
 
   assert result.exit_code == 1
-  assert "Run: uv run dotagents update" in result.output
+  assert "Run: dotagents update" in result.output
+  assert "uv run dotagents" in result.output
+  assert "project dependency" in result.output
 
 
 def test_update_command_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

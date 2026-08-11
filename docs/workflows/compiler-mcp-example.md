@@ -1,5 +1,8 @@
 # MCP compiler example
 
+Commands below assume a user-installed CLI. Prefix `dotagents` with `uv run`
+when dotagents is a project development dependency.
+
 This example compiles deterministic MCP capability metadata into a managed
 dotagents skill. It supports a repo-local metadata file or an explicit command
 that prints the same metadata shape to stdout.
@@ -54,7 +57,7 @@ Create `github-mcp.json` in the consuming repo:
 You can also generate the snapshot through an explicit command:
 
 ```bash
-uv run dotagents compile mcp \
+dotagents compile mcp \
   --name github \
   --from-command ./scripts/export-github-mcp-tools \
   --output-skill github-mcp \
@@ -64,7 +67,7 @@ uv run dotagents compile mcp \
 Use `--arg` for command arguments:
 
 ```bash
-uv run dotagents compile mcp \
+dotagents compile mcp \
   --name github \
   --from-command ./scripts/export-mcp-tools \
   --arg github \
@@ -81,13 +84,13 @@ poll the MCP server.
 Preview first:
 
 ```bash
-uv run dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp --dry-run
+dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp --dry-run
 ```
 
 Then write the generated skill:
 
 ```bash
-uv run dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp
+dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp
 ```
 
 Generated files:
@@ -105,7 +108,7 @@ the tool description and input schema.
 ## 3. Sync runtime ownership
 
 ```bash
-uv run dotagents sync
+dotagents sync
 ```
 
 `sync` validates the compiled artifact hashes and records them in
@@ -115,7 +118,7 @@ skill like other managed runtime output.
 ## 4. Verify staleness detection
 
 ```bash
-uv run dotagents doctor
+dotagents doctor
 ```
 
 If `github-mcp.json` changes after compilation, `doctor` reports:
@@ -127,8 +130,8 @@ compiled artifacts stale: MCP metadata source changed: github-mcp.json; rerun th
 The recovery flow is:
 
 ```bash
-uv run dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp
-uv run dotagents sync
+dotagents compile mcp --name github --metadata github-mcp.json --output-skill github-mcp
+dotagents sync
 ```
 
 ## Multiple skills from one MCP server
@@ -137,9 +140,9 @@ Use different output skill names when splitting one server into multiple
 capability groups:
 
 ```bash
-uv run dotagents compile mcp --name github --metadata github-read.json --output-skill github-read
-uv run dotagents compile mcp --name github --metadata github-write.json --output-skill github-write
-uv run dotagents sync
+dotagents compile mcp --name github --metadata github-read.json --output-skill github-read
+dotagents compile mcp --name github --metadata github-write.json --output-skill github-write
+dotagents sync
 ```
 
 Each output skill tracks its own metadata file, so changing `github-read.json`

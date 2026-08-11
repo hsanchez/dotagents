@@ -9,14 +9,27 @@ uv_installer_sha256="b9f925505899533f36a3acfdf8684c661ff2d5c8735f759fca768367b59
 
 usage() {
   cat <<'EOF'
-usage: dot <command>
+usage: dot <command> [args]
 
 commands:
+  init      initialize the current repository; accepts -C or --global
+  sync      synchronize the selected runtime
+  doctor    validate the selected runtime
+  status    show the selected runtime status
+  upgrade   git pull, then update the selected runtime
+  <other>   forward any other command to dotagents
+
+legacy global aliases:
   install   dotagents init --global
   update    git pull, then dotagents update --global
+EOF
+}
 
-dot is a thin bootstrap shim; run uv run dotagents <command> --global
-directly (from this directory) for anything beyond install/update.
+upgrade_usage() {
+  cat <<'EOF'
+usage: dot upgrade [-C PATH | --global] [dotagents update options]
+
+Fast-forward the dotagents checkout, then update the selected runtime.
 EOF
 }
 
@@ -58,6 +71,10 @@ run_dotagents() {
   "$uv_bin" run --project "$script_root" dotagents "$@"
 }
 
+update_checkout() {
+  git -C "$script_root" pull --ff-only
+}
+
 command="${1:-}"
 if [ "$#" -gt 0 ]; then
   shift
@@ -65,18 +82,29 @@ fi
 
 case "$command" in
   install)
+    echo "dot: 'install' is a legacy global alias; use 'dot init --global'" >&2
     run_dotagents init --global "$@"
     ;;
   update)
-    git -C "$script_root" pull --ff-only
+    echo "dot: 'update' is a legacy global alias; use 'dot upgrade --global'" >&2
+    update_checkout
     run_dotagents update --global "$@"
+    ;;
+  upgrade)
+    case "${1:-}" in
+      -h|--help)
+        upgrade_usage
+        ;;
+      *)
+        update_checkout
+        run_dotagents update "$@"
+        ;;
+    esac
     ;;
   ""|help|-h|--help)
     usage
     ;;
   *)
-    echo "dot: unknown command: $command" >&2
-    usage >&2
-    exit 1
+    run_dotagents "$command" "$@"
     ;;
 esac

@@ -1,5 +1,8 @@
 # Template compiler example
 
+Commands below assume a user-installed CLI. Prefix `dotagents` with `uv run`
+when dotagents is a project development dependency.
+
 This example compiles a deterministic Jinja template into a managed dotagents
 skill. It demonstrates the compiler without MCP metadata.
 
@@ -50,7 +53,7 @@ Create `team-policy.json`:
 Preview first:
 
 ```bash
-uv run dotagents compile template \
+dotagents compile template \
   --template templates/team-policy.md.j2 \
   --variables team-policy.json \
   --output-skill team-policy \
@@ -60,7 +63,7 @@ uv run dotagents compile template \
 Then write the generated skill:
 
 ```bash
-uv run dotagents compile template \
+dotagents compile template \
   --template templates/team-policy.md.j2 \
   --variables team-policy.json \
   --output-skill team-policy
@@ -77,7 +80,7 @@ Generated files:
 ## 4. Sync runtime ownership
 
 ```bash
-uv run dotagents sync
+dotagents sync
 ```
 
 `sync` validates the compiled artifact hashes and records the generated files in
@@ -86,7 +89,7 @@ uv run dotagents sync
 ## 5. Verify staleness detection
 
 ```bash
-uv run dotagents doctor
+dotagents doctor
 ```
 
 If `templates/team-policy.md.j2` changes after compilation, `doctor` reports:
@@ -104,9 +107,9 @@ compiled artifacts stale: template variables changed: team-policy.json; rerun th
 The recovery flow is:
 
 ```bash
-uv run dotagents compile template \
+dotagents compile template \
   --template templates/team-policy.md.j2 \
   --variables team-policy.json \
   --output-skill team-policy
-uv run dotagents sync
+dotagents sync
 ```

@@ -2,15 +2,28 @@
 set -eu
 
 repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
-fake_home="$(mktemp -d)"
-tmp_clone="$(mktemp -d)"
-never_synced_project="$(mktemp -d)"
-trap 'rm -rf "$fake_home" "$tmp_clone" "$never_synced_project"' EXIT INT TERM
+smoke_root="$(mktemp -d)"
+fake_home="$smoke_root/home"
+tmp_clone="$smoke_root/checkout"
+never_synced_project="$smoke_root/never-synced"
+standalone_project="$smoke_root/standalone"
+tool_dir="$smoke_root/tools"
+tool_bin_dir="$smoke_root/tool-bin"
+tool_project="$smoke_root/tool-project"
+download_home="$smoke_root/download-home"
+download_clone="$smoke_root/download-checkout"
+bad_home="$smoke_root/bad-home"
+bad_clone="$smoke_root/bad-checkout"
+trap 'rm -rf "$smoke_root"' EXIT INT TERM
+
+mkdir -p "$fake_home" "$never_synced_project" "$standalone_project" "$tool_dir" \
+  "$tool_bin_dir" "$tool_project" "$download_home" "$bad_home"
 
 git clone --quiet "$repo_root" "$tmp_clone"
+cp "$repo_root/bin/dot" "$tmp_clone/bin/dot"
 
-HOME="$fake_home" "$tmp_clone/bin/dot" install
-HOME="$fake_home" "$tmp_clone/bin/dot" update
+HOME="$fake_home" "$tmp_clone/bin/dot" init --global --for claude --for gemini
+HOME="$fake_home" "$tmp_clone/bin/dot" upgrade --global
 
 test -f "$fake_home/.rules"
 test -f "$fake_home/.agents/dotagents.lock"
@@ -38,6 +51,40 @@ CLAUDE_PROJECT_DIR="$never_synced_project" HOME="$fake_home" \
   "$fake_home/.claude/hooks/session-start.sh" |
   grep -q 'dotagents discovery is enabled'
 
+cat >"$standalone_project/pyproject.toml" <<'EOF'
+[project]
+name = "standalone-consumer"
+version = "0.1.0"
+EOF
+printf '%s\n' 'consumer-lock-sentinel' >"$standalone_project/uv.lock"
+pyproject_before="$(cksum "$standalone_project/pyproject.toml")"
+uv_lock_before="$(cksum "$standalone_project/uv.lock")"
+
+(cd "$standalone_project" && HOME="$fake_home" "$tmp_clone/bin/dot" init --for claude)
+HOME="$fake_home" "$tmp_clone/bin/dot" doctor -C "$standalone_project"
+HOME="$fake_home" "$tmp_clone/bin/dot" sync -C "$standalone_project"
+HOME="$fake_home" "$tmp_clone/bin/dot" upgrade -C "$standalone_project"
+
+test -f "$standalone_project/.agents/dotagents.lock"
+test -f "$standalone_project/Skillfile"
+test -L "$standalone_project/CLAUDE.md"
+test "$(cksum "$standalone_project/pyproject.toml")" = "$pyproject_before"
+test "$(cksum "$standalone_project/uv.lock")" = "$uv_lock_before"
+test -f "$fake_home/.agents/dotagents.lock"
+
+HOME="$fake_home" "$tmp_clone/bin/dot" uninstall -C "$standalone_project"
+test ! -e "$standalone_project/.agents/dotagents.lock"
+test -f "$fake_home/.agents/dotagents.lock"
+
+UV_TOOL_DIR="$tool_dir" UV_TOOL_BIN_DIR="$tool_bin_dir" uv tool install --offline "$repo_root"
+HOME="$fake_home" "$tool_bin_dir/dotagents" init -C "$tool_project" --for claude
+HOME="$fake_home" "$tool_bin_dir/dotagents" doctor -C "$tool_project"
+
+test -f "$tool_project/.agents/dotagents.lock"
+test -f "$tool_project/.agents/agents.toml"
+test ! -e "$tool_project/pyproject.toml"
+test ! -e "$tool_project/uv.lock"
+
 echo "bin/dot smoke test passed"
 
 if [ "${DOTAGENTS_SMOKE_TEST_UV_DOWNLOAD:-0}" != "1" ]; then
@@ -47,10 +94,8 @@ fi
 
 echo "exercising private uv-download branch..."
 
-download_home="$(mktemp -d)"
-download_clone="$(mktemp -d)"
-trap 'rm -rf "$fake_home" "$tmp_clone" "$download_home" "$download_clone"' EXIT INT TERM
 git clone --quiet "$repo_root" "$download_clone"
+cp "$repo_root/bin/dot" "$download_clone/bin/dot"
 
 uv_dir="$(dirname "$(command -v uv)")"
 filtered_path="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v -F -x "$uv_dir" | tr '\n' ':')"
@@ -66,10 +111,8 @@ echo "uv-download branch passed"
 
 echo "exercising checksum-mismatch negative check..."
 
-bad_home="$(mktemp -d)"
-bad_clone="$(mktemp -d)"
-trap 'rm -rf "$fake_home" "$tmp_clone" "$download_home" "$download_clone" "$bad_home" "$bad_clone"' EXIT INT TERM
 git clone --quiet "$repo_root" "$bad_clone"
+cp "$repo_root/bin/dot" "$bad_clone/bin/dot"
 bad_dot="$bad_clone/bin/dot"
 sed -i.bak 's/^uv_installer_sha256=.*/uv_installer_sha256="0000000000000000000000000000000000000000000000000000000000000000000000"/' "$bad_dot"
 

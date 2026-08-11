@@ -755,8 +755,9 @@ def test_sync_reconciles_manual_skillfile_edit(
   before_sync = doctor(Path.cwd())
   assert not before_sync.passed
   assert (
-    "Skillfile: selection differs from lockfile; run: uv run dotagents sync" in before_sync.lines
-  )
+    "Skillfile: selection differs from lockfile; run: dotagents sync "
+    "(or uv run dotagents sync for a project dependency)"
+  ) in before_sync.lines
 
   sync_existing(Path.cwd())
 
@@ -919,7 +920,10 @@ def test_doctor_reports_skillfile_hash_drift(
   result = doctor(Path.cwd())
 
   assert not result.passed
-  assert "Skillfile: changed since lockfile; run: uv run dotagents sync" in result.lines
+  assert (
+    "Skillfile: changed since lockfile; run: dotagents sync "
+    "(or uv run dotagents sync for a project dependency)"
+  ) in result.lines
 
 
 def test_init_locked_rejects_skillfile_hash_drift(
@@ -1728,7 +1732,7 @@ def test_sync_rejects_version_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPa
   init_runtime(Path.cwd(), ("claude",))
   make_lock_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     sync_existing(Path.cwd())
 
 
@@ -1737,7 +1741,7 @@ def test_sync_rejects_manifest_drift(tmp_path: Path, monkeypatch: pytest.MonkeyP
   init_runtime(Path.cwd(), ("claude",))
   make_manifest_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     sync_existing(Path.cwd())
 
 
@@ -2269,7 +2273,7 @@ def test_remove_provider_rejects_current_manifest_change_before_cleanup(
   init_runtime(Path.cwd(), ("claude", "copilot"))
   make_manifest_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     remove_provider(Path.cwd(), "copilot")
 
   assert (tmp_path / ".github" / "copilot-instructions.md").is_symlink()
@@ -2330,7 +2334,7 @@ def test_add_provider_rejects_version_drift(
   init_runtime(Path.cwd(), ("claude",))
   make_lock_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     add_provider(Path.cwd(), "copilot")
 
 
@@ -2341,7 +2345,7 @@ def test_add_provider_rejects_manifest_drift(
   init_runtime(Path.cwd(), ("claude",))
   make_manifest_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     add_provider(Path.cwd(), "copilot")
 
 
@@ -2352,7 +2356,7 @@ def test_remove_provider_rejects_version_drift(
   init_runtime(Path.cwd(), ("claude", "copilot"))
   make_lock_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     remove_provider(Path.cwd(), "copilot")
 
 
@@ -2363,7 +2367,7 @@ def test_remove_provider_rejects_manifest_drift(
   init_runtime(Path.cwd(), ("claude", "copilot"))
   make_manifest_stale(tmp_path)
 
-  with pytest.raises(DotagentsError, match="Run: uv run dotagents update"):
+  with pytest.raises(DotagentsError, match="Run: dotagents update"):
     remove_provider(Path.cwd(), "copilot")
 
 

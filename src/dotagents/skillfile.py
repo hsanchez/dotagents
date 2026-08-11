@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from dotagents.errors import DotagentsError
+from dotagents.errors import DotagentsError, invocation_guidance
 
 SKILLFILE_NAME = "Skillfile"
 REQUIRED_SKILLS = ("dotagents-discovery",)
@@ -29,7 +29,7 @@ def available_skills(asset_root: Path) -> tuple[str, ...]:
 def resolve_skillfile(repo_root: Path, asset_root: Path) -> tuple[str, ...]:
   path = skillfile_path(repo_root)
   if not path.exists():
-    raise DotagentsError(f"missing {SKILLFILE_NAME}. Run: uv run dotagents init --with")
+    raise DotagentsError(f"missing {SKILLFILE_NAME}. Run: {invocation_guidance('init --with')}")
   return _resolve(path, asset_root, set())
 
 

@@ -53,6 +53,12 @@ The global bootstrap has a separate smoke test using a fake home directory:
 sh tests/smoke-test-dot
 ```
 
+The same smoke test exercises the checkout launcher against an isolated
+standalone repository and verifies that it does not create or modify
+`pyproject.toml` or `uv.lock` there. Its isolated `uv tool install` branch uses
+temporary `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` directories plus offline
+resolution from the cache populated by `uv sync`.
+
 To exercise its private-`uv` download and checksum-failure paths, which use
 the network, run:
 

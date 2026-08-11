@@ -1,5 +1,8 @@
 # Compiler and generated artifacts
 
+Commands below assume a user-installed CLI. Prefix `dotagents` with `uv run`
+when dotagents is a project development dependency.
+
 The compiler layer generates skills from deterministic inputs and tracks them
 under the same managed-runtime ownership model as packaged assets.
 
@@ -21,14 +24,14 @@ pinned GitHub skill sources.
 Compile from MCP metadata:
 
 ```bash
-uv run dotagents compile mcp --name github --metadata github-mcp.json
-uv run dotagents sync
+dotagents compile mcp --name github --metadata github-mcp.json
+dotagents sync
 ```
 
 Compile from an explicit snapshot command:
 
 ```bash
-uv run dotagents compile mcp \
+dotagents compile mcp \
   --name github \
   --from-command ./scripts/export-mcp-tools \
   --arg github
@@ -37,7 +40,7 @@ uv run dotagents compile mcp \
 Vendor a skill from a pinned GitHub commit:
 
 ```bash
-uv run dotagents compile skill github \
+dotagents compile skill github \
   --repo owner/repo \
   --path skills/review \
   --ref 0123456789abcdef0123456789abcdef01234567 \
@@ -47,7 +50,7 @@ uv run dotagents compile skill github \
 Compile from a template:
 
 ```bash
-uv run dotagents compile template \
+dotagents compile template \
   --template templates/team-policy.md.j2 \
   --variables team-policy.json \
   --output-skill team-policy
