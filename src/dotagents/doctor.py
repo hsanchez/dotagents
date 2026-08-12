@@ -77,12 +77,13 @@ def doctor(repo_root: Path) -> DoctorResult:
     passed = False
   else:
     lines.append("lockfile: ok")
-  provider_labels = [
-    f"{provider}={lock.provider_autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL)}"
-    if provider in AUTONOMY_MANAGED_PROVIDERS
-    else provider
-    for provider in lock.providers
-  ]
+  provider_labels: list[str] = []
+  for provider in lock.providers:
+    if provider in AUTONOMY_MANAGED_PROVIDERS:
+      autonomy = lock.provider_autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL)
+      provider_labels.append(f"{provider}={autonomy}")
+    else:
+      provider_labels.append(provider)
   lines.append(f"providers: {', '.join(provider_labels)}")
   council_launcher = runtime_context.runtime_dir / "skills" / "council" / "scripts" / "run-agents"
   if council_launcher.exists() and shutil.which("nu") is None:

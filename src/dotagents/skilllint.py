@@ -258,7 +258,12 @@ def main() -> int:
   reports = lint_all(asset_root())
   total_errors, total_warnings = _print_report(reports)
   skill_count = len(reports) - 1  # exclude the "<catalog>" entry
-  status = "FAILED" if total_errors else "PASSED WITH WARNINGS" if total_warnings else "PASSED"
+  if total_errors:
+    status = "FAILED"
+  elif total_warnings:
+    status = "PASSED WITH WARNINGS"
+  else:
+    status = "PASSED"
   print(
     f"\n{skill_count} skills checked -- {total_errors} error(s), {total_warnings} warning(s) -- {status}"
   )

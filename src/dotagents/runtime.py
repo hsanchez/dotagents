@@ -916,14 +916,49 @@ def validate_compiled_artifact_destination(destination: str) -> str:
   return safe_destination
 
 
+def load_build_manifest_for_status(
+  manifest_path: Path,
+) -> tuple[BuildManifest | None, str | None]:
+  """Load a build manifest for a status check, without raising on absence or corruption.
+
+  Returns `(None, None)` if `manifest_path` doesn't exist (nothing has been compiled), or
+  `(None, error_message)` if it exists but fails to parse. Shared by
+  `compiled_staleness_messages`, `compiled_group_statuses`, and `capability_compiled_groups`,
+  which each render those two states differently but detect them identically.
+  """
+  if not manifest_path.exists():
+    return None, None
+  try:
+    return read_build_manifest(manifest_path), None
+  except CompilerError as exc:
+    return None, f"compiled artifacts: build manifest error: {exc}"
+
+
+def default_build_groups(build_manifest: BuildManifest) -> tuple[BuildGroup, ...]:
+  """Return `build_manifest.groups`, falling back to one synthetic group covering everything.
+
+  A build manifest with no `groups` (e.g. one predating per-group tracking) still has
+  top-level `artifacts` and `sources`; this keeps both status computations working without
+  a manifest-shape special case at each call site.
+  """
+  return build_manifest.groups or (
+    BuildGroup(
+      id="compiled artifacts",
+      compiler="unknown",
+      output_prefix=".agents",
+      artifacts=build_manifest.artifacts,
+      sources=build_manifest.sources,
+    ),
+  )
+
+
 def compiled_staleness_messages(repo_root: Path) -> list[str]:
   manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
-  if not manifest_path.exists():
+  build_manifest, error = load_build_manifest_for_status(manifest_path)
+  if error is not None:
+    return [error]
+  if build_manifest is None:
     return []
-  try:
-    build_manifest = read_build_manifest(manifest_path)
-  except CompilerError as exc:
-    return [f"compiled artifacts: build manifest error: {exc}"]
 
   messages: list[str] = []
   for source in build_manifest.sources:
@@ -935,28 +970,13 @@ def compiled_staleness_messages(repo_root: Path) -> list[str]:
 
 def compiled_group_statuses(repo_root: Path) -> tuple[CompiledGroupStatus, ...]:
   manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
-  if not manifest_path.exists():
+  build_manifest, error = load_build_manifest_for_status(manifest_path)
+  if error is not None:
+    return (CompiledGroupStatus("compiled artifacts", "invalid", (error,)),)
+  if build_manifest is None:
     return (CompiledGroupStatus("compiled artifacts", "ok", ("no compiled artifacts",)),)
-  try:
-    build_manifest = read_build_manifest(manifest_path)
-  except CompilerError as exc:
-    return (
-      CompiledGroupStatus(
-        "compiled artifacts",
-        "invalid",
-        (f"compiled artifacts: build manifest error: {exc}",),
-      ),
-    )
 
-  groups = build_manifest.groups or (
-    BuildGroup(
-      id="compiled artifacts",
-      compiler="unknown",
-      output_prefix=".agents",
-      artifacts=build_manifest.artifacts,
-      sources=build_manifest.sources,
-    ),
-  )
+  groups = default_build_groups(build_manifest)
   return tuple(compiled_group_status(repo_root, group) for group in groups)
 
 
@@ -998,22 +1018,12 @@ def packaged_capability_skills(repo_root: Path) -> tuple[CapabilitySkill, ...]:
 
 def capability_compiled_groups(repo_root: Path) -> tuple[CapabilityGroup, ...]:
   manifest_path = repo_root / BUILD_MANIFEST_DESTINATION
-  if not manifest_path.exists():
+  build_manifest, error = load_build_manifest_for_status(manifest_path)
+  if error is not None:
+    return (compiled_artifacts_capability_group("invalid", error),)
+  if build_manifest is None:
     return (compiled_artifacts_capability_group("ok", "no compiled artifacts"),)
-  try:
-    build_manifest = read_build_manifest(manifest_path)
-  except CompilerError as exc:
-    message = f"compiled artifacts: build manifest error: {exc}"
-    return (compiled_artifacts_capability_group("invalid", message),)
-  groups = build_manifest.groups or (
-    BuildGroup(
-      id="compiled artifacts",
-      compiler="unknown",
-      output_prefix=".agents",
-      artifacts=build_manifest.artifacts,
-      sources=build_manifest.sources,
-    ),
-  )
+  groups = default_build_groups(build_manifest)
   return tuple(compiled_capability_group(repo_root, group) for group in groups)
 
 
@@ -1776,23 +1786,21 @@ def restore_backup(
   if not backup_path.exists(follow_symlinks=False):
     operation_log.add(f"backup missing {relative(repo_root, backup_path)}; skipped restore")
     return
-  if not backup_path.is_symlink() and not backup_path.is_file():
-    if (
-      backup_path.is_dir()
-      and expected_fingerprint
-      and expected_fingerprint.startswith("directory:")
-    ):
-      pass
-    else:
-      # A directory or FIFO at the backup path — swapped in after backup creation, or a
-      # legacy backup with no fingerprint to check. Never rename an untrusted non-regular
-      # entry onto a managed destination, and never let backup_fingerprint() below open it
-      # (IsADirectoryError, or a hang on a FIFO with no writer).
-      operation_log.add(
-        f"backup is not a file or symlink {relative(repo_root, backup_path)}; "
-        "skipped restore, resolve manually"
-      )
-      return
+  is_trusted_directory_backup = (
+    backup_path.is_dir()
+    and expected_fingerprint is not None
+    and expected_fingerprint.startswith("directory:")
+  )
+  if not backup_path.is_symlink() and not backup_path.is_file() and not is_trusted_directory_backup:
+    # A directory or FIFO at the backup path — swapped in after backup creation, or a
+    # legacy backup with no fingerprint to check. Never rename an untrusted non-regular
+    # entry onto a managed destination, and never let backup_fingerprint() below open it
+    # (IsADirectoryError, or a hang on a FIFO with no writer).
+    operation_log.add(
+      f"backup is not a file or symlink {relative(repo_root, backup_path)}; "
+      "skipped restore, resolve manually"
+    )
+    return
 
   def fingerprint_mismatch() -> tuple[bool, str | None]:
     if expected_fingerprint is None:

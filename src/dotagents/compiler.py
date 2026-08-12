@@ -1240,12 +1240,9 @@ def parse_mcp_capabilities_reference(reference: str) -> tuple[str, str]:
     CompilerError: If the reference is invalid.
   """
   payload = parse_mcp_reference(reference)
-  server = payload.get("server")
-  output_skill = payload.get("output_skill")
-  if not isinstance(server, str) or not server:
-    raise CompilerError("MCP capability source reference requires server")
-  if not isinstance(output_skill, str) or not output_skill:
-    raise CompilerError("MCP capability source reference requires output_skill")
+  prefix = "MCP capability source reference"
+  server = _require_reference_string(payload, "server", prefix)
+  output_skill = _require_reference_string(payload, "output_skill", prefix)
   return server, output_skill
 
 
@@ -1256,15 +1253,10 @@ def parse_mcp_metadata_reference(reference: str) -> tuple[str, str, str]:
     CompilerError: If the reference is invalid.
   """
   payload = parse_mcp_reference(reference)
-  server = payload.get("server")
-  output_skill = payload.get("output_skill")
-  path = payload.get("path")
-  if not isinstance(server, str) or not server:
-    raise CompilerError("MCP metadata source reference requires server")
-  if not isinstance(output_skill, str) or not output_skill:
-    raise CompilerError("MCP metadata source reference requires output_skill")
-  if not isinstance(path, str) or not path:
-    raise CompilerError("MCP metadata source reference requires path")
+  prefix = "MCP metadata source reference"
+  server = _require_reference_string(payload, "server", prefix)
+  output_skill = _require_reference_string(payload, "output_skill", prefix)
+  path = _require_reference_string(payload, "path", prefix)
   return server, output_skill, path
 
 
@@ -1291,29 +1283,45 @@ def parse_mcp_command_reference(reference: str) -> tuple[str, str, str, tuple[st
     CompilerError: If the reference is invalid.
   """
   payload = parse_mcp_reference(reference)
-  server = payload.get("server")
-  output_skill = payload.get("output_skill")
-  command = payload.get("command")
+  prefix = "MCP command source reference"
+  server = _require_reference_string(payload, "server", prefix)
+  output_skill = _require_reference_string(payload, "output_skill", prefix)
+  command = _require_reference_string(payload, "command", prefix)
   arguments = payload.get("arguments")
-  if not isinstance(server, str) or not server:
-    raise CompilerError("MCP command source reference requires server")
-  if not isinstance(output_skill, str) or not output_skill:
-    raise CompilerError("MCP command source reference requires output_skill")
-  if not isinstance(command, str) or not command:
-    raise CompilerError("MCP command source reference requires command")
   if not isinstance(arguments, list) or not all(isinstance(item, str) for item in arguments):
-    raise CompilerError("MCP command source reference requires string arguments")
+    raise CompilerError(f"{prefix} requires string arguments")
   return server, output_skill, command, tuple(arguments)
 
 
 def parse_mcp_reference(reference: str) -> dict[str, Any]:
+  return _parse_reference_payload(reference, "MCP source reference")
+
+
+def _parse_reference_payload(reference: str, prefix: str) -> dict[str, Any]:
+  """Parse a JSON source reference into an object payload.
+
+  Raises:
+    CompilerError: If the reference is not valid JSON or not a JSON object.
+  """
   try:
     payload = json.loads(reference)
   except json.JSONDecodeError as exc:
-    raise CompilerError("MCP source reference must be JSON") from exc
+    raise CompilerError(f"{prefix} must be JSON") from exc
   if not isinstance(payload, dict):
-    raise CompilerError("MCP source reference must be an object")
+    raise CompilerError(f"{prefix} must be an object")
   return payload
+
+
+def _require_reference_string(payload: dict[str, Any], field_name: str, prefix: str) -> str:
+  """Return payload[field_name] as a non-empty string.
+
+  Raises:
+    CompilerError: If the field is missing, not a string, or empty.
+  """
+  value = payload.get(field_name)
+  if not isinstance(value, str) or not value:
+    raise CompilerError(f"{prefix} requires {field_name}")
+  return value
 
 
 def validate_github_repo(repo: str) -> str:
@@ -1570,24 +1578,12 @@ def parse_github_skill_reference(reference: str) -> tuple[str, str, str, str]:
   Raises:
     CompilerError: If the reference is invalid.
   """
-  try:
-    payload = json.loads(reference)
-  except json.JSONDecodeError as exc:
-    raise CompilerError("GitHub skill source reference must be JSON") from exc
-  if not isinstance(payload, dict):
-    raise CompilerError("GitHub skill source reference must be an object")
-  repo = payload.get("repo")
-  path = payload.get("path")
-  ref = payload.get("ref")
-  output_skill = payload.get("output_skill")
-  if not isinstance(repo, str) or not repo:
-    raise CompilerError("GitHub skill source reference requires repo")
-  if not isinstance(path, str) or not path:
-    raise CompilerError("GitHub skill source reference requires path")
-  if not isinstance(ref, str) or not ref:
-    raise CompilerError("GitHub skill source reference requires ref")
-  if not isinstance(output_skill, str) or not output_skill:
-    raise CompilerError("GitHub skill source reference requires output_skill")
+  prefix = "GitHub skill source reference"
+  payload = _parse_reference_payload(reference, prefix)
+  repo = _require_reference_string(payload, "repo", prefix)
+  path = _require_reference_string(payload, "path", prefix)
+  ref = _require_reference_string(payload, "ref", prefix)
+  output_skill = _require_reference_string(payload, "output_skill", prefix)
   return repo, path, ref, output_skill
 
 
@@ -1606,18 +1602,10 @@ def parse_template_source_reference(reference: str) -> tuple[str, str]:
   Raises:
     CompilerError: If the reference is invalid.
   """
-  try:
-    payload = json.loads(reference)
-  except json.JSONDecodeError as exc:
-    raise CompilerError("template source reference must be JSON") from exc
-  if not isinstance(payload, dict):
-    raise CompilerError("template source reference must be an object")
-  output_skill = payload.get("output_skill")
-  path = payload.get("path")
-  if not isinstance(output_skill, str) or not output_skill:
-    raise CompilerError("template source reference requires output_skill")
-  if not isinstance(path, str) or not path:
-    raise CompilerError("template source reference requires path")
+  prefix = "template source reference"
+  payload = _parse_reference_payload(reference, prefix)
+  output_skill = _require_reference_string(payload, "output_skill", prefix)
+  path = _require_reference_string(payload, "path", prefix)
   return output_skill, path
 
 

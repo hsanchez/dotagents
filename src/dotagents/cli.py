@@ -213,17 +213,13 @@ def init(
       raise DotagentsError("cannot combine --locked and --with")
     missing_skillfile = not skillfile_path(repo_root).exists()
     should_select = with_skills or (not locked and not dry_run and missing_skillfile)
+    if should_select and dry_run:
+      raise DotagentsError("cannot select skills during a dry run")
     if should_select and with_preset:
-      if dry_run:
-        raise DotagentsError("cannot select skills during a dry run")
       write_preset_skillfile(repo_root, asset_root(), with_preset)
     elif with_skills:
-      if dry_run:
-        raise DotagentsError("cannot select skills during a dry run")
       edit_skillfile(repo_root, asset_root())
     elif should_select and missing_skillfile:
-      if dry_run:
-        raise DotagentsError("cannot select skills during a dry run")
       write_preset_skillfile(repo_root, asset_root(), DEFAULT_PRESET)
     resolved_providers = tuple(providers or ())
     if not dry_run and is_global_root(repo_root):
