@@ -1,10 +1,4 @@
-# Readiness and Synchronization Check
-
-If the user says "are you on?" or Simply **Before starting any new task**, always:
-1. If you have not read this `.rules` file, read it. Otherwise, move to next step.
-2. Read `MEMORY.md`. If `MEMORY.md` has no substantive content beyond headings or whitespace, read `MEMORY_LOG.md`.
-4. Also read `MEMORY_LOG.md` when debugging, recovering context, or tracing prior decisions.
-5. Compress every model response per response compression guideline
+<!-- Shared agent rules from dotagents package rules/rules.md -->
 
 # Python coding guidelines
 
@@ -134,7 +128,6 @@ Only include these when they add genuine value. Most ADRs won't need them.
 - **Considered Options** — only when the rejected alternatives are worth remembering
 - **Consequences** — only when non-obvious downstream effects need to be called out
 
-
 # Required Development Workflow
 
 **CRITICAL**: Always run these commands before committing:
@@ -147,7 +140,7 @@ uv run pytest                 # Run tests
 
 All must pass — enforced by CI.
 
-# Build Guidelines
+## Build Guidelines
 
 - Use `uv run prek run --all-files` for the full lint/type check path.
 - Use `uv run pytest` for the full test suite.
@@ -188,9 +181,8 @@ Never used:
 - `MEMORY_LOG.local.md`
 
 Bootstrapping (if files are absent):
-- `MEMORY.md`: create with content `# PROJECT MEMORY\n\n- Initialized memory files.`
+- `MEMORY.md`: create with content `# PROJECT MEMORY\n\n## Entries\n`
 - `MEMORY_LOG.md`: create with content `# MEMORY LOG\n\n## Entries\n`
-
 
 # Pull request hygiene
 
@@ -252,7 +244,7 @@ Use terse responses by default when technical accuracy would remain intact.
 - Keep code, commands, paths, URLs, version numbers, and other literals unchanged
 - Do not drift back toward verbose prose over time
 - If brevity would hide uncertainty, risk, safety constraints, or important tradeoffs, keep the extra words
-- Prefer `bash` tool for running `uv` commands over explaining them 
+- Prefer `bash` tool for running `uv` commands over explaining them
 
 # Available Tools
 

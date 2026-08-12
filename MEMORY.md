@@ -6,33 +6,30 @@ dotagents: Python 3.14 Typer/Rich CLI that packages and syncs a managed
 `.agents` runtime (skills, provider configs, permissions) into host repos for
 Claude, Codex, Gemini, and Copilot CLI.
 
-## Current state (2026-07-25)
+## Current state (2026-08-11)
 
 - Core CLI complete: `init`/`doctor`/`sync`/`update`/`status`/`list`/`uninstall`,
   `providers add`/`remove`/`set-autonomy`, global install (`bin/dot`), lockfile
   v3 (adds `provider_autonomy`), skill compiler (templates, MCP-to-skill,
   GitHub skill vendoring), saga/review-saga workflows.
-- Per-provider autonomy levels (`assist`/`supervised`/`scoped`) shipped for
-  Claude and Codex on branch `autonomy` (commits `e7a810b`, `e7fb6d9`; PR
-  opened by user): compiled into each provider's native permission mechanism
-  (Claude `permissions.deny`/`defaultMode`, Codex `approval_policy`/
-  `sandbox_mode`). Survived 3 independent adversarial audit rounds; 493 tests
-  passing, prek clean.
-- Copilot CLI and Gemini are explicitly *not* covered by `set-autonomy` yet —
-  reasons are documented in ADR 007 / `docs/providers.md`, not just deferred
-  silently: Copilot has no native per-level setting (only a level-invariant
-  hooks-based deny ceiling, already wired via `git-guardrails`); Gemini's
-  `agy` successor has a real `permissions.allow`/`permissions.deny` engine
-  but it lives in a per-user-machine global file, not something this
-  repo-scoped sync model can safely write into.
+- Per-provider autonomy levels (`assist`/`supervised`/`scoped`) cover Claude,
+  Codex, Copilot CLI, and Antigravity CLI. Copilot and Antigravity use
+  repo-scoped policies plus shared destructive-command guardrails; classifier
+  loading is restricted to trusted runtime paths and fails closed.
+- `agy` is the default Google provider. Gemini CLI remains an explicit
+  compatibility provider for Enterprise/API-key users; existing Gemini
+  lockfiles and `--for all` remain supported.
+- CLI ownership is separate from runtime scope. Global, project-managed, and
+  standalone repository workflows are documented and supported; `bin/dot`
+  forwards the full CLI and provides `upgrade`.
+- `main` includes these milestones through `6f45270` (PR #42). The full gate
+  passed with 677 tests; the simplify pass found no remaining worthwhile
+  refactors in its reviewed scope.
 
 ## Open tracked follow-ups (GitHub issues)
 
 - **#33** — Codex execpolicy `.rules` DSL research spike, to close the
   confirmed-open `git clean` gap at Codex `scoped`.
-- **#34** — Tiered Copilot CLI permission hooks via `preToolUse`
-  `permissionDecision` allow/deny; blocked on live verification against the
-  real CLI (quota was exhausted when the design was drafted).
 - **#24** — Audit skill's `agy` backend explores the filesystem instead of
   reviewing the supplied diff, even with correct invocation; `agy` demoted to
   last-resort fallback everywhere in `skills/audit/SKILL.md` as a result.
