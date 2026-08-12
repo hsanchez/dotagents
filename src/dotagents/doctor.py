@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotagents.errors import DotagentsError
+from dotagents.errors import DotagentsError, invocation_guidance
 from dotagents.lockfile import DEFAULT_AUTONOMY_LEVEL, read_lock, sha256_file
 from dotagents.runtime import (
   AUTONOMY_MANAGED_PROVIDERS,
@@ -77,12 +77,13 @@ def doctor(repo_root: Path) -> DoctorResult:
     passed = False
   else:
     lines.append("lockfile: ok")
-  provider_labels = [
-    f"{provider}={lock.provider_autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL)}"
-    if provider in AUTONOMY_MANAGED_PROVIDERS
-    else provider
-    for provider in lock.providers
-  ]
+  provider_labels: list[str] = []
+  for provider in lock.providers:
+    if provider in AUTONOMY_MANAGED_PROVIDERS:
+      autonomy = lock.provider_autonomy.get(provider, DEFAULT_AUTONOMY_LEVEL)
+      provider_labels.append(f"{provider}={autonomy}")
+    else:
+      provider_labels.append(provider)
   lines.append(f"providers: {', '.join(provider_labels)}")
   council_launcher = runtime_context.runtime_dir / "skills" / "council" / "scripts" / "run-agents"
   if council_launcher.exists() and shutil.which("nu") is None:
@@ -92,17 +93,19 @@ def doctor(repo_root: Path) -> DoctorResult:
   if lock.skills is not None:
     lines.append(f"skills: {', '.join(lock.skills) or 'none'}")
     if lock.skills != runtime_context.skills:
-      lines.append("Skillfile: selection differs from lockfile; run: uv run dotagents sync")
+      lines.append(
+        f"Skillfile: selection differs from lockfile; run: {invocation_guidance('sync')}"
+      )
       passed = False
     elif lock.skillfile_sha256 != compute_skillfile_sha256(repo_root):
-      lines.append("Skillfile: changed since lockfile; run: uv run dotagents sync")
+      lines.append(f"Skillfile: changed since lockfile; run: {invocation_guidance('sync')}")
       passed = False
 
   lock_asset_destinations = {asset.destination for asset in lock.assets}
   build_manifest_path = runtime_context.repo_root / BUILD_MANIFEST_DESTINATION
   if build_manifest_path.exists():
     if BUILD_MANIFEST_DESTINATION not in lock_asset_destinations:
-      lines.append("compiled artifacts: not locked; run: uv run dotagents sync")
+      lines.append(f"compiled artifacts: not locked; run: {invocation_guidance('sync')}")
       passed = False
     for status in compiled_group_statuses(runtime_context.repo_root):
       lines.append(f"compiled: {status.id} {status.status}")
@@ -179,7 +182,7 @@ def doctor(repo_root: Path) -> DoctorResult:
     if missing_parts:
       lines.append(
         f"prek: missing ({', '.join(missing_parts)}) - enable the prek-bootstrap skill "
-        "(add to Skillfile, run: uv run dotagents sync)"
+        f"(add to Skillfile, run: {invocation_guidance('sync')})"
       )
       passed = False
 

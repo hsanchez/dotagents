@@ -48,7 +48,10 @@ def test_doctor_reports_unlocked_compiled_build_manifest(
   result = doctor(Path.cwd())
 
   assert not result.passed
-  assert "compiled artifacts: not locked; run: uv run dotagents sync" in result.lines
+  assert (
+    "compiled artifacts: not locked; run: dotagents sync "
+    "(or uv run dotagents sync for a project dependency)"
+  ) in result.lines
 
 
 def test_doctor_reports_compiled_group_status(

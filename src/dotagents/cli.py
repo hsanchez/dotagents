@@ -23,7 +23,7 @@ from dotagents.compiler import (
   write_compiled_skill,
 )
 from dotagents.doctor import doctor as run_doctor
-from dotagents.errors import DotagentsError
+from dotagents.errors import DotagentsError, invocation_guidance
 from dotagents.lockfile import AUTONOMY_LEVELS, read_lock
 from dotagents.manifest import load_manifest, selected_providers
 from dotagents.runtime import (
@@ -213,17 +213,13 @@ def init(
       raise DotagentsError("cannot combine --locked and --with")
     missing_skillfile = not skillfile_path(repo_root).exists()
     should_select = with_skills or (not locked and not dry_run and missing_skillfile)
+    if should_select and dry_run:
+      raise DotagentsError("cannot select skills during a dry run")
     if should_select and with_preset:
-      if dry_run:
-        raise DotagentsError("cannot select skills during a dry run")
       write_preset_skillfile(repo_root, asset_root(), with_preset)
     elif with_skills:
-      if dry_run:
-        raise DotagentsError("cannot select skills during a dry run")
       edit_skillfile(repo_root, asset_root())
     elif should_select and missing_skillfile:
-      if dry_run:
-        raise DotagentsError("cannot select skills during a dry run")
       write_preset_skillfile(repo_root, asset_root(), DEFAULT_PRESET)
     resolved_providers = tuple(providers or ())
     if not dry_run and is_global_root(repo_root):
@@ -475,7 +471,7 @@ def _finish_compile(
 
 def print_compile_success(kind: str, output_skill: str) -> None:
   console.print(f"[green]Compiled {kind} skill: {output_skill}.[/green]")
-  console.print("next: uv run dotagents sync")
+  console.print(f"next: {invocation_guidance('sync')}")
 
 
 def print_compile_preview(compiled_skill: CompiledSkill) -> None:
@@ -486,7 +482,7 @@ def print_compile_preview(compiled_skill: CompiledSkill) -> None:
   console.print("would update .agents/build/manifest.json")
   for source in manifest.sources:
     console.print(f"source: {source.kind} {source.reference}")
-  console.print("next: uv run dotagents sync")
+  console.print(f"next: {invocation_guidance('sync')}")
 
 
 @compile_app.command("check")

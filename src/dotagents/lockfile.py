@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tomli_w
 
-from dotagents.errors import DotagentsError
+from dotagents.errors import DotagentsError, invocation_guidance
 from dotagents.version import package_version
 
 # SUPPORTED_LOCKFILE_VERSION is the version write_lock always stamps. read_lock accepts
@@ -141,7 +141,7 @@ def directory_fingerprint(path: Path) -> str:
     # millions of entries would otherwise pay the full os.scandir + O(n log n) sort cost
     # before the cap in the loop below ever got a chance to fire.
     try:
-      raw_entries = []
+      entries = []
       with os.scandir(current_path) as scanner:
         for entry in scanner:
           entry_count += 1
@@ -150,11 +150,10 @@ def directory_fingerprint(path: Path) -> str:
               f"cannot fingerprint directory: {path} exceeds max entry count "
               f"({MAX_FINGERPRINT_ENTRIES})"
             )
-          raw_entries.append(entry)
+          entries.append(entry)
     except OSError as exc:
       raise DotagentsError(f"cannot fingerprint directory: {current_path}") from exc
-    raw_entries.sort(key=lambda entry: entry.name)
-    entries = raw_entries
+    entries.sort(key=lambda entry: entry.name)
 
     for entry in entries:
       entry_path = current_path / entry.name
@@ -260,6 +259,20 @@ def write_lock(
   path.write_text(tomli_w.dumps(payload), encoding="utf-8")
 
 
+def _require_optional_nonempty_string(
+  data: dict[str, object], key: str, label: str | None = None
+) -> str | None:
+  """Return data[key], requiring it to be a non-empty string when present.
+
+  Raises:
+    DotagentsError: if the field is present but not a non-empty string.
+  """
+  value = data.get(key)
+  if value is not None and (not isinstance(value, str) or not value):
+    raise DotagentsError(f"lockfile {label or key} must be a non-empty string")
+  return value
+
+
 def read_lock(path: Path) -> RuntimeLock:
   try:
     with path.open("rb") as file_handle:
@@ -294,19 +307,17 @@ def read_lock(path: Path) -> RuntimeLock:
   ):
     raise DotagentsError("lockfile skills must be a string array")
 
-  skillfile_sha256 = data.get("skillfile_sha256")
-  if skillfile_sha256 is not None and (
-    not isinstance(skillfile_sha256, str) or not skillfile_sha256
-  ):
-    raise DotagentsError("lockfile skillfile_sha256 must be a non-empty string")
+  skillfile_sha256 = _require_optional_nonempty_string(data, "skillfile_sha256")
 
   lockfile_version = data.get("lockfile_version")
   if not isinstance(lockfile_version, int):
-    raise DotagentsError("lockfile_version must be an integer; run: uv run dotagents update")
+    raise DotagentsError(
+      f"lockfile_version must be an integer; run: {invocation_guidance('update')}"
+    )
   if not (MIN_READABLE_LOCKFILE_VERSION <= lockfile_version <= SUPPORTED_LOCKFILE_VERSION):
     raise DotagentsError(
       f"lockfile_version must be between {MIN_READABLE_LOCKFILE_VERSION} and "
-      f"{SUPPORTED_LOCKFILE_VERSION}; run: uv run dotagents update"
+      f"{SUPPORTED_LOCKFILE_VERSION}; run: {invocation_guidance('update')}"
     )
   requires_backup_fingerprint = lockfile_version >= FINGERPRINT_REQUIRED_SINCE_VERSION
 
@@ -336,25 +347,19 @@ def read_lock(path: Path) -> RuntimeLock:
       raise DotagentsError("lockfile links must be tables")
     destination = raw.get("destination")
     target = raw.get("target")
-    provider = raw.get("provider")
     if not isinstance(destination, str) or not destination:
       raise DotagentsError("lockfile link entries require destination and target")
     if not isinstance(target, str) or not target:
       raise DotagentsError("lockfile link entries require destination and target")
-    if provider is not None and (not isinstance(provider, str) or not provider):
-      raise DotagentsError("lockfile link provider must be a non-empty string")
-    backup = raw.get("backup")
-    if backup is not None and (not isinstance(backup, str) or not backup):
-      raise DotagentsError("lockfile link backup must be a non-empty string")
-    backup_fingerprint_value = raw.get("backup_fingerprint")
-    if backup_fingerprint_value is not None and (
-      not isinstance(backup_fingerprint_value, str) or not backup_fingerprint_value
-    ):
-      raise DotagentsError("lockfile link backup_fingerprint must be a non-empty string")
+    provider = _require_optional_nonempty_string(raw, "provider", "link provider")
+    backup = _require_optional_nonempty_string(raw, "backup", "link backup")
+    backup_fingerprint_value = _require_optional_nonempty_string(
+      raw, "backup_fingerprint", "link backup_fingerprint"
+    )
     if backup is not None and backup_fingerprint_value is None and requires_backup_fingerprint:
       raise DotagentsError(
         f"lockfile link backup requires backup_fingerprint: {destination}; "
-        "run: uv run dotagents update"
+        f"run: {invocation_guidance('update')}"
       )
     validate_contained_relative_path(destination, "link destination")
     if backup is not None:
@@ -381,40 +386,30 @@ def read_lock(path: Path) -> RuntimeLock:
   if not isinstance(generated_at, str) or not generated_at:
     raise DotagentsError("lockfile generated_at must be a non-empty string")
 
-  rules_backup = data.get("rules_backup")
-  if rules_backup is not None and (not isinstance(rules_backup, str) or not rules_backup):
-    raise DotagentsError("lockfile rules_backup must be a non-empty string")
+  rules_backup = _require_optional_nonempty_string(data, "rules_backup")
   if rules_backup is not None:
     validate_contained_relative_path(rules_backup, "rules_backup")
 
-  rules_backup_fingerprint = data.get("rules_backup_fingerprint")
-  if rules_backup_fingerprint is not None and (
-    not isinstance(rules_backup_fingerprint, str) or not rules_backup_fingerprint
-  ):
-    raise DotagentsError("lockfile rules_backup_fingerprint must be a non-empty string")
+  rules_backup_fingerprint = _require_optional_nonempty_string(data, "rules_backup_fingerprint")
   if rules_backup is not None and rules_backup_fingerprint is None and requires_backup_fingerprint:
     raise DotagentsError(
-      "lockfile rules_backup requires rules_backup_fingerprint; run: uv run dotagents update"
+      "lockfile rules_backup requires rules_backup_fingerprint; "
+      f"run: {invocation_guidance('update')}"
     )
 
-  runtime_backup = data.get("runtime_backup")
-  if runtime_backup is not None and (not isinstance(runtime_backup, str) or not runtime_backup):
-    raise DotagentsError("lockfile runtime_backup must be a non-empty string")
+  runtime_backup = _require_optional_nonempty_string(data, "runtime_backup")
   if runtime_backup is not None:
     validate_contained_relative_path(runtime_backup, "runtime_backup")
 
-  runtime_backup_fingerprint = data.get("runtime_backup_fingerprint")
-  if runtime_backup_fingerprint is not None and (
-    not isinstance(runtime_backup_fingerprint, str) or not runtime_backup_fingerprint
-  ):
-    raise DotagentsError("lockfile runtime_backup_fingerprint must be a non-empty string")
+  runtime_backup_fingerprint = _require_optional_nonempty_string(data, "runtime_backup_fingerprint")
   if (
     runtime_backup is not None
     and runtime_backup_fingerprint is None
     and requires_backup_fingerprint
   ):
     raise DotagentsError(
-      "lockfile runtime_backup requires runtime_backup_fingerprint; run: uv run dotagents update"
+      "lockfile runtime_backup requires runtime_backup_fingerprint; "
+      f"run: {invocation_guidance('update')}"
     )
 
   self_host = data.get("self_host", False)

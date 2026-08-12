@@ -2,12 +2,14 @@
 
 dotagents can manage a dotfiles-style installation under a user's home
 directory. It coexists independently with repository-local installations.
+See [installation workflows](installation.md) for user-tool, project-managed,
+and standalone repository setup.
 
 ## Bootstrap
 
 ```bash
 git clone --depth 1 https://github.com/hsanchez/dotagents ~/.config/dotagents
-~/.config/dotagents/bin/dot install
+~/.config/dotagents/bin/dot init --global
 ```
 
 `bin/dot` reuses `uv` when available. Otherwise it downloads and
@@ -18,22 +20,24 @@ requires `curl` and `shasum` or `sha256sum`.
 Update the checkout and generated files with:
 
 ```bash
-~/.config/dotagents/bin/dot update
+~/.config/dotagents/bin/dot upgrade --global
 ```
 
-The update uses `git pull --ff-only`, then runs `dotagents update --global`.
+`upgrade --global` uses `git pull --ff-only`, then runs
+`dotagents update --global`. The older `dot install` and `dot update` commands
+remain deprecated global aliases.
+
 The upstream checkout remains subject to the trust model of the Git hosting
 account; fast-forward-only pulls do not authenticate new upstream commits.
 
 ## Direct global commands
 
-If dotagents is already available through another checkout or `uv tool`, use
-`--global` or `--root` directly:
+If dotagents is installed with `uv tool`, use `--global` directly:
 
 ```bash
-uv run dotagents init --global --for claude
-uv run dotagents doctor --global
-uv run dotagents status --root ~/agent-config
+dotagents init --global --for claude
+dotagents doctor --global
+dotagents status --root ~/agent-config
 ```
 
 `--global` is shorthand for `--root "$HOME"`; the two options cannot be
